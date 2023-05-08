@@ -11,13 +11,15 @@ function orchestration through the main() function.
 import os
 import pathlib
 import platform
-import click
 from pathlib import Path
 from random import shuffle
 from typing import Iterable
 from zipfile import ZipFile, ZIP_DEFLATED
 
+import click
+
 import app_logger
+
 
 # Get the current username and directories
 USER = os.getenv("USER")
@@ -96,8 +98,11 @@ def collect_directory_names() -> list:
                     fn.append(d)
     except Exception as e:
         app_logger.logger.error(e)
+    else:
+        app_logger.logger.debug(
+            f"Will process the following folders: {list(enumerate(fn))}"
+        )
 
-    app_logger.logger.debug(f"Will process the following files: {list(enumerate(fn))}")
     return sorted(fn)
 
 
@@ -114,7 +119,9 @@ def create_epub(filenames: list = None) -> int:
 
     :return: The count of successfully exported EPUB files.
     """
+
     exported: int = 0
+
     for i, filename in enumerate(filenames):
         output_zip_file = Path(f"{PATH_OUTPUT}{filename.lstrip().rstrip()}").as_posix()
         folder_to_zip = f"{PATH_INPUT}{filename}/"
@@ -132,10 +139,39 @@ def create_epub(filenames: list = None) -> int:
             app_logger.logger.info(
                 f"File <{filename}> #{i + 1} of {len(filenames)} has been processed successfully."
             )
-        finally:
             exported += 1
 
     return exported
+
+
+def ensure_directory_exists(source_dir, target_dir) -> bool:
+    """
+    Ensure the output directory exists, and if not, create it.
+
+    :param source_dir: The source directory containing the epub package files.
+    :param target_dir: The output path for the resulting epub file.
+
+    :return: True if the directory exists or was created successfully.
+    """
+
+    return_value = False
+
+    try:
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+            app_logger.logger.info(f"Created output directory: {target_dir}")
+        return_value = True
+    except Exception as e:
+        app_logger.logger.error(e)
+
+    try:
+        if not os.path.exists(source_dir):
+            app_logger.logger.warning(f"Source directory does not exist: {source_dir}")
+            return_value = False
+    except Exception as e:
+        app_logger.logger.error(e)
+
+    return return_value
 
 
 @click.command()
@@ -166,6 +202,9 @@ def main(max_export_files: int, output_dir: str):
 
     # Set up logging configuration
     app_logger.logger.info(f"Starting the convert application, examining: {PATH_INPUT}")
+    # Ensure program is running on a Mac
+    if platform.system() != "Darwin":
+        raise RuntimeError("This program will only work on MacOS")
 
     # Override the MAX_EXPORT_FILES if needed
     if max_export_files is not None:
@@ -174,6 +213,9 @@ def main(max_export_files: int, output_dir: str):
     # Update the output directory if the user provides a value
     if output_dir is not None:
         PATH_OUTPUT = output_dir
+
+    if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
+        raise RuntimeError(f"The input directory does not exist. <{PATH_INPUT}>")
 
     files = collect_directory_names()
 
@@ -188,13 +230,9 @@ def main(max_export_files: int, output_dir: str):
         )
 
     count = create_epub(files[:MAX_EXPORT_FILES])
-    app_logger.logger.info(f"Exported {count} epub files to {PATH_OUTPUT}")
+    print(f"Exported {count} epub files to {PATH_OUTPUT}")
     app_logger.logger.debug("Ending the convert application")
 
 
 if __name__ == "__main__":
-    # Ensure program is running on a Mac
-    if platform.system() != "Darwin":
-        raise RuntimeError("This program will only work on MacOS")
-
     main()
