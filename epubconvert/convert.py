@@ -158,14 +158,15 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     target_dir_exists: bool = False
 
     # Firstly; ensure that the source directory exists,
-    # otherwise raise an exception
+    # otherwise return False
     try:
         if os.path.exists(source_dir):
             source_dir_exists = True
         else:
             app_logger.logger.critical(f"Source directory does not exist: {source_dir}")
     except Exception as e:
-        app_logger.logger.error(e)
+        app_logger.logger.exception(e)
+        raise RuntimeError(e) from e
 
     # Secondly; ensure that the target directory exists,
     # otherwise create it
@@ -174,7 +175,8 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
             os.makedirs(target_dir)
             app_logger.logger.info(f"Created output directory: {target_dir}")
     except Exception as e:
-        app_logger.logger.error(e)
+        app_logger.logger.exception(e)
+        raise RuntimeError(e) from e
     else:
         if os.path.exists(target_dir):
             target_dir_exists = True
