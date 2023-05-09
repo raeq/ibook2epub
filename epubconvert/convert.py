@@ -231,6 +231,7 @@ def main(max_export_files: int, output_dir: str):
 
     if MAX_EXPORT_FILES:
         shuffle(files)
+        files = files[:MAX_EXPORT_FILES]
         app_logger.logger.info(
             f"Limiting activity to a maximum of {MAX_EXPORT_FILES} epub files."
         )
@@ -239,7 +240,7 @@ def main(max_export_files: int, output_dir: str):
             f"All epub files up to a maximum of {len(files)+1} will be processed."
         )
 
-    count = create_epub(files[:MAX_EXPORT_FILES])
+    count = create_epub(files)
     print(f"Exported {count} epub files to {PATH_OUTPUT}")
     app_logger.logger.debug("Ending the convert application")
 
