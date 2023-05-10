@@ -13,7 +13,6 @@ import pathlib
 import platform
 from pathlib import Path
 from random import shuffle
-from typing import Iterable
 from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
 
 import click
@@ -28,24 +27,6 @@ PATH_INPUT = (
 )
 PATH_OUTPUT = rf"/Users/{USER}/Books/"
 MAX_EXPORT_FILES = 5
-
-
-def file_generator(source_dir: Path, exclusions: list = None) -> Iterable[Path]:
-    """
-    A generator function that yields file paths in the source directory,
-    skipping files in the exclusions list.
-
-    :param source_dir: The source directory containing the epub package files.
-    :param exclusions: An optional list of file names to exclude from the archive.
-    """
-
-    if not exclusions:
-        exclusions = []
-    exclusions += [".plist", "mimetype"]
-
-    for content_file_path in source_dir.rglob("*"):
-        if not any(s in content_file_path.name for s in exclusions):
-            yield Path(content_file_path)
 
 
 def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
@@ -63,18 +44,23 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
     """
 
     source_dir = pathlib.Path(source_dir)
-
     epub_processed_count = 0
+
     # Create a ZipFile object
-    with ZipFile(target_archive, "w", ZIP_DEFLATED, compresslevel=9) as zf:
+    with ZipFile(target_archive, 'w', ZIP_DEFLATED) as zf:
         # First, add the mimetype
         zf.writestr(zinfo_or_arcname="mimetype", compress_type=ZIP_STORED, data="application/epub+zip")
 
-        # Iterate over all the files in directory
-        for file_path in file_generator(source_dir):
-            app_logger.logger.trace(f"Adding object to archive: <{file_path}>")
-            zf.write(file_path, arcname=file_path.relative_to(source_dir))
-            epub_processed_count += 1
+        for root, _, files in os.walk(source_dir):
+            for filename in files:
+                if any(s in filename for s in ["mimetype", ".plist", "bookmarks"]):
+                    continue
+
+                file_path = os.path.join(root, filename)
+                name_in_archive = os.path.relpath(file_path, source_dir)
+
+                zf.write(file_path, name_in_archive, compresslevel=9)
+                epub_processed_count += 1
 
     return epub_processed_count
 
