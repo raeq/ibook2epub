@@ -14,7 +14,7 @@ import platform
 from pathlib import Path
 from random import shuffle
 from typing import Iterable
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
 
 import click
 
@@ -69,7 +69,7 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
     with ZipFile(target_archive, "w", ZIP_DEFLATED, compresslevel=9) as zf:
         # First, add the mimetype
         p: Path = Path(f"{source_dir}/mimetype")
-        zf.write(p, arcname=p.relative_to(source_dir))
+        zf.writestr(zinfo_or_arcname="mimetype", compress_type=ZIP_STORED, data="application/epub+zip")
 
         # Iterate over all the files in directory
         for file_path in file_generator(source_dir):
