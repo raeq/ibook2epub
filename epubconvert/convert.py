@@ -68,7 +68,6 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
     # Create a ZipFile object
     with ZipFile(target_archive, "w", ZIP_DEFLATED, compresslevel=9) as zf:
         # First, add the mimetype
-        p: Path = Path(f"{source_dir}/mimetype")
         zf.writestr(zinfo_or_arcname="mimetype", compress_type=ZIP_STORED, data="application/epub+zip")
 
         # Iterate over all the files in directory
@@ -214,7 +213,7 @@ def main(max_export_files: int, output_dir: str):
     app_logger.logger.info(f"Starting the convert application, examining: {PATH_INPUT}")
     # Ensure program is running on a Mac
     if platform.system() != "Darwin":
-        raise RuntimeError("This program will only work on MacOS")
+        raise RuntimeError("This program will only work on mcOS")
 
     # Override the MAX_EXPORT_FILES if needed
     if max_export_files is not None:
