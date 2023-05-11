@@ -54,12 +54,14 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
         for root, _, files in os.walk(source_dir):
             for filename in files:
                 if any(s in filename for s in ["mimetype", ".plist", "bookmarks"]):
+                    app_logger.logger.trace(f"Skipped oobject: <{filename}>")
                     continue
 
                 file_path = os.path.join(root, filename)
                 name_in_archive = os.path.relpath(file_path, source_dir)
 
                 zf.write(file_path, name_in_archive, compresslevel=9)
+                app_logger.logger.trace(f"Adding object to archive: <{name_in_archive}>")
                 epub_processed_count += 1
 
     return epub_processed_count
@@ -210,7 +212,7 @@ def main(max_export_files: int, output_dir: str):
         PATH_OUTPUT = output_dir
 
     if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
-        raise RuntimeError(f"The input directory does not exist. <{PATH_INPUT}>")
+        raise FileNotFoundError(f"The input directory does not exist. <{PATH_INPUT}>")
 
     files = collect_directory_names()
 
