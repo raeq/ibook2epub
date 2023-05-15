@@ -177,7 +177,7 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     "--max-export-files",
     default=5,
     type=int,
-    help="Override the maximum number of exported files.",
+    help="Override the maximum number of exported files, default=5.",
 )
 @click.option(
     "-o",
