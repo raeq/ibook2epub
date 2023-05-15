@@ -32,7 +32,7 @@ MAX_EXPORT_FILES = 5
 DRY_RUN = False
 
 
-async def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
+async def create_zip_file_from_dir(source_dir: str, target_archive: str, task_id: int) -> int:
     """
     Create a ZIP file from the provided source directory.
 
@@ -40,6 +40,7 @@ async def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
     optionally, a list of exclusions. It returns the count of processed EPUB
     items. The ZIP file created is compliant with the EPUB specifications.
 
+    :param task_id: The task ID for the current task.
     :param source_dir: The source directory containing the epub package files.
     :param target_archive: The output path for the resulting epub file.
 
@@ -83,8 +84,8 @@ async def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
                         ),
                     )
                     await future_write
-
-            app_logger.logger.info(f"Completed task for: {target_archive}")
+            await asyncio.sleep(0)
+            app_logger.logger.info(f"Completed task {task_id} for: {target_archive}")
     return epub_processed_count
 
 
@@ -136,9 +137,9 @@ async def create_epub(filenames: list = None) -> int:
 
         app_logger.logger.debug(f"Processing folder: {folder_to_zip}")
 
-        task = asyncio.create_task(create_zip_file_from_dir(folder_to_zip, output_zip_file))
+        task = asyncio.create_task(create_zip_file_from_dir(folder_to_zip, output_zip_file, i), name=f"Task {i}")
         tasks.append(task)
-        app_logger.logger.debug(f"Created task for: {folder_to_zip}")
+        app_logger.logger.debug(f"Created task {i} for: {folder_to_zip}")
 
     epub_processed_count = await asyncio.gather(*tasks)
 
