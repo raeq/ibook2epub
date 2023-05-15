@@ -8,8 +8,11 @@ The main steps include collecting directory names, creating the epub files, and
 function orchestration through the main() function.
 """
 
+import asyncio
 import os
 import pathlib
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from random import shuffle
 from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
@@ -29,7 +32,7 @@ MAX_EXPORT_FILES = 5
 DRY_RUN = False
 
 
-def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
+async def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
     """
     Create a ZIP file from the provided source directory.
 
@@ -42,37 +45,46 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
 
     :return: The count of processed EPUB items.
     """
-
     if DRY_RUN:
         return 0
 
     source_dir = pathlib.Path(source_dir)
     epub_processed_count = 0
 
-    # Create a ZipFile object
-    with ZipFile(target_archive, "w", ZIP_DEFLATED) as zf:
-        # First, add the mimetype
-        zf.writestr(
-            zinfo_or_arcname="mimetype",
-            compress_type=ZIP_STORED,
-            data="application/epub+zip",
-        )
+    # Use "run_in_executor" to run the ZIP compression in a separate thread
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor() as executor:
+        with ZipFile(target_archive, "w", ZIP_DEFLATED) as zf:
+            future_writestr = loop.run_in_executor(
+                executor,
+                partial(
+                    zf.writestr,
+                    zinfo_or_arcname="mimetype",
+                    compress_type=ZIP_STORED,
+                    data="application/epub+zip",
+                ),
+            )
+            await future_writestr
 
-        for root, _, files in os.walk(source_dir):
-            for filename in files:
-                if any(s in filename for s in ["mimetype", ".plist", "bookmarks"]):
-                    app_logger.logger.trace(f"Skipped object: <{filename}>")
-                    continue
+            for root, _, files in os.walk(source_dir):
+                for filename in files:
+                    if any(s in filename for s in ["mimetype", ".plist", "bookmarks"]):
+                        app_logger.logger.trace(f"Skipped object: <{filename}>")
+                        continue
+                    file_path = os.path.join(root, filename)
+                    name_in_archive = os.path.relpath(file_path, source_dir)
+                    future_write = loop.run_in_executor(
+                        executor,
+                        partial(
+                            zf.write,
+                            file_path,
+                            name_in_archive,
+                            compresslevel=9,
+                        ),
+                    )
+                    await future_write
 
-                file_path = os.path.join(root, filename)
-                name_in_archive = os.path.relpath(file_path, source_dir)
-
-                zf.write(file_path, name_in_archive, compresslevel=9)
-                app_logger.logger.trace(
-                    f"Adding object to archive: <{name_in_archive}>"
-                )
-                epub_processed_count += 1
-
+            app_logger.logger.info(f"Completed task for: {target_archive}")
     return epub_processed_count
 
 
@@ -103,7 +115,7 @@ def collect_directory_names() -> list:
 
 
 #   Function to generate new epub files
-def create_epub(filenames: list = None) -> int:
+async def create_epub(filenames: list = None) -> int:
     """
     Create EPUB files from the provided filenames.
 
@@ -116,7 +128,7 @@ def create_epub(filenames: list = None) -> int:
     :return: The count of successfully exported EPUB files.
     """
 
-    exported: int = 0
+    tasks = []
 
     for i, filename in enumerate(filenames):
         output_zip_file = Path(f"{PATH_OUTPUT}{filename.lstrip().rstrip()}").as_posix()
@@ -124,20 +136,13 @@ def create_epub(filenames: list = None) -> int:
 
         app_logger.logger.debug(f"Processing folder: {folder_to_zip}")
 
-        try:
-            create_zip_file_from_dir(folder_to_zip, output_zip_file)
-        except Exception as e:
-            app_logger.logger.warning(
-                f"Failed: <{filename}> #{i + 1} of {len(filenames)}"
-            )
-            app_logger.logger.exception(e)
-        else:
-            app_logger.logger.info(
-                f"Created: <{filename}> #{i + 1} of {len(filenames)}"
-            )
-            exported += 1
+        task = asyncio.create_task(create_zip_file_from_dir(folder_to_zip, output_zip_file))
+        tasks.append(task)
+        app_logger.logger.debug(f"Created task for: {folder_to_zip}")
 
-    return exported
+    epub_processed_count = await asyncio.gather(*tasks)
+
+    return len(epub_processed_count)
 
 
 def ensure_directory_exists(source_dir, target_dir) -> bool:
@@ -257,7 +262,7 @@ def main(
             f"All epub files up to a maximum of {len(files)} will be processed."
         )
 
-    count = create_epub(files)
+    count = asyncio.run(create_epub(files))
     print(f"Exported {count} epub files to {PATH_OUTPUT}")
     app_logger.logger.debug("Ending the convert application.")
 
