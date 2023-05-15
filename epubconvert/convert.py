@@ -10,7 +10,6 @@ function orchestration through the main() function.
 
 import os
 import pathlib
-import platform
 from pathlib import Path
 from random import shuffle
 from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
@@ -223,10 +222,6 @@ def main(
             "No file system modifications will be performed."
         )
     app_logger.logger.info(f"Examining: {PATH_INPUT}")
-
-    # Ensure program is running on a Mac
-    if platform.system() != "Darwin":
-        raise RuntimeError("This program will only work on mcOS")
 
     # Override the MAX_EXPORT_FILES if needed
     if max_export_files is not None:
