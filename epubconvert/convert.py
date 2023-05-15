@@ -141,13 +141,13 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     :return: True if the directory exists or was created successfully.
     """
 
-    source_dir_exists: bool = False
-    target_dir_exists: bool = False
+    source_dir_exists: bool
+    target_dir_exists: bool
 
     # Firstly; ensure that the source directory exists,
     # otherwise return False
     try:
-        if source_dir_exists := os.path.exists(source_dir):
+        if source_dir_exists := Path(source_dir).exists():
             pass
         else:
             app_logger.logger.critical(f"Source directory does not exist: {source_dir}")
@@ -158,14 +158,14 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     # Secondly; ensure that the target directory exists,
     # otherwise create it
     try:
-        if not os.path.exists(target_dir) and source_dir_exists:
+        if not Path(target_dir).exists() and source_dir_exists:
             os.makedirs(target_dir)
             app_logger.logger.info(f"Created output directory: {target_dir}")
     except Exception as e:
         app_logger.logger.exception(e)
         raise RuntimeError(e) from e
     else:
-        target_dir_exists = os.path.exists(target_dir)
+        target_dir_exists = Path(target_dir).exists()
 
     # only return True if both source _and_ target directories exist
     return target_dir_exists and source_dir_exists
@@ -186,7 +186,14 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     type=click.Path(exists=True, file_okay=False),
     help="Path of the output directory.",
 )
-def main(max_export_files: int, output_dir: str):
+@click.option(
+    "-s",
+    "--source-dir",
+    default=None,
+    type=click.Path(exists=True, file_okay=False),
+    help="Path of the source directory.",
+)
+def main(max_export_files: int, output_dir: str, source_dir: str) -> None:
     """
     Convert Apple iBooks epub packages to zipped epub files.
 
@@ -195,7 +202,7 @@ def main(max_export_files: int, output_dir: str):
     the MAX_EXPORT_FILES global constant.
     """
 
-    global MAX_EXPORT_FILES, PATH_OUTPUT
+    global MAX_EXPORT_FILES, PATH_OUTPUT, PATH_INPUT
 
     # Set up logging configuration
     app_logger.logger.info(f"Starting the convert application, examining: {PATH_INPUT}")
@@ -210,6 +217,10 @@ def main(max_export_files: int, output_dir: str):
     # Update the output directory if the user provides a value
     if output_dir is not None:
         PATH_OUTPUT = output_dir
+
+    # Update the source directory if the user provides a value
+    if source_dir is not None:
+        PATH_INPUT = source_dir
 
     if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
         raise FileNotFoundError(f"The input directory does not exist. <{PATH_INPUT}>")
