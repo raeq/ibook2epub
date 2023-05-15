@@ -51,11 +51,13 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
     epub_processed_count = 0
 
     # Create a ZipFile object
-
-    with ZipFile(target_archive, 'w', ZIP_DEFLATED) as zf:
+    with ZipFile(target_archive, "w", ZIP_DEFLATED) as zf:
         # First, add the mimetype
-        zf.writestr(zinfo_or_arcname="mimetype", compress_type=ZIP_STORED,
-                    data="application/epub+zip")
+        zf.writestr(
+            zinfo_or_arcname="mimetype",
+            compress_type=ZIP_STORED,
+            data="application/epub+zip",
+        )
 
         for root, _, files in os.walk(source_dir):
             for filename in files:
@@ -67,7 +69,9 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
                 name_in_archive = os.path.relpath(file_path, source_dir)
 
                 zf.write(file_path, name_in_archive, compresslevel=9)
-                app_logger.logger.trace(f"Adding object to archive: <{name_in_archive}>")
+                app_logger.logger.trace(
+                    f"Adding object to archive: <{name_in_archive}>"
+                )
                 epub_processed_count += 1
 
     return epub_processed_count
@@ -125,12 +129,12 @@ def create_epub(filenames: list = None) -> int:
             create_zip_file_from_dir(folder_to_zip, output_zip_file)
         except Exception as e:
             app_logger.logger.warning(
-                f"File <{filename}> #{i + 1} of {len(filenames)} was not processed correctly."
+                f"Failed: <{filename}> #{i + 1} of {len(filenames)}"
             )
             app_logger.logger.exception(e)
         else:
             app_logger.logger.info(
-                f"File <{filename}> #{i + 1} of {len(filenames)} has been processed successfully."
+                f"Created: <{filename}> #{i + 1} of {len(filenames)}"
             )
             exported += 1
 
@@ -147,13 +151,10 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     :return: True if the directory exists or was created successfully.
     """
 
-    source_dir_exists: bool
-    target_dir_exists: bool
-
     # Firstly; ensure that the source directory exists,
     # otherwise return False
     try:
-        if source_dir_exists := Path(source_dir).exists():
+        if Path(source_dir).exists():
             pass
         else:
             app_logger.logger.critical(f"Source directory does not exist: {source_dir}")
@@ -164,18 +165,16 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     # Secondly; ensure that the target directory exists,
     # otherwise create it
     try:
-        if not Path(target_dir).exists() and source_dir_exists:
+        if not Path(target_dir).exists():
             if not DRY_RUN:
                 os.makedirs(target_dir)
                 app_logger.logger.info(f"Created output directory: {target_dir}")
     except Exception as e:
         app_logger.logger.exception(e)
         raise RuntimeError(e) from e
-    else:
-        target_dir_exists = Path(target_dir).exists()
 
     # only return True if both source _and_ target directories exist
-    return target_dir_exists and source_dir_exists
+    return Path(source_dir).exists() and Path(target_dir).exists()
 
 
 @click.command()
@@ -200,8 +199,10 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     type=click.Path(exists=True, file_okay=False),
     help="Path of the source directory.",
 )
-@click.option('--dry-run', '-d', is_flag=True, help="Run the program in dry-run mode.")
-def main(max_export_files: int, output_dir: str, source_dir: str, dry_run: bool = False) -> None:
+@click.option("--dry-run", "-d", is_flag=True, help="Run the program in dry-run mode.")
+def main(
+        max_export_files: int, output_dir: str, source_dir: str, dry_run: bool = False
+) -> None:
     """
     Convert Apple iBooks epub packages to zipped epub files.
 
@@ -211,9 +212,18 @@ def main(max_export_files: int, output_dir: str, source_dir: str, dry_run: bool 
     """
 
     global MAX_EXPORT_FILES, PATH_OUTPUT, PATH_INPUT, DRY_RUN
+    ctx = click.get_current_context()
 
-    # Set up logging configuration
-    app_logger.logger.info(f"Starting the convert application, examining: {PATH_INPUT}")
+    # Set the Dry Run flag
+    app_logger.logger.info(f"Starting the convert application {ctx.params}")
+    if dry_run:
+        DRY_RUN = dry_run
+        app_logger.logger.info(
+            "User has chosen to run the program in dry-run mode. "
+            "No file system modifications will be performed."
+        )
+    app_logger.logger.info(f"Examining: {PATH_INPUT}")
+
     # Ensure program is running on a Mac
     if platform.system() != "Darwin":
         raise RuntimeError("This program will only work on mcOS")
@@ -221,12 +231,6 @@ def main(max_export_files: int, output_dir: str, source_dir: str, dry_run: bool 
     # Override the MAX_EXPORT_FILES if needed
     if max_export_files is not None:
         MAX_EXPORT_FILES = max_export_files
-
-    # Set the Dry Run flag
-    if dry_run:
-        DRY_RUN = dry_run
-        app_logger.logger.info("User has chosen to run the program in dry-run mode. "
-                               "No file system modifications will be performed.")
 
     # Update the output directory if the user provides a value
     if output_dir is not None:
@@ -237,11 +241,12 @@ def main(max_export_files: int, output_dir: str, source_dir: str, dry_run: bool 
         PATH_INPUT = source_dir
 
     try:
-
         if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
-            raise FileNotFoundError(f"The input directory does not exist. <{PATH_INPUT}>")
+            raise FileNotFoundError(
+                f"The input directory does not exist. <{PATH_INPUT}>"
+            )
     except FileNotFoundError as e:
-        ctx = click.get_current_context()
+        app_logger.logger.exception(e)
         raise RuntimeError(ctx.params) from e
 
     files = collect_directory_names()
@@ -254,7 +259,7 @@ def main(max_export_files: int, output_dir: str, source_dir: str, dry_run: bool 
         )
     else:
         app_logger.logger.info(
-            f"All epub files up to a maximum of {len(files)+1} will be processed."
+            f"All epub files up to a maximum of {len(files)} will be processed."
         )
 
     count = create_epub(files)
