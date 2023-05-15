@@ -27,6 +27,7 @@ PATH_INPUT = (
 )
 PATH_OUTPUT = rf"/Users/{USER}/Books/"
 MAX_EXPORT_FILES = 5
+DRY_RUN = False
 
 
 def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
@@ -43,13 +44,18 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
     :return: The count of processed EPUB items.
     """
 
+    if DRY_RUN:
+        return 0
+
     source_dir = pathlib.Path(source_dir)
     epub_processed_count = 0
 
     # Create a ZipFile object
+
     with ZipFile(target_archive, 'w', ZIP_DEFLATED) as zf:
         # First, add the mimetype
-        zf.writestr(zinfo_or_arcname="mimetype", compress_type=ZIP_STORED, data="application/epub+zip")
+        zf.writestr(zinfo_or_arcname="mimetype", compress_type=ZIP_STORED,
+                    data="application/epub+zip")
 
         for root, _, files in os.walk(source_dir):
             for filename in files:
@@ -159,8 +165,9 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     # otherwise create it
     try:
         if not Path(target_dir).exists() and source_dir_exists:
-            os.makedirs(target_dir)
-            app_logger.logger.info(f"Created output directory: {target_dir}")
+            if not DRY_RUN:
+                os.makedirs(target_dir)
+                app_logger.logger.info(f"Created output directory: {target_dir}")
     except Exception as e:
         app_logger.logger.exception(e)
         raise RuntimeError(e) from e
@@ -193,7 +200,8 @@ def ensure_directory_exists(source_dir, target_dir) -> bool:
     type=click.Path(exists=True, file_okay=False),
     help="Path of the source directory.",
 )
-def main(max_export_files: int, output_dir: str, source_dir: str) -> None:
+@click.option('--dry-run', '-d', is_flag=True, help="Run the program in dry-run mode.")
+def main(max_export_files: int, output_dir: str, source_dir: str, dry_run: bool = False) -> None:
     """
     Convert Apple iBooks epub packages to zipped epub files.
 
@@ -202,7 +210,7 @@ def main(max_export_files: int, output_dir: str, source_dir: str) -> None:
     the MAX_EXPORT_FILES global constant.
     """
 
-    global MAX_EXPORT_FILES, PATH_OUTPUT, PATH_INPUT
+    global MAX_EXPORT_FILES, PATH_OUTPUT, PATH_INPUT, DRY_RUN
 
     # Set up logging configuration
     app_logger.logger.info(f"Starting the convert application, examining: {PATH_INPUT}")
@@ -214,6 +222,12 @@ def main(max_export_files: int, output_dir: str, source_dir: str) -> None:
     if max_export_files is not None:
         MAX_EXPORT_FILES = max_export_files
 
+    # Set the Dry Run flag
+    if dry_run:
+        DRY_RUN = dry_run
+        app_logger.logger.info("User has chosen to run the program in dry-run mode. "
+                               "No file system modifications will be performed.")
+
     # Update the output directory if the user provides a value
     if output_dir is not None:
         PATH_OUTPUT = output_dir
@@ -222,8 +236,13 @@ def main(max_export_files: int, output_dir: str, source_dir: str) -> None:
     if source_dir is not None:
         PATH_INPUT = source_dir
 
-    if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
-        raise FileNotFoundError(f"The input directory does not exist. <{PATH_INPUT}>")
+    try:
+
+        if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
+            raise FileNotFoundError(f"The input directory does not exist. <{PATH_INPUT}>")
+    except FileNotFoundError as e:
+        ctx = click.get_current_context()
+        raise RuntimeError(ctx.params) from e
 
     files = collect_directory_names()
 
