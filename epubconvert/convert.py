@@ -61,7 +61,7 @@ def create_zip_file_from_dir(source_dir: str, target_archive: str) -> int:
         for root, _, files in os.walk(source_dir):
             for filename in files:
                 if any(s in filename for s in ["mimetype", ".plist", "bookmarks"]):
-                    app_logger.logger.trace(f"Skipped oobject: <{filename}>")
+                    app_logger.logger.trace(f"Skipped object: <{filename}>")
                     continue
 
                 file_path = os.path.join(root, filename)
@@ -238,7 +238,7 @@ def main(
     try:
         if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
             raise FileNotFoundError(
-                f"The input directory does not exist. <{PATH_INPUT}>"
+                "Error ensuring directories exist."
             )
     except FileNotFoundError as e:
         app_logger.logger.exception(e)
@@ -259,7 +259,7 @@ def main(
 
     count = create_epub(files)
     print(f"Exported {count} epub files to {PATH_OUTPUT}")
-    app_logger.logger.debug("Ending the convert application")
+    app_logger.logger.debug("Ending the convert application.")
 
 
 if __name__ == "__main__":
