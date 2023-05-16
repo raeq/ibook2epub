@@ -81,7 +81,7 @@ async def create_zip_file_from_dir(source_dir: str, target_archive: str, task_id
                             file_path,
                             name_in_archive,
                             compresslevel=9,
-                        ),
+                        )
                     )
                     await future_write
             await asyncio.sleep(0)
