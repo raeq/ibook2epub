@@ -122,7 +122,8 @@ async def create_epub(filenames: list = None) -> int:
 
     This function takes a list of directory names as input and processes each
     one to create an EPUB file. It returns the count of successfully exported
-    EPUB files.
+    EPUB files. Source files whose output already exists in PATH_OUTPUT are
+    skipped, so the output directory itself is the record of what's done.
 
     :param filenames: A list of directory names to be processed into EPUB files.
 
@@ -130,16 +131,29 @@ async def create_epub(filenames: list = None) -> int:
     """
 
     tasks = []
+    skipped = 0
 
     for i, filename in enumerate(filenames):
-        output_zip_file = Path(f"{PATH_OUTPUT}{filename.lstrip().rstrip()}").as_posix()
-        folder_to_zip = f"{PATH_INPUT}{filename}/"
+        clean_name = filename.strip()
+        output_zip_file = (Path(PATH_OUTPUT) / clean_name).as_posix()
+        folder_to_zip = (Path(PATH_INPUT) / filename).as_posix()
+
+        if Path(output_zip_file).exists():
+            app_logger.logger.info(f"Already exported, skipping: {clean_name}")
+            skipped += 1
+            continue
 
         app_logger.logger.debug(f"Processing folder: {folder_to_zip}")
 
         task = asyncio.create_task(create_zip_file_from_dir(folder_to_zip, output_zip_file, i), name=f"Task {i}")
         tasks.append(task)
         app_logger.logger.debug(f"Created task {i} for: {folder_to_zip}")
+
+    if skipped:
+        app_logger.logger.info(f"Skipped {skipped} already-exported file(s).")
+
+    if not tasks:
+        return 0
 
     epub_processed_count = await asyncio.gather(*tasks)
 
@@ -227,7 +241,6 @@ def main(
             "User has chosen to run the program in dry-run mode. "
             "No file system modifications will be performed."
         )
-    app_logger.logger.info(f"Examining: {PATH_INPUT}")
 
     # Override the MAX_EXPORT_FILES if needed
     if max_export_files is not None:
@@ -240,6 +253,10 @@ def main(
     # Update the source directory if the user provides a value
     if source_dir is not None:
         PATH_INPUT = source_dir
+
+    # Log the actual paths in use AFTER any -s / -o overrides have been applied.
+    app_logger.logger.info(f"Examining source: {PATH_INPUT}")
+    app_logger.logger.info(f"Writing output to: {PATH_OUTPUT}")
 
     try:
         if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
