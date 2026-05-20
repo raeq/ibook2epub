@@ -286,4 +286,4 @@ def main(
 
 
 if __name__ == "__main__":
-    main()
+    main()  # pylint: disable=no-value-for-parameter  # args injected by @click.option
