@@ -417,7 +417,7 @@ async def export_packages(
     if dry_run:
         for package, target in pending:
             logger.info("Would export: %s -> %s", package, target)
-        report.planned = len(pending)
+        report.planned += len(pending)
         return report
 
     if not pending:
@@ -825,7 +825,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.source_auto:
         args.source_dir = discover_source()
 
-    if not args.source_dir.is_dir():
+    # --verify only reads the output directory. Requiring an iBooks library
+    # for it would stop anyone checking a shelf of exported books on a machine
+    # that never had one.
+    if not args.verify and not args.source_dir.is_dir():
         parser.error(f"source directory does not exist: {args.source_dir}")
 
     # Writing into the tree being scanned pollutes the next run: temporary
@@ -999,11 +1002,15 @@ def free_megabytes(path: Path) -> int:
 
 def extract_cover(archive_path: Path) -> Path | None:
     """
-    Write a book's cover image beside its archive.
+    Writing the image is a convenience, never the point of the run, so every
+    failure is swallowed. The book itself is already complete and atomically in
+    place by this point; letting a full disk or a rejected filename escape from
+    here would abort the whole run and lose the counts for books that had
+    already succeeded.
 
     :param archive_path: The exported epub file.
 
-    :return: The cover file written, or None if the book declares no cover.
+    :return: The cover file written, or None if no cover could be written.
     """
     try:
         with ZipFile(archive_path) as archive:
@@ -1014,12 +1021,12 @@ def extract_cover(archive_path: Path) -> Path | None:
             if not href or href not in archive.namelist():
                 return None
             data = archive.read(href)
-    except (OSError, ValidationError, BadZipFile) as exc:
+        cover = archive_path.with_suffix(Path(href).suffix or ".jpg")
+        cover.write_bytes(data)
+    except (OSError, ValueError, ValidationError, BadZipFile) as exc:
         logger.debug("No cover for %s: %s", archive_path.name, exc)
         return None
 
-    cover = archive_path.with_suffix(Path(href).suffix or ".jpg")
-    cover.write_bytes(data)
     return cover
 
 
@@ -1191,22 +1198,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     if args.list_only:
-        packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
-        decisions = plan_exports(
-            packages,
-            args.output_dir,
-            policy,
-            _plan_options(args),
-        )
-        print(render_listing(decisions, args.as_json))
-        return 0
+        return _run_listing(args, policy)
 
     if args.verify:
-        checked, damaged = verify_output(args.output_dir, epubcheck=args.epubcheck)
-        print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
-        if damaged:
-            print("Re-export the damaged books with --force.")
-        return 1 if damaged else 0
+        return _run_verify(args)
 
     try:
         report, remaining = _run_export(args, policy)

@@ -174,8 +174,13 @@ class TestListing:
 
 class TestCountPendingWithStatuses:
     def test_drm_books_still_count_as_not_exported(self, tmp_path, output_dir):
+        # count_pending is pure name arithmetic: it asks only whether the
+        # output file exists, so a book that can never be converted still
+        # shows up in the "N remaining" figure.
         library = tmp_path / "lib"
-        make_package(library, "Book.epub")
+        locked = make_package(library, "Locked.epub")
+        (locked / "META-INF").mkdir(parents=True, exist_ok=True)
+        (locked / "META-INF" / "sinf.xml").write_text("<sinf/>", encoding="utf-8")
         packages = convert.collect_package_dirs(library)
 
         assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 1

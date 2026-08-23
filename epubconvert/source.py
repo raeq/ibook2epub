@@ -13,9 +13,10 @@ book is reported and skipped.
 
 from __future__ import annotations
 
-import re
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from xml.etree import ElementTree
 
 from .app_logger import logger
 
@@ -34,7 +35,12 @@ FONT_OBFUSCATION_ALGORITHMS = frozenset(
     }
 )
 
-_ALGORITHM = re.compile(r'Algorithm="([^"]+)"')
+#: The element whose ``Algorithm`` attribute decides whether a package is
+#: protected. Matched by local name, because packages differ in how they bind
+#: the xmlenc namespace. Other elements (``DigestMethod``,
+#: ``CanonicalizationMethod``) carry an ``Algorithm`` attribute too, and
+#: reading those would report a readable book as DRM-protected.
+ENCRYPTION_METHOD = "EncryptionMethod"
 
 #: macOS marks a file whose contents live only in the cloud.
 SF_DATALESS = 0x40000000
@@ -60,19 +66,39 @@ def encryption_algorithms(package: Path) -> set[str]:
     """
     Read the algorithms declared in a package's ``encryption.xml``.
 
+    The file is parsed rather than pattern-matched: an attribute value may be
+    single-quoted, which a text scan would miss and report a protected book as
+    readable, and elements other than ``EncryptionMethod`` carry an
+    ``Algorithm`` attribute that must not be mistaken for one.
+
     :param package: The ``*.epub/`` package directory.
 
-    :return: The algorithm URIs found, empty if the file is absent.
+    :return: The encryption algorithm URIs found, empty if the file is absent
+        or unreadable.
     """
     path = package / ENCRYPTION_PATH
     try:
         if not path.is_file() or path.stat().st_size > MAX_ENCRYPTION_BYTES:
             return set()
-        text = path.read_text(encoding="utf-8", errors="replace")
+        data = path.read_bytes()
     except OSError as exc:
         logger.debug("Could not read %s: %s", path, exc)
         return set()
-    return set(_ALGORITHM.findall(text))
+
+    try:
+        root = ElementTree.fromstring(data)
+    except ElementTree.ParseError as exc:
+        logger.debug("Could not parse %s: %s", path, exc)
+        return set()
+
+    algorithms: set[str] = set()
+    for element in root.iter():
+        if element.tag.rpartition("}")[2] != ENCRYPTION_METHOD:
+            continue
+        algorithm = element.get("Algorithm")
+        if algorithm:
+            algorithms.add(algorithm)
+    return algorithms
 
 
 def has_drm(package: Path) -> tuple[bool, str | None]:
@@ -102,21 +128,28 @@ def has_dataless_files(package: Path) -> bool:
     Report whether any file in the package is an undownloaded iCloud stub.
 
     This walks the package, which is the expensive operation on a cloud
-    library, so callers should only ask when the user opted in.
+    library, so callers should only ask when the user opted in. ``os.walk``
+    already separates files from directories, which spares a second stat per
+    entry that a ``rglob`` plus ``is_file`` would cost.
 
     :param package: The ``*.epub/`` package directory.
 
     :return: True if at least one file has no local contents.
     """
-    try:
-        for path in package.rglob("*"):
-            if not path.is_file():
+
+    def on_error(exc: OSError) -> None:
+        logger.debug("Could not inspect %s: %s", exc.filename or package, exc)
+
+    for root, _dirs, files in os.walk(package, onerror=on_error):
+        directory = Path(root)
+        for name in files:
+            try:
+                stat = (directory / name).stat()
+            except OSError as exc:  # pragma: no cover - racing removal
+                logger.debug("Could not stat %s: %s", name, exc)
                 continue
-            flags = getattr(path.stat(), "st_flags", 0)
-            if flags & SF_DATALESS:
+            if getattr(stat, "st_flags", 0) & SF_DATALESS:
                 return True
-    except OSError as exc:
-        logger.debug("Could not inspect %s: %s", package, exc)
     return False
 
 

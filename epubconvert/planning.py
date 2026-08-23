@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .app_logger import logger
-from .naming import NamingPolicy
+from .naming import MAX_FILENAME_BYTES, NamingPolicy, truncate_bytes
 from .source import inspect_package
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
@@ -64,6 +64,11 @@ def _suffixed(filename: str, position: int) -> str:
     """
     Render the *position*-th candidate name for a filename.
 
+    The suffix is applied within the same byte budget the naming policy
+    already clamped to. Appending to a name that is exactly at the limit would
+    otherwise push it over, and the export would fail at the closing rename
+    with a filesystem error rather than a name collision.
+
     :param filename: The base filename.
     :param position: 1 for the base name itself, 2 upwards for suffixes.
 
@@ -71,8 +76,17 @@ def _suffixed(filename: str, position: int) -> str:
     """
     if position == 1:
         return filename
+
     base = Path(filename)
-    return f"{base.stem} ({position}){base.suffix}"
+    marker = f" ({position})"
+    candidate = f"{base.stem}{marker}{base.suffix}"
+    if len(candidate.encode("utf-8")) <= MAX_FILENAME_BYTES:
+        return candidate
+
+    budget = MAX_FILENAME_BYTES - len(marker.encode("utf-8"))
+    budget -= len(base.suffix.encode("utf-8"))
+    stem = truncate_bytes(base.stem, max(budget, 1)).rstrip(" .") or "_"
+    return f"{stem}{marker}{base.suffix}"
 
 
 def _assign_names(
@@ -152,10 +166,28 @@ def plan_exports(
         filename, key = named[package]
 
         if not filename:
+            wanted = policy.filename(package.name)
             decisions.append(
-                Decision(package, COLLISION, reason="output name already claimed")
+                Decision(
+                    package,
+                    COLLISION,
+                    reason=f"another book already claims {wanted!r}",
+                )
             )
             continue
+
+        target = output_dir / filename
+        found = existing.get(key)
+        refreshing = False
+
+        # Settled before the package is inspected: a book that is already
+        # exported needs no source walk, and --skip-incomplete would otherwise
+        # pay for one on every book of the library on every rerun.
+        if found is not None and not settings.force:
+            if not (settings.refresh and _source_is_newer(package, found)):
+                decisions.append(Decision(package, ALREADY, found))
+                continue
+            refreshing = True
 
         status = inspect_package(package, check_incomplete=settings.check_incomplete)
         if status.drm:
@@ -165,18 +197,8 @@ def plan_exports(
             decisions.append(Decision(package, INCOMPLETE, reason=status.reason))
             continue
 
-        target = output_dir / filename
-        found = existing.get(key)
-        if found is not None and not settings.force:
-            if settings.refresh and _source_is_newer(package, found):
-                decisions.append(
-                    Decision(package, PENDING, target, reason="source is newer")
-                )
-                continue
-            decisions.append(Decision(package, ALREADY, found))
-            continue
-
-        decisions.append(Decision(package, PENDING, target))
+        reason = "source is newer" if refreshing else None
+        decisions.append(Decision(package, PENDING, target, reason=reason))
 
     return decisions
 

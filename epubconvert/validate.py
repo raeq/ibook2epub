@@ -18,6 +18,7 @@ metadata out of it.
 
 from __future__ import annotations
 
+import posixpath
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -40,6 +41,11 @@ MIMETYPE_CONTENT = b"application/epub+zip"
 MAX_XML_BYTES = 16 * 1024 * 1024
 
 EPUBCHECK = "epubcheck"
+
+#: Href prefixes that name a resource outside the archive. The epub
+#: specification allows remote resources in the manifest, and resolving one as
+#: an archive path would report a perfectly good book as missing a file.
+REMOTE_PREFIXES = ("http://", "https://", "ftp://", "ftps://", "data:", "mailto:")
 
 
 @dataclass
@@ -145,9 +151,25 @@ def find_opf_path(archive: ZipFile) -> str:
     raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
 
 
+def is_remote(href: str) -> bool:
+    """
+    Report whether an href names a resource outside the archive.
+
+    :param href: The manifest href to test.
+
+    :return: True if the href is a remote or inline URL.
+    """
+    return href.lower().startswith(REMOTE_PREFIXES)
+
+
 def _resolve(base: str, href: str) -> str:
     """
     Resolve a manifest href against the package document's directory.
+
+    The result is normalized, because a package document in ``OEBPS/`` may
+    legitimately reach a sibling directory with ``../``. Leaving those segments
+    in place produces a path no archive member ever matches, which would make
+    ``--validate`` reject a perfectly good book.
 
     :param base: Archive path of the package document.
     :param href: The href to resolve.
@@ -156,10 +178,12 @@ def _resolve(base: str, href: str) -> str:
     """
     target, _ = urldefrag(href)
     target = unquote(target)
-    parent = Path(base).parent
-    if str(parent) in (".", ""):
+    if not target:
         return target
-    return (parent / target).as_posix()
+    directory = posixpath.dirname(base)
+    if not directory:
+        return posixpath.normpath(target)
+    return posixpath.normpath(posixpath.join(directory, target))
 
 
 def read_package(archive: ZipFile) -> Package:
@@ -193,7 +217,9 @@ def read_package(archive: ZipFile) -> Package:
     for item in root.iter(f"{{{OPF_NS}}}item"):
         item_id = item.get("id")
         href = item.get("href")
-        if item_id and href:
+        # A remote resource is not expected in the archive, so recording it
+        # would only produce a false "manifest item is not in the archive".
+        if item_id and href and not is_remote(href):
             package.manifest[item_id] = _resolve(opf_path, href)
         if item_id and "cover-image" in (item.get("properties") or ""):
             package.cover_id = item_id
