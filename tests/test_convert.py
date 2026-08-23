@@ -165,6 +165,34 @@ class TestZipPackage:
         with ZipFile(target) as archive:
             assert "OEBPS/.DS_Store" not in archive.namelist()
 
+    def test_exports_a_name_already_at_the_filesystem_limit(self, tmp_path, output_dir):
+        # Regression: the temporary name appended ".part" to a filename that
+        # was already at the 255-byte limit, producing a 260-byte path that
+        # the filesystem refuses. It fired only in portable mode, aimed at
+        # exactly the filesystems with the tighter limits.
+        name = "x" * (255 - len(".epub")) + ".epub"
+        assert len(name.encode()) == 255
+        package = make_package(tmp_path / "src", name)
+        target = output_dir / name
+
+        convert.zip_package(package, target)
+
+        assert target.exists()
+        assert list(output_dir.glob("*.part")) == []
+
+    def test_exports_a_multibyte_name_at_the_limit(self, tmp_path, output_dir):
+        # Same bug, but where truncating by characters would split a
+        # multi-byte sequence.
+        stem = "é" * 125  # 250 bytes
+        name = stem + ".epub"
+        assert len(name.encode()) == 255
+        package = make_package(tmp_path / "src", name)
+        target = output_dir / name
+
+        convert.zip_package(package, target)
+
+        assert target.exists()
+
     def test_leaves_no_partial_file_behind_on_success(self, library, output_dir):
         convert.zip_package(library / "Book One.epub", output_dir / "Book One.epub")
 

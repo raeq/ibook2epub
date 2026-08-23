@@ -16,15 +16,18 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fnmatch
 import os
-from collections.abc import Sequence
+import tempfile
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
-from . import app_logger
+from . import __version__, app_logger
 from .app_logger import logger
 from .naming import (
     NamingPolicy,
@@ -32,6 +35,13 @@ from .naming import (
     PortableNamesUnavailableError,
     build_policy,
 )
+
+try:
+    import fcntl
+
+    HAVE_FLOCK = True
+except ImportError:  # pragma: no cover - Windows has no fcntl
+    HAVE_FLOCK = False
 
 DEFAULT_SOURCE = (
     Path.home() / "Library/Mobile Documents/iCloud~com~apple~iBooks/Documents"
@@ -44,6 +54,8 @@ MIMETYPE_CONTENT = "application/epub+zip"
 PACKAGE_SUFFIX = ".epub"
 PARTIAL_SUFFIX = ".part"
 COMPRESS_LEVEL = 9
+ARCHIVE_MODE = 0o644
+LOCK_NAME = ".ibook2epub.lock"
 
 # Filesystem junk, never book content, so excluded wherever it appears.
 EXCLUDED_ANYWHERE = frozenset({".DS_Store"})
@@ -57,6 +69,10 @@ EXCLUDED_ANYWHERE = frozenset({".DS_Store"})
 EXCLUDED_ROOT_NAMES = frozenset({MIMETYPE_NAME})
 EXCLUDED_ROOT_SUFFIXES = frozenset({".plist"})
 EXCLUDED_ROOT_PREFIXES = ("bookmarks",)
+
+
+class OutputLockedError(RuntimeError):
+    """Raised when another run already holds the output directory lock."""
 
 
 @dataclass
@@ -144,7 +160,18 @@ def zip_package(source_dir: Path, target_archive: Path) -> int:
 
     :return: The number of package files stored, excluding ``mimetype``.
     """
-    partial = target_archive.parent / (target_archive.name + PARTIAL_SUFFIX)
+    # Deriving the temporary name from the target overflows the filesystem's
+    # per-component limit when the target is already at it: 255 bytes plus
+    # ".part" is 260. Take a short unique name in the same directory instead,
+    # which keeps the closing replace atomic and can never be too long.
+    handle, partial_name = tempfile.mkstemp(
+        dir=target_archive.parent, suffix=PARTIAL_SUFFIX
+    )
+    os.close(handle)
+    partial = Path(partial_name)
+    # mkstemp creates 0600; exported books should be readable like any other
+    # file the user writes.
+    partial.chmod(ARCHIVE_MODE)
     file_count = 0
 
     try:
@@ -199,8 +226,10 @@ def _plan_exports(
     packages: Sequence[Path],
     output_dir: Path,
     policy: NamingPolicy,
+    *,
     dry_run: bool,
     report: Report,
+    force: bool = False,
 ) -> list[tuple[Path, Path]]:
     """
     Decide which packages to export and under what names.
@@ -221,10 +250,15 @@ def _plan_exports(
     pending: list[tuple[Path, Path]] = []
 
     # Missing directories glob to nothing, which is what a dry run wants.
-    on_disk = {
-        policy.identity(existing.name)
-        for existing in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-    }
+    # --force pretends the output directory is empty so everything re-exports.
+    on_disk = (
+        set()
+        if force
+        else {
+            policy.identity(existing.name)
+            for existing in output_dir.glob(f"*{PACKAGE_SUFFIX}")
+        }
+    )
     claimed: set[str] = set()
 
     for package in packages:
@@ -262,9 +296,11 @@ def _plan_exports(
 async def export_packages(
     packages: Sequence[Path],
     output_dir: Path,
+    *,
     dry_run: bool = False,
     max_workers: int | None = None,
     naming: NamingPolicy | None = None,
+    force: bool = False,
 ) -> Report:
     """
     Export a batch of packages concurrently.
@@ -285,7 +321,9 @@ async def export_packages(
     """
     policy = naming if naming is not None else PassthroughNaming()
     report = Report()
-    pending = _plan_exports(packages, output_dir, policy, dry_run, report)
+    pending = _plan_exports(
+        packages, output_dir, policy, dry_run=dry_run, report=report, force=force
+    )
 
     if report.skipped:
         logger.info("Skipped %d already-exported file(s).", report.skipped)
@@ -311,6 +349,89 @@ async def export_packages(
             report.files_written += file_count
 
     return report
+
+
+def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]:
+    """
+    Narrow the package list to those matching a user pattern.
+
+    A pattern with no glob metacharacter matches anywhere in the name, so
+    ``--match hobbit`` finds ``The Hobbit.epub``. Anything else is treated as
+    a glob against the whole name. Matching is case-insensitive.
+
+    :param packages: Discovered package directories.
+    :param pattern: The user's pattern, or None to keep everything.
+
+    :return: The packages that matched.
+    """
+    if pattern is None:
+        return list(packages)
+
+    needle = pattern.lower()
+    if not any(char in needle for char in "*?["):
+        needle = f"*{needle}*"
+
+    matched = [p for p in packages if fnmatch.fnmatch(p.name.lower(), needle)]
+    logger.info(
+        "Matched %d of %d package(s) against %r", len(matched), len(packages), pattern
+    )
+    return matched
+
+
+def count_pending(
+    packages: Sequence[Path], output_dir: Path, policy: NamingPolicy
+) -> int:
+    """
+    Count distinct books that are not yet in the output directory.
+
+    This is what makes the batching workflow legible: with the default cap,
+    a run can report how much of the library is still to do.
+
+    :param packages: All packages under consideration.
+    :param output_dir: Directory the epub files are written into.
+    :param policy: Naming policy supplying filenames and identities.
+
+    :return: The number of books still to export.
+    """
+    on_disk = {
+        policy.identity(existing.name)
+        for existing in output_dir.glob(f"*{PACKAGE_SUFFIX}")
+    }
+    wanted = {policy.identity(policy.filename(p.name)) for p in packages}
+    return len(wanted - on_disk)
+
+
+@contextmanager
+def output_lock(output_dir: Path) -> Iterator[None]:
+    """
+    Hold an advisory lock on the output directory for the duration of a run.
+
+    Rerun safety invites scheduling this from cron or launchd, where two runs
+    can overlap. Both would read the output directory before either wrote to
+    it and export the same books; ``os.replace`` keeps that from corrupting
+    anything, but it wastes the work and confuses the logs.
+
+    On platforms without ``fcntl`` (Windows) this is a no-op.
+
+    :param output_dir: Directory to lock.
+
+    :raises OutputLockedError: If another run already holds the lock.
+    """
+    if not HAVE_FLOCK:  # pragma: no cover - exercised only on Windows
+        yield
+        return
+
+    with (output_dir / LOCK_NAME).open("w") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise OutputLockedError(
+                f"another ibook2epub run is already using {output_dir}"
+            ) from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -353,6 +474,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Report what would be exported without writing anything.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    parser.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Re-export books even if they are already in the output directory.",
+    )
+    parser.add_argument(
+        "--match",
+        default=None,
+        metavar="PATTERN",
+        help=(
+            "Only convert books whose name matches PATTERN. A pattern without "
+            "wildcards matches anywhere in the name, so --match hobbit finds "
+            "'The Hobbit.epub'; otherwise it is a glob. Case-insensitive."
+        ),
+    )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Number of compression threads. The work is I/O bound on a cloud "
+            "library, so a value above the CPU count often helps."
+        ),
     )
     parser.add_argument(
         "-p",
@@ -410,8 +563,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.max_export_files < 0:
         parser.error("--max-export-files must be 0 or greater")
 
+    if args.workers is not None and args.workers < 1:
+        parser.error("--workers must be 1 or greater")
+
     if not args.source_dir.is_dir():
         parser.error(f"source directory does not exist: {args.source_dir}")
+
+    # Writing into the tree being scanned pollutes the next run: temporary
+    # files land mid-scan and finished exports look like source packages.
+    source = args.source_dir.resolve()
+    output = args.output_dir.resolve()
+    if output == source or output.is_relative_to(source):
+        parser.error(
+            f"output directory must not be inside the source directory: "
+            f"{args.output_dir}"
+        )
 
     return args
 
@@ -449,13 +615,16 @@ def select_packages(
     return selected
 
 
-def format_summary(report: Report, output_dir: Path, dry_run: bool) -> str:
+def format_summary(
+    report: Report, output_dir: Path, dry_run: bool, remaining: int | None = None
+) -> str:
     """
     Render a one-line human readable summary of a run.
 
     :param report: The report to render.
     :param output_dir: The directory the run targeted.
     :param dry_run: Whether the run was a dry run.
+    :param remaining: Books still to convert after this run, if known.
 
     :return: The summary line.
     """
@@ -466,7 +635,10 @@ def format_summary(report: Report, output_dir: Path, dry_run: bool) -> str:
         )
         if report.collisions:
             summary += f", {report.collisions} name collision(s)"
-        return summary + ")."
+        summary += ")."
+        if remaining:
+            summary += f" {remaining} remaining."
+        return summary
 
     summary = (
         f"Exported {report.exported} epub file(s) "
@@ -478,7 +650,47 @@ def format_summary(report: Report, output_dir: Path, dry_run: bool) -> str:
         summary += f", {report.collisions} name collision(s)"
     if report.failed:
         summary += f", failed {report.failed}"
-    return summary + "."
+    summary += "."
+    if remaining:
+        summary += f" {remaining} remaining; rerun to continue."
+    return summary
+
+
+def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report, int]:
+    """
+    Collect, select and export, under the output directory lock.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+
+    :return: The run's report, and the number of books still to convert.
+
+    :raises OutputLockedError: If another run holds the output lock.
+    """
+    packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
+    if not packages:
+        logger.warning("No matching *.epub packages found under %s", args.source_dir)
+
+    pending_before = count_pending(packages, args.output_dir, policy)
+    selected = select_packages(
+        packages, args.max_export_files, randomise=not args.no_shuffle
+    )
+
+    # A dry run writes nothing, so it needs no lock and must not create one.
+    lock = nullcontext() if args.dry_run else output_lock(args.output_dir)
+    with lock:
+        report = asyncio.run(
+            export_packages(
+                selected,
+                args.output_dir,
+                dry_run=args.dry_run,
+                max_workers=args.workers,
+                naming=policy,
+                force=args.force,
+            )
+        )
+
+    return report, max(0, pending_before - report.exported)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -517,19 +729,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             logger.critical("Could not create output directory: %s", exc)
             return 1
 
-    packages = collect_package_dirs(args.source_dir)
-    if not packages:
-        logger.warning("No *.epub packages found under %s", args.source_dir)
+    try:
+        report, remaining = _run_export(args, policy)
+    except OutputLockedError as exc:
+        logger.critical("%s", exc)
+        return 3
 
-    selected = select_packages(
-        packages, args.max_export_files, randomise=not args.no_shuffle
-    )
-
-    report = asyncio.run(
-        export_packages(selected, args.output_dir, dry_run=args.dry_run, naming=policy)
-    )
-
-    print(format_summary(report, args.output_dir, args.dry_run))
+    print(format_summary(report, args.output_dir, args.dry_run, remaining))
     logger.debug("Ending the convert application.")
 
     return 1 if report.failed else 0

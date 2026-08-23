@@ -22,9 +22,12 @@ This program implements the following special considerations:
   - it must contain the string "application/epub+zip".
 - The rest of the files must be compressed.
 
-Apple's own bookkeeping is left out of the exported archive: any `*.plist`
-file (including `iTunesMetadata.plist`), files whose names begin with
-`bookmarks`, and `.DS_Store`.
+Apple's own bookkeeping is left out of the exported archive: `*.plist` files
+(including `iTunesMetadata.plist`) and names beginning with `bookmarks`. Those
+patterns are applied **only at the package root**, because that is the only
+place Apple puts them — a chapter legitimately named `bookmarks.xhtml`, or a
+`.plist` data asset under `OEBPS/`, is real content and is kept. `.DS_Store` is
+dropped at any depth.
 
 ## Requirements
 
@@ -50,20 +53,33 @@ book is compressed in its own worker thread, so books are converted in parallel;
 than interleaving. The asyncio layer on top gathers the results and keeps one
 book's failure from taking down the rest of the run.
 
+On a cloud-backed library the bottleneck is usually **not** compression. A
+measured run of 50 books took 80 seconds at 8% CPU — almost all of it waiting
+on iCloud. Raising `--workers` above the CPU-derived default helps there, since
+the extra threads spend their time blocked rather than competing.
+
 ## Safety
 
-Each archive is built under a temporary `.part` name and moved into place with
-`os.replace()` only once it is complete. An interrupted run therefore never
-leaves a truncated `.epub` in the output directory — which matters, because the
-output directory is what the program uses to decide what has already been done.
+Each archive is built under a short temporary name in the output directory and
+moved into place with `os.replace()` only once it is complete. An interrupted
+run therefore never leaves a truncated `.epub` behind — which matters, because
+the output directory is what the program uses to decide what has already been
+done. The temporary name is deliberately *not* derived from the book's name: a
+title already at the filesystem's 255-byte limit would overflow it once a
+suffix was appended.
+
+Only one run at a time may write to a given output directory. A second
+concurrent run exits `3` rather than duplicating work — useful when this is
+scheduled from cron or launchd, which the rerun-safety invites.
 
 ## Usage
 
 ### Command Line
 
 ```text
-usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d] [-p]
-                  [--no-shuffle] [-v] [-q] [--log-file PATH]
+usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d] [--version]
+                  [-f] [--match PATTERN] [-w N] [-p] [--no-shuffle] [-v] [-q]
+                  [--log-file PATH]
 
 Convert Apple iBooks epub packages to zipped epub files.
 
@@ -80,6 +96,16 @@ options:
                         packages.
   -d, --dry-run         Report what would be exported without writing
                         anything.
+  --version             show program's version number and exit
+  -f, --force           Re-export books even if they are already in the output
+                        directory.
+  --match PATTERN       Only convert books whose name matches PATTERN. A
+                        pattern without wildcards matches anywhere in the
+                        name, so --match hobbit finds 'The Hobbit.epub';
+                        otherwise it is a glob. Case-insensitive.
+  -w, --workers N       Number of compression threads. The work is I/O bound
+                        on a cloud library, so a value above the CPU count
+                        often helps.
   -p, --portable-names  Rewrite output names so they survive a copy to
                         Windows, exFAT or a Kindle, and treat case/accent
                         variants of a title as the same book. Romanizes non-
@@ -137,6 +163,32 @@ When `--max-export-files` applies, the capped subset is chosen at *random* by
 default, so repeated runs work through the library a batch at a time. Pass
 `--no-shuffle` to take books in sorted order instead, which makes a run
 reproducible.
+
+Each run reports how much is left, so the default batching reads as progress
+rather than a limit:
+
+```text
+Exported 5 epub file(s) (412 member files) to /Users/you/Books, skipped 37. 212 remaining; rerun to continue.
+```
+
+Convert one book, or a handful, with `--match`. A pattern with no wildcard
+matches anywhere in the name; anything else is treated as a glob. Matching is
+case-insensitive either way:
+
+```bash
+ibook2epub --match hobbit -m 0      # The Hobbit.epub, Hobbit Notes.epub
+ibook2epub --match "The Lord*" -m 0 # anchored glob
+```
+
+### Re-exporting
+
+A book already in the output directory is skipped. Pass `-f` / `--force` to
+export it again anyway — useful after re-downloading a book, or when you
+suspect an output is damaged:
+
+```bash
+ibook2epub --match dune --force -m 0
+```
 
 ### Portable filenames (`-p`)
 
@@ -197,6 +249,7 @@ output directory back off disk.
 | `0`  | Success. Books skipped as already-exported, or skipped for a name collision, still count as success. |
 | `1`  | At least one book failed to convert, or the output directory could not be created. |
 | `2`  | `--portable-names` was requested but the `portable` extra is not installed. |
+| `3`  | Another `ibook2epub` run already holds the output directory lock. |
 
 A book that fails to convert is logged and the run continues with the rest.
 

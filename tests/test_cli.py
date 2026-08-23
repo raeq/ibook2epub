@@ -42,6 +42,21 @@ class TestParseArgs:
 
         assert not args.output_dir.exists()
 
+    def test_output_inside_source_is_rejected(self, library):
+        # Regression: .part files and finished exports landed inside the tree
+        # being scanned, polluting the next run's picture of the library.
+        with pytest.raises(SystemExit):
+            convert.parse_args(["-s", str(library), "-o", str(library / "out")])
+
+    def test_output_equal_to_source_is_rejected(self, library):
+        with pytest.raises(SystemExit):
+            convert.parse_args(["-s", str(library), "-o", str(library)])
+
+    def test_output_beside_source_is_allowed(self, library, tmp_path):
+        args = convert.parse_args(["-s", str(library), "-o", str(tmp_path / "out")])
+
+        assert args.output_dir == tmp_path / "out"
+
     def test_missing_source_dir_is_rejected(self, tmp_path):
         with pytest.raises(SystemExit):
             convert.parse_args(["-s", str(tmp_path / "absent")])
@@ -208,4 +223,5 @@ class TestMain:
         code = convert.main(["-s", str(empty), "-o", str(output_dir)])
 
         assert code == 0
-        assert list(output_dir.iterdir()) == []
+        # The run lock is expected; no books should have been written.
+        assert list(output_dir.glob("*.epub")) == []
