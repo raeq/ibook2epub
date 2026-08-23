@@ -41,7 +41,9 @@ _LEVELS = (logging.WARNING, logging.INFO, logging.DEBUG, TRACE)
 
 _CONSOLE_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 _FILE_FORMAT = "%(asctime)s %(levelname)s %(message)s"
-_FILE_DATEFMT = "%m/%d/%Y %I:%M:%S %p"
+# ISO 8601 with UTC offset: sorts lexicographically and is unambiguous across
+# timezones, unlike a 12-hour local clock.
+_FILE_DATEFMT = "%Y-%m-%dT%H:%M:%S%z"
 
 
 def level_for_verbosity(verbosity: int) -> int:

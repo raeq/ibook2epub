@@ -52,7 +52,7 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.pylint.main]
-ignore-paths = ["^venv.*$"]
+ignore-paths = ["^\\.?venv.*$"]
 
 [tool.pylint."messages control"]
 disable = ["duplicate-code"]

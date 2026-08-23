@@ -45,12 +45,18 @@ PACKAGE_SUFFIX = ".epub"
 PARTIAL_SUFFIX = ".part"
 COMPRESS_LEVEL = 9
 
-# Apple-specific bookkeeping that must not be copied into the exported epub.
-# ``mimetype`` is excluded here because it is written separately, uncompressed
-# and first, as the epub specification requires.
-EXCLUDED_NAMES = frozenset({MIMETYPE_NAME, ".DS_Store"})
-EXCLUDED_SUFFIXES = frozenset({".plist"})
-EXCLUDED_PREFIXES = ("bookmarks",)
+# Filesystem junk, never book content, so excluded wherever it appears.
+EXCLUDED_ANYWHERE = frozenset({".DS_Store"})
+
+# Apple bookkeeping, which only ever sits at the package root. These patterns
+# must NOT be applied deeper: a chapter legitimately named ``bookmarks.xhtml``,
+# a ``.plist`` data asset, or a file called ``mimetype`` inside ``OEBPS/`` are
+# all real content, and dropping them corrupts the book. ``mimetype`` is listed
+# because the root copy is rewritten separately, uncompressed and first, as the
+# epub specification requires.
+EXCLUDED_ROOT_NAMES = frozenset({MIMETYPE_NAME})
+EXCLUDED_ROOT_SUFFIXES = frozenset({".plist"})
+EXCLUDED_ROOT_PREFIXES = ("bookmarks",)
 
 
 @dataclass
@@ -65,18 +71,28 @@ class Report:
     collisions: int = 0  # Distinct packages that share one output name.
 
 
-def is_excluded(name: str) -> bool:
+def is_excluded(name: str, *, at_root: bool) -> bool:
     """
     Report whether a package member should be left out of the epub.
 
+    The Apple bookkeeping patterns apply only at the package root. Applying
+    them at every depth silently drops real content — a chapter file named
+    ``bookmarks.xhtml`` or a ``.plist`` asset under ``OEBPS/`` — which
+    produces an archive that readers reject for a missing spine item.
+
     :param name: The bare file name (not a path) to test.
+    :param at_root: Whether the file sits directly in the package directory.
 
     :return: True if the file must not be copied into the archive.
     """
+    if name in EXCLUDED_ANYWHERE:
+        return True
+    if not at_root:
+        return False
     return (
-        name in EXCLUDED_NAMES
-        or Path(name).suffix in EXCLUDED_SUFFIXES
-        or name.startswith(EXCLUDED_PREFIXES)
+        name in EXCLUDED_ROOT_NAMES
+        or Path(name).suffix in EXCLUDED_ROOT_SUFFIXES
+        or name.startswith(EXCLUDED_ROOT_PREFIXES)
     )
 
 
@@ -96,18 +112,19 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
     """
     found: list[Path] = []
 
-    try:
-        for root, dirs, _files in os.walk(source_dir):
-            descend = []
-            for name in dirs:
-                if name.endswith(PACKAGE_SUFFIX):
-                    found.append(Path(root) / name)
-                else:
-                    descend.append(name)
-            dirs[:] = descend
-    except OSError as exc:
-        logger.error("Could not scan %s: %s", source_dir, exc)
-        return []
+    def on_error(exc: OSError) -> None:
+        # os.walk swallows scandir failures unless onerror is supplied, so an
+        # unreadable directory would otherwise be skipped in total silence.
+        logger.warning("Could not scan %s: %s", exc.filename or source_dir, exc)
+
+    for root, dirs, _files in os.walk(source_dir, onerror=on_error):
+        descend = []
+        for name in dirs:
+            if name.endswith(PACKAGE_SUFFIX):
+                found.append(Path(root) / name)
+            else:
+                descend.append(name)
+        dirs[:] = descend
 
     found.sort()
     logger.debug("Found %d epub package(s) under %s", len(found), source_dir)
@@ -138,7 +155,7 @@ def zip_package(source_dir: Path, target_archive: Path) -> int:
             for path in sorted(source_dir.rglob("*")):
                 if not path.is_file():
                     continue
-                if is_excluded(path.name):
+                if is_excluded(path.name, at_root=path.parent == source_dir):
                     logger.trace("Skipped object: <%s>", path.name)
                     continue
                 arcname = path.relative_to(source_dir).as_posix()
@@ -417,10 +434,18 @@ def select_packages(
         logger.info("All %d epub package(s) will be processed.", len(selected))
         return selected
 
+    if len(selected) <= max_export_files:
+        logger.info("All %d epub package(s) will be processed.", len(selected))
+        return selected
+
     if randomise:
         shuffle(selected)
     selected = selected[:max_export_files]
-    logger.info("Limiting activity to a maximum of %d epub file(s).", max_export_files)
+    logger.info(
+        "Limiting activity to %d of %d epub package(s).",
+        max_export_files,
+        len(packages),
+    )
     return selected
 
 
@@ -475,6 +500,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.critical("%s", exc)
         return 2
 
+    logger.debug("Naming policy: %s", policy.label)
     logger.info("Examining source: %s", args.source_dir)
     logger.info("Writing output to: %s", args.output_dir)
     if args.portable_names:

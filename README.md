@@ -192,8 +192,18 @@ output directory back off disk.
 
 ### Exit codes
 
-`0` on success, `1` if any book failed to convert. A book that fails is logged
-and the rest of the run continues.
+| Code | Meaning |
+|------|---------|
+| `0`  | Success. Books skipped as already-exported, or skipped for a name collision, still count as success. |
+| `1`  | At least one book failed to convert, or the output directory could not be created. |
+| `2`  | `--portable-names` was requested but the `portable` extra is not installed. |
+
+A book that fails to convert is logged and the run continues with the rest.
+
+Name collisions do **not** change the exit code. If you run this from a script
+or a cron job and need to know that books were skipped, check the summary line
+or watch for `Name collision, skipping:` in the log — a run that skips books
+for that reason still exits `0`.
 
 ## Development
 

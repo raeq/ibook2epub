@@ -22,6 +22,12 @@ def export(packages: Sequence[Path], output_dir: Path, **kwargs: Any) -> convert
     return asyncio.run(convert.export_packages(packages, output_dir, **kwargs))
 
 
+def archive_mimetype(path: Path) -> bytes:
+    """Read the mimetype member out of an exported archive."""
+    with ZipFile(path) as archive:
+        return archive.read("mimetype")
+
+
 class TestIsExcluded:
     """The exclusion rules applied to package members."""
 
@@ -29,15 +35,29 @@ class TestIsExcluded:
         "name",
         ["mimetype", ".DS_Store", "iTunesMetadata.plist", "bookmarks.plist"],
     )
-    def test_apple_bookkeeping_is_excluded(self, name):
-        assert convert.is_excluded(name)
+    def test_apple_bookkeeping_is_excluded_at_the_root(self, name):
+        assert convert.is_excluded(name, at_root=True)
 
     @pytest.mark.parametrize(
         "name",
         ["content.opf", "chapter1.xhtml", "container.xml", "cover.jpg", "style.css"],
     )
     def test_content_is_kept(self, name):
-        assert not convert.is_excluded(name)
+        assert not convert.is_excluded(name, at_root=True)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["mimetype", "bookmarks.xhtml", "bookmarks.plist", "settings.plist"],
+    )
+    def test_root_only_patterns_do_not_apply_deeper(self, name):
+        # Regression: these patterns used to match at every depth, so a real
+        # chapter named bookmarks.xhtml or a .plist data asset was silently
+        # dropped, corrupting the book.
+        assert not convert.is_excluded(name, at_root=False)
+
+    def test_ds_store_is_excluded_at_every_depth(self):
+        assert convert.is_excluded(".DS_Store", at_root=True)
+        assert convert.is_excluded(".DS_Store", at_root=False)
 
 
 class TestCollectPackageDirs:
@@ -99,6 +119,52 @@ class TestZipPackage:
             assert b"Chapter one" in archive.read("OEBPS/text/chapter1.xhtml")
         assert file_count == len(EXPECTED_MEMBERS)
 
+    def test_nested_content_is_not_mistaken_for_apple_bookkeeping(
+        self, tmp_path, output_dir
+    ):
+        # Regression: a book whose content happens to be named like Apple's
+        # root bookkeeping was exported with those files silently missing,
+        # which breaks readers on the absent spine items.
+        package = tmp_path / "Book.epub"
+        for relative, content in {
+            "mimetype": "bogus",
+            "iTunesMetadata.plist": "<plist/>",
+            "META-INF/container.xml": "<container/>",
+            "OEBPS/content.opf": "<package/>",
+            "OEBPS/bookmarks.xhtml": "<html>a real chapter</html>",
+            "OEBPS/data/settings.plist": "<data/>",
+            "OEBPS/mimetype": "a real content file",
+        }.items():
+            path = package / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+
+        target = output_dir / "Book.epub"
+        convert.zip_package(package, target)
+
+        with ZipFile(target) as archive:
+            members = set(archive.namelist())
+
+        assert "OEBPS/bookmarks.xhtml" in members
+        assert "OEBPS/data/settings.plist" in members
+        assert "OEBPS/mimetype" in members
+        # The root bookkeeping is still dropped, and the root mimetype is the
+        # one we rewrote rather than the bogus original.
+        assert "iTunesMetadata.plist" not in members
+        assert archive_mimetype(target) == b"application/epub+zip"
+
+    def test_nested_ds_store_is_still_dropped(self, tmp_path, output_dir):
+        package = tmp_path / "Book.epub"
+        (package / "OEBPS").mkdir(parents=True)
+        (package / "OEBPS" / ".DS_Store").write_bytes(b"junk")
+        (package / "OEBPS" / "content.opf").write_text("<package/>", encoding="utf-8")
+
+        target = output_dir / "Book.epub"
+        convert.zip_package(package, target)
+
+        with ZipFile(target) as archive:
+            assert "OEBPS/.DS_Store" not in archive.namelist()
+
     def test_leaves_no_partial_file_behind_on_success(self, library, output_dir):
         convert.zip_package(library / "Book One.epub", output_dir / "Book One.epub")
 
@@ -109,7 +175,7 @@ class TestZipPackage:
     ):
         target = output_dir / "Book One.epub"
 
-        def boom(_name):
+        def boom(_name, **_kwargs):
             raise OSError("disk fell over")
 
         monkeypatch.setattr(convert, "is_excluded", boom)
@@ -174,7 +240,7 @@ class TestExportPackages:
     def test_a_failing_package_is_reported_not_raised(
         self, library, output_dir, monkeypatch
     ):
-        def boom(_name):
+        def boom(_name, **_kwargs):
             raise OSError("disk fell over")
 
         monkeypatch.setattr(convert, "is_excluded", boom)
