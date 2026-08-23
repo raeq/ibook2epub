@@ -1,6 +1,18 @@
 # ibook2epub
 
-Use this program to convert iBooks epub directories to epub format.
+[![CI](https://github.com/raeq/ibook2epub/actions/workflows/ci.yml/badge.svg)](https://github.com/raeq/ibook2epub/actions/workflows/ci.yml)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![License: CC BY-NC 4.0](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey)
+
+Export your **Apple Books** (formerly **iBooks**) library as standard **epub**
+files, ready for Calibre, a Kindle, a Kobo, or any other e-reader.
+
+On macOS, Books.app stores each book as a bare `*.epub/` *folder* — typically
+under `~/Library/Mobile Documents/iCloud~com~apple~iBooks/Documents/` — rather
+than as a real `.epub` archive, so books can't simply be copied out of the
+library and opened elsewhere. `ibook2epub` batch-converts those package folders
+into spec-valid epub files: a pure-Python command line tool with no
+dependencies, safe to re-run, with optional Kindle/Windows-safe file naming.
 
 ## The Problem
 
@@ -68,9 +80,23 @@ done. The temporary name is deliberately *not* derived from the book's name: a
 title already at the filesystem's 255-byte limit would overflow it once a
 suffix was appended.
 
+Exports are **byte-for-byte reproducible**. Zip members normally embed a
+modification time, so converting the same book twice would produce different
+bytes; entry timestamps and permissions are pinned instead. Re-exports
+therefore hash identically, which lets backups deduplicate, stops `rsync`
+re-copying unchanged books, and lets you compare two exports by checksum.
+
+**Ctrl-C is a normal way to stop.** An interrupted run reports what it
+finished, exits `130`, and leaves every completed book intact — rerun to carry
+on. Books already being written are allowed to finish so their replace stays
+atomic; queued ones are dropped.
+
 Only one run at a time may write to a given output directory. A second
 concurrent run exits `3` rather than duplicating work — useful when this is
-scheduled from cron or launchd, which the rerun-safety invites.
+scheduled from cron or launchd, which the rerun-safety invites. The lock file
+records the holder's PID for diagnostics only: `flock` is released by the
+kernel when a process dies, even on `SIGKILL`, so a lock file left behind by a
+killed run is inert and needs no cleanup.
 
 ## Usage
 
@@ -78,8 +104,8 @@ scheduled from cron or launchd, which the rerun-safety invites.
 
 ```text
 usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d] [--version]
-                  [-f] [--match PATTERN] [-w N] [-p] [--no-shuffle] [-v] [-q]
-                  [--log-file PATH]
+                  [-f] [--match PATTERN] [-w N] [-p [MODE]] [--no-shuffle]
+                  [-v] [-q] [--log-file PATH]
 
 Convert Apple iBooks epub packages to zipped epub files.
 
@@ -93,7 +119,8 @@ options:
                         exist.
   -s, --source-dir SOURCE_DIR
                         Path of the source directory containing *.epub/
-                        packages.
+                        packages. Defaults to whichever known iBooks location
+                        holds books.
   -d, --dry-run         Report what would be exported without writing
                         anything.
   --version             show program's version number and exit
@@ -106,11 +133,15 @@ options:
   -w, --workers N       Number of compression threads. The work is I/O bound
                         on a cloud library, so a value above the CPU count
                         often helps.
-  -p, --portable-names  Rewrite output names so they survive a copy to
-                        Windows, exFAT or a Kindle, and treat case/accent
-                        variants of a title as the same book. Romanizes non-
-                        Latin titles, and renames files an earlier run already
-                        exported. Needs the 'disarm' extra.
+  -p, --portable-names [MODE]
+                        Rewrite output names so they survive a copy to
+                        Windows, exFAT or a Kindle. 'strip' (the default when
+                        -p is given alone) removes the characters those
+                        filesystems reject and needs no extra packages.
+                        'romanize' also transliterates non-Latin titles and
+                        folds accents when deciding whether a book is already
+                        exported, and needs the 'disarm' extra. Either mode
+                        renames books an earlier run already exported.
   --no-shuffle          Take the first N packages in sorted order instead of a
                         random selection when --max-export-files applies.
   -v, --verbose         Increase log verbosity; -v for debug, -vv for trace.
@@ -203,33 +234,48 @@ large fraction. If you only ever read from `~/Books` on APFS, `-p` buys you
 close to nothing. If you copy to a Kindle or an SD card, it is the difference
 between those books arriving and failing.
 
-`-p` / `--portable-names` rewrites output names so they survive that copy, and
-treats case and accent variants of a title as the same book:
+`-p` / `--portable-names` rewrites output names so they survive that copy. It
+has two modes.
+
+**`-p` (or `-p strip`) — standard library, nearly loss-free.** Removes the
+characters those filesystems reject, escapes reserved device names like `CON`,
+and clamps the result to 255 bytes. **The script is preserved**: `こころ.epub`
+stays `こころ.epub`, because APFS, ext4, NTFS and exFAT all store it correctly.
 
 ```bash
-pip install "ibook2epub[portable]"
-ibook2epub -s "$HOME/iBooks/" -o /Volumes/KINDLE/documents/ -m 0 -p
+ibook2epub -o /Volumes/KINDLE/documents/ -m 0 -p
 ```
 
 ```text
 Sapiens: A Brief History.epub  ->  Sapiens A Brief History.epub
 The Hobbit.epub  +  THE HOBBIT.epub  ->  one export, not two
+こころ.epub                     ->  こころ.epub   (unchanged)
 ```
 
-Spaces are preserved — they are legal everywhere, so replacing them would be
-gratuitous churn. Three things to know before turning this on:
+**`-p romanize` — needs the `portable` extra.** Everything `strip` does, plus
+transliteration and accent-insensitive duplicate detection:
 
-- **Non-Latin titles are romanized.** `こころ.epub` becomes `kokoro.epub`. This
-  is lossy, and it is why the flag is opt-in rather than the default.
+```bash
+pip install "ibook2epub[portable]"
+ibook2epub -o /Volumes/KINDLE/documents/ -m 0 -p romanize
+```
+
+```text
+こころ.epub        ->  kokoro.epub        (lossy)
+Düne.epub + Dune.epub  ->  one export, not two
+```
+
+Spaces are preserved in both modes — they are legal everywhere, so replacing
+them would be gratuitous churn. Two things to know before turning either on:
+
 - **It renames books an earlier run already exported.** A book whose name
-  changes under sanitisation will be exported again under its new name, and
-  the old file is left behind. Start with `-d` to preview.
+  changes will be exported again under its new name, and the old file is left
+  behind. Start with `-d` to preview.
 - **Distinct books can want the same name.** `Vol 1:2` and `Vol 1?2` both
   become `Vol 1 2`. The first wins; the rest are reported as name collisions
   and skipped rather than silently overwritten.
 
-Without `-p`, names are used exactly as they appear in the source directory and
-no third-party package is involved.
+Without `-p`, names are used exactly as they appear in the source directory.
 
 ### Tracking what's been converted
 
@@ -250,6 +296,7 @@ output directory back off disk.
 | `1`  | At least one book failed to convert, or the output directory could not be created. |
 | `2`  | `--portable-names` was requested but the `portable` extra is not installed. |
 | `3`  | Another `ibook2epub` run already holds the output directory lock. |
+| `130` | Interrupted with Ctrl-C. Finished books are intact; rerun to continue. |
 
 A book that fails to convert is logged and the run continues with the rest.
 

@@ -6,11 +6,18 @@ file on disk, and how to decide whether that book has already been exported.
 The default policy answers both with the package directory name itself, which
 needs no dependencies.
 
-The portable policy answers them with ``disarm``: :func:`sanitize_filename`
-produces a name that survives a copy to Windows, exFAT or a Kindle, and
-:func:`catalog_key` produces a case- and accent-insensitive identity so the
-same book stored under ``The Hobbit.epub`` and ``THE HOBBIT.epub`` is exported
-once rather than twice.
+Two portable policies rewrite names so they survive a copy to Windows, exFAT
+or a Kindle:
+
+``strip``
+    Standard library only. Replaces the characters those filesystems reject,
+    handles reserved device names, and clamps the result to a byte budget.
+    Nearly loss-free, so it is what a bare ``--portable-names`` selects.
+
+``romanize``
+    Uses ``disarm``. Everything ``strip`` does, plus transliteration and
+    accent- and case-insensitive identity, at the cost of turning
+    ``こころ.epub`` into ``kokoro.epub``.
 
 The identity is deliberately derived from the *sanitized filename* rather than
 from the source directory name. That keeps the output directory the sole
@@ -22,25 +29,99 @@ from __future__ import annotations
 
 from typing import Literal, Protocol, runtime_checkable
 
-#: Platforms ``disarm.sanitize_filename`` knows how to target.
-Platform = Literal["universal", "windows", "posix"]
-
 try:
     import disarm
 except ImportError:  # pragma: no cover - exercised by the no-extra install
     disarm = None  # type: ignore[assignment]
 
+#: Platforms ``disarm.sanitize_filename`` knows how to target.
+Platform = Literal["universal", "windows", "posix"]
+
+#: Values accepted by ``--portable-names``.
+STRIP = "strip"
+ROMANIZE = "romanize"
+PORTABLE_MODES = (STRIP, ROMANIZE)
+
 PORTABLE_HINT = (
-    "--portable-names needs the 'disarm' package: pip install 'ibook2epub[portable]'"
+    f"--portable-names={ROMANIZE} needs the 'disarm' package: "
+    f"pip install 'ibook2epub[portable]'"
 )
 
-#: Characters that are illegal on Windows/exFAT but legal on APFS and ext4.
-#: Present only so the docs and tests can name them; disarm does the removal.
+#: Characters that are illegal on Windows and exFAT but legal on APFS and ext4.
 WINDOWS_ILLEGAL = '<>:"/\\|?*'
+
+#: Names Windows reserves as devices, whatever the extension.
+RESERVED_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{digit}" for digit in range(1, 10)}
+    | {f"LPT{digit}" for digit in range(1, 10)}
+)
+
+#: The per-component limit on ext4, exFAT and APFS.
+MAX_FILENAME_BYTES = 255
 
 
 class PortableNamesUnavailableError(RuntimeError):
     """Raised when portable naming is requested but ``disarm`` is not installed."""
+
+
+def truncate_bytes(text: str, limit: int) -> str:
+    """
+    Trim text to at most *limit* UTF-8 bytes without splitting a character.
+
+    :param text: The string to trim.
+    :param limit: Maximum length in bytes.
+
+    :return: The trimmed string.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
+def strip_unsafe(
+    name: str, *, separator: str = " ", max_bytes: int = MAX_FILENAME_BYTES
+) -> str:
+    """
+    Make a filename safe for Windows, exFAT and ext4 without romanizing it.
+
+    Non-Latin scripts are preserved: every filesystem in play stores them
+    correctly, so the portability problem is the ASCII metacharacters, the
+    reserved device names, and the length — not the script.
+
+    :param name: The candidate filename.
+    :param separator: Replacement for illegal characters.
+    :param max_bytes: Byte budget for the result.
+
+    :return: A filename safe to write on any of the target filesystems.
+    """
+    cleaned = "".join(
+        separator if char in WINDOWS_ILLEGAL or ord(char) < 32 else char
+        for char in name
+    )
+    cleaned = " ".join(cleaned.split())
+    # Windows silently drops a trailing dot or space, so a name ending in one
+    # would not round-trip.
+    cleaned = cleaned.strip(" .")
+
+    stem, dot, extension = cleaned.rpartition(".")
+    checked = stem if dot else cleaned
+    if checked.upper() in RESERVED_STEMS:
+        cleaned = f"_{cleaned}"
+
+    if not cleaned:
+        return "_"
+
+    if len(cleaned.encode("utf-8")) <= max_bytes:
+        return cleaned
+
+    stem, dot, extension = cleaned.rpartition(".")
+    tail = f".{extension}" if dot else ""
+    if dot and len(tail.encode("utf-8")) < max_bytes:
+        budget = max_bytes - len(tail.encode("utf-8"))
+        return truncate_bytes(stem, budget).rstrip(" .") + tail
+    return truncate_bytes(cleaned, max_bytes)
 
 
 @runtime_checkable
@@ -76,15 +157,41 @@ class PassthroughNaming:
         return filename
 
 
+class StripNaming:
+    """
+    Remove characters other filesystems reject, preserving the script.
+
+    Standard library only. Identity folds case, so ``The Hobbit.epub`` and
+    ``THE HOBBIT.epub`` are one book; unlike :class:`PortableNaming` it does
+    not fold accents, because doing so without transliterating is not
+    something the standard library offers.
+
+    :param separator: Replacement for illegal characters.
+    """
+
+    label = "portable(strip)"
+
+    def __init__(self, separator: str = " ") -> None:
+        self.separator = separator
+
+    def filename(self, package_name: str) -> str:
+        """Return a filename safe to copy to any common filesystem."""
+        return strip_unsafe(package_name, separator=self.separator)
+
+    def identity(self, filename: str) -> str:
+        """Return a case-insensitive key for *filename*."""
+        return filename.casefold()
+
+
 class PortableNaming:
     """
-    Rewrite names for cross-filesystem portability using ``disarm``.
+    Rewrite names for portability using ``disarm``, including transliteration.
 
     Spaces are preserved (``separator=" "``) because they are legal on every
-    target filesystem; only genuinely illegal characters are replaced. Note
-    that ``disarm.sanitize_filename`` also transliterates, so non-Latin titles
-    are romanized — ``こころ.epub`` becomes ``kokoro.epub``. That is lossy and
-    is the reason this policy is opt-in rather than the default.
+    target filesystem. Note that ``disarm.sanitize_filename`` transliterates,
+    so non-Latin titles are romanized — ``こころ.epub`` becomes
+    ``kokoro.epub``. That is lossy, which is why :class:`StripNaming` is what
+    a bare ``--portable-names`` selects.
 
     :param platform: Target platform: ``universal``, ``windows`` or ``posix``.
     :param separator: Replacement for illegal characters.
@@ -92,7 +199,7 @@ class PortableNaming:
     :raises PortableNamesUnavailableError: If ``disarm`` is not installed.
     """
 
-    label = "portable"
+    label = "portable(romanize)"
 
     def __init__(self, platform: Platform = "universal", separator: str = " ") -> None:
         if disarm is None:
@@ -115,22 +222,27 @@ class PortableNaming:
 
 def portable_available() -> bool:
     """
-    Report whether portable naming can be used.
+    Report whether the romanizing portable mode can be used.
 
     :return: True if ``disarm`` is importable.
     """
     return disarm is not None
 
 
-def build_policy(portable: bool) -> NamingPolicy:
+def build_policy(portable: str | None) -> NamingPolicy:
     """
     Select a naming policy.
 
-    :param portable: Whether the user asked for portable names.
+    :param portable: ``None`` for passthrough, ``"strip"`` for the standard
+        library policy, or ``"romanize"`` for the ``disarm`` one.
 
     :return: The policy to hand to the exporter.
 
-    :raises PortableNamesUnavailableError: If portable names were requested
-        but ``disarm`` is not installed.
+    :raises PortableNamesUnavailableError: If romanizing was requested but
+        ``disarm`` is not installed.
     """
-    return PortableNaming() if portable else PassthroughNaming()
+    if portable is None:
+        return PassthroughNaming()
+    if portable == STRIP:
+        return StripNaming()
+    return PortableNaming()

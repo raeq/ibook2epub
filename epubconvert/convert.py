@@ -18,18 +18,23 @@ import argparse
 import asyncio
 import fnmatch
 import os
+import shutil
+import socket
 import tempfile
+import threading
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from . import __version__, app_logger
 from .app_logger import logger
 from .naming import (
+    PORTABLE_MODES,
+    STRIP,
     NamingPolicy,
     PassthroughNaming,
     PortableNamesUnavailableError,
@@ -43,11 +48,20 @@ try:
 except ImportError:  # pragma: no cover - Windows has no fcntl
     HAVE_FLOCK = False
 
-DEFAULT_SOURCE = (
-    Path.home() / "Library/Mobile Documents/iCloud~com~apple~iBooks/Documents"
+# Apple has moved the library between releases, so probe both known homes
+# rather than assuming one and reporting an empty library on the other.
+SOURCE_CANDIDATES = (
+    Path.home() / "Library/Mobile Documents/iCloud~com~apple~iBooks/Documents",
+    Path.home()
+    / "Library/Containers/com.apple.BKAgentService/Data/Documents/iBooks/Books",
 )
+DEFAULT_SOURCE = SOURCE_CANDIDATES[0]
 DEFAULT_OUTPUT = Path.home() / "Books"
 DEFAULT_MAX_EXPORT_FILES = 5
+
+# Zip cannot represent a timestamp before 1980; using its floor keeps every
+# export byte-identical regardless of when it ran.
+ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 MIMETYPE_NAME = "mimetype"
 MIMETYPE_CONTENT = "application/epub+zip"
@@ -85,6 +99,7 @@ class Report:
     failed: int = 0
     planned: int = 0  # Dry-run only: exports that would have been attempted.
     collisions: int = 0  # Distinct packages that share one output name.
+    interrupted: bool = False  # The run was stopped with Ctrl-C.
 
 
 def is_excluded(name: str, *, at_root: bool) -> bool:
@@ -147,6 +162,27 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
     return found
 
 
+def _entry(arcname: str, compress_type: int) -> ZipInfo:
+    """
+    Build a zip entry with normalized metadata.
+
+    Zip members carry a modification time and permission bits, so exporting
+    the same book twice would otherwise produce different bytes every time.
+    Pinning both makes re-exports byte-identical, which lets backups dedup,
+    stops rsync re-copying unchanged books, and allows outputs to be compared
+    by hash.
+
+    :param arcname: Path of the member inside the archive.
+    :param compress_type: ``ZIP_STORED`` or ``ZIP_DEFLATED``.
+
+    :return: The prepared entry.
+    """
+    entry = ZipInfo(arcname, date_time=ARCHIVE_TIMESTAMP)
+    entry.compress_type = compress_type
+    entry.external_attr = ARCHIVE_MODE << 16
+    return entry
+
+
 def zip_package(source_dir: Path, target_archive: Path) -> int:
     """
     Write a single package directory out as a spec-valid epub archive.
@@ -175,9 +211,11 @@ def zip_package(source_dir: Path, target_archive: Path) -> int:
     file_count = 0
 
     try:
-        with ZipFile(partial, "w", ZIP_DEFLATED) as archive:
+        with ZipFile(
+            partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL
+        ) as archive:
             # The mimetype entry must come first and must be stored, not deflated.
-            archive.writestr(MIMETYPE_NAME, MIMETYPE_CONTENT, compress_type=ZIP_STORED)
+            archive.writestr(_entry(MIMETYPE_NAME, ZIP_STORED), MIMETYPE_CONTENT)
 
             for path in sorted(source_dir.rglob("*")):
                 if not path.is_file():
@@ -186,7 +224,9 @@ def zip_package(source_dir: Path, target_archive: Path) -> int:
                     logger.trace("Skipped object: <%s>", path.name)
                     continue
                 arcname = path.relative_to(source_dir).as_posix()
-                archive.write(path, arcname, compresslevel=COMPRESS_LEVEL)
+                entry = _entry(arcname, ZIP_DEFLATED)
+                with path.open("rb") as source, archive.open(entry, "w") as target:
+                    shutil.copyfileobj(source, target)
                 file_count += 1
 
         partial.replace(target_archive)
@@ -199,27 +239,74 @@ def zip_package(source_dir: Path, target_archive: Path) -> int:
     return file_count
 
 
-async def _export_one(
-    pool: ThreadPoolExecutor, package: Path, target: Path
-) -> int | None:
+#: Guards the shared Report and progress counter, which worker threads update.
+_REPORT_LOCK = threading.Lock()
+
+
+class _Progress:  # pylint: disable=too-few-public-methods
+    """Counts finished books so each log line shows how far along the run is."""
+
+    def __init__(self, total: int) -> None:
+        self.total = total
+        self.done = 0
+
+    def tick(self) -> str:
+        """Advance the counter and render it as ``[12/240]``."""
+        self.done += 1
+        return f"[{self.done}/{self.total}]"
+
+
+def _zip_and_record(
+    package: Path, target: Path, report: Report, progress: _Progress
+) -> None:
     """
-    Export one package in a worker thread, absorbing any failure.
+    Export one package and record the outcome, all in the worker thread.
+
+    The bookkeeping deliberately happens here rather than in the awaiting
+    coroutine. On Ctrl-C the event loop is torn down and those coroutines
+    never resume, so counting there would report a book as not exported while
+    its file was already atomically in place. Recording in the same thread
+    that did the work keeps the summary consistent with the directory.
+
+    :param package: The package directory to compress.
+    :param target: The epub file to create.
+    :param report: Report to record the outcome in.
+    :param progress: Shared counter for the ``[n/total]`` prefix.
+    """
+    try:
+        file_count = zip_package(package, target)
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        with _REPORT_LOCK:
+            report.failed += 1
+            marker = progress.tick()
+        logger.error("%s Failed to export %s: %s", marker, package.name, exc)
+        return
+
+    with _REPORT_LOCK:
+        report.exported += 1
+        report.files_written += file_count
+        marker = progress.tick()
+    logger.info("%s Exported %s (%d files)", marker, target.name, file_count)
+
+
+async def _export_one(
+    pool: ThreadPoolExecutor,
+    package: Path,
+    target: Path,
+    report: Report,
+    progress: _Progress,
+) -> None:
+    """
+    Hand one package to a worker thread.
 
     :param pool: The executor running the compression work.
     :param package: The package directory to compress.
     :param target: The epub file to create.
-
-    :return: The file count on success, or None if the export failed.
+    :param report: Report to record the outcome in.
+    :param progress: Shared counter for the ``[n/total]`` prefix.
     """
     loop = asyncio.get_running_loop()
-    try:
-        file_count = await loop.run_in_executor(pool, zip_package, package, target)
-    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
-        logger.error("Failed to export %s: %s", package.name, exc)
-        return None
-
-    logger.info("Exported %s (%d files)", target.name, file_count)
-    return file_count
+    await loop.run_in_executor(pool, _zip_and_record, package, target, report, progress)
 
 
 def _plan_exports(
@@ -301,6 +388,7 @@ async def export_packages(
     max_workers: int | None = None,
     naming: NamingPolicy | None = None,
     force: bool = False,
+    report: Report | None = None,
 ) -> Report:
     """
     Export a batch of packages concurrently.
@@ -316,11 +404,14 @@ async def export_packages(
     :param dry_run: When True, report what would happen without writing.
     :param max_workers: Size of the compression thread pool.
     :param naming: Naming policy; defaults to :class:`PassthroughNaming`.
+    :param force: Re-export books already present in the output directory.
+    :param report: Report to accumulate into. Pass one to retain the partial
+        counts if the run is interrupted.
 
     :return: A report of what was exported, skipped and failed.
     """
     policy = naming if naming is not None else PassthroughNaming()
-    report = Report()
+    report = report if report is not None else Report()
     pending = _plan_exports(
         packages, output_dir, policy, dry_run=dry_run, report=report, force=force
     )
@@ -336,19 +427,49 @@ async def export_packages(
     if not pending:
         return report
 
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="zip") as pool:
-        results = await asyncio.gather(
-            *(_export_one(pool, package, target) for package, target in pending)
+    progress = _Progress(len(pending))
+    pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="zip")
+    try:
+        await asyncio.gather(
+            *(
+                _export_one(pool, package, target, report, progress)
+                for package, target in pending
+            )
         )
-
-    for file_count in results:
-        if file_count is None:
-            report.failed += 1
-        else:
-            report.exported += 1
-            report.files_written += file_count
+    finally:
+        # cancel_futures drops books that have not started, so an interrupt
+        # does not wait for the whole queued backlog. wait=True still joins
+        # the handful already being written: they finish, replace atomically,
+        # and record themselves, which keeps the summary honest about what is
+        # on disk.
+        pool.shutdown(wait=True, cancel_futures=True)
 
     return report
+
+
+def discover_source() -> Path:
+    """
+    Pick the iBooks library location that actually holds books.
+
+    Apple has used more than one home for the library, and a single hardcoded
+    default silently reports an empty library on a machine using the other
+    one. Prefer a candidate that contains packages; fall back to one that at
+    least exists.
+
+    :return: The best source directory found.
+    """
+    existing = [candidate for candidate in SOURCE_CANDIDATES if candidate.is_dir()]
+
+    for candidate in existing:
+        try:
+            if any(
+                child.name.endswith(PACKAGE_SUFFIX) for child in candidate.iterdir()
+            ):
+                return candidate
+        except OSError as exc:  # pragma: no cover - unreadable candidate
+            logger.debug("Could not inspect %s: %s", candidate, exc)
+
+    return existing[0] if existing else DEFAULT_SOURCE
 
 
 def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]:
@@ -421,17 +542,50 @@ def output_lock(output_dir: Path) -> Iterator[None]:
         yield
         return
 
-    with (output_dir / LOCK_NAME).open("w") as handle:
+    path = output_dir / LOCK_NAME
+    # Opened "r+" where possible so a failed lock can still read the holder's
+    # details; "w" would truncate them before we got to report them.
+    handle = path.open("r+") if path.exists() else path.open("w")
+    try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             raise OutputLockedError(
-                f"another ibook2epub run is already using {output_dir}"
+                f"another ibook2epub run is already using {output_dir} "
+                f"({_read_lock_holder(handle)})"
             ) from exc
+
+        # The PID is recorded for diagnostics only. It is deliberately NOT
+        # used to detect or remove an orphaned lock: flock is released by the
+        # kernel when the holder dies, even on SIGKILL, so a leftover lock
+        # file is inert. Checking liveness by PID would add a PID-reuse race
+        # to solve a problem that does not exist.
+        handle.seek(0)
+        handle.truncate()
+        handle.write(f"pid={os.getpid()} host={socket.gethostname()}\n")
+        handle.flush()
         try:
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _read_lock_holder(handle: object) -> str:
+    """
+    Describe whoever currently holds the lock, for the error message.
+
+    :param handle: The open lock file.
+
+    :return: A short description, or a fallback when nothing is readable.
+    """
+    try:
+        handle.seek(0)  # type: ignore[attr-defined]
+        details = handle.read().strip()  # type: ignore[attr-defined]
+    except OSError:  # pragma: no cover - unreadable lock file
+        return "holder unknown"
+    return details or "holder unknown"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -466,8 +620,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-s",
         "--source-dir",
         type=Path,
-        default=DEFAULT_SOURCE,
-        help="Path of the source directory containing *.epub/ packages.",
+        default=None,
+        help=(
+            "Path of the source directory containing *.epub/ packages. "
+            "Defaults to whichever known iBooks location holds books."
+        ),
     )
     parser.add_argument(
         "-d",
@@ -510,12 +667,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-p",
         "--portable-names",
-        action="store_true",
+        nargs="?",
+        const=STRIP,
+        default=None,
+        choices=PORTABLE_MODES,
+        metavar="MODE",
         help=(
             "Rewrite output names so they survive a copy to Windows, exFAT or "
-            "a Kindle, and treat case/accent variants of a title as the same "
-            "book. Romanizes non-Latin titles, and renames files an earlier "
-            "run already exported. Needs the 'disarm' extra."
+            "a Kindle. 'strip' (the default when -p is given alone) removes "
+            "the characters those filesystems reject and needs no extra "
+            "packages. 'romanize' also transliterates non-Latin titles and "
+            "folds accents when deciding whether a book is already exported, "
+            "and needs the 'disarm' extra. Either mode renames books an "
+            "earlier run already exported."
         ),
     )
     parser.add_argument(
@@ -565,6 +729,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     if args.workers is not None and args.workers < 1:
         parser.error("--workers must be 1 or greater")
+
+    args.source_auto = args.source_dir is None
+    if args.source_auto:
+        args.source_dir = discover_source()
 
     if not args.source_dir.is_dir():
         parser.error(f"source directory does not exist: {args.source_dir}")
@@ -651,6 +819,8 @@ def format_summary(
     if report.failed:
         summary += f", failed {report.failed}"
     summary += "."
+    if report.interrupted:
+        summary = f"Interrupted. {summary}"
     if remaining:
         summary += f" {remaining} remaining; rerun to continue."
     return summary
@@ -676,19 +846,30 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         packages, args.max_export_files, randomise=not args.no_shuffle
     )
 
+    # Held here rather than inside export_packages so the partial counts
+    # survive a Ctrl-C.
+    report = Report()
+
     # A dry run writes nothing, so it needs no lock and must not create one.
     lock = nullcontext() if args.dry_run else output_lock(args.output_dir)
     with lock:
-        report = asyncio.run(
-            export_packages(
-                selected,
-                args.output_dir,
-                dry_run=args.dry_run,
-                max_workers=args.workers,
-                naming=policy,
-                force=args.force,
+        try:
+            asyncio.run(
+                export_packages(
+                    selected,
+                    args.output_dir,
+                    dry_run=args.dry_run,
+                    max_workers=args.workers,
+                    naming=policy,
+                    force=args.force,
+                    report=report,
+                )
             )
-        )
+        except KeyboardInterrupt:
+            # Stopping is a normal way to end a long run: every finished book
+            # is already complete and atomically in place, so a rerun simply
+            # continues.
+            report.interrupted = True
 
     return report, max(0, pending_before - report.exported)
 
@@ -713,10 +894,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     logger.debug("Naming policy: %s", policy.label)
-    logger.info("Examining source: %s", args.source_dir)
+    if args.source_auto:
+        logger.info("Using discovered iBooks library: %s", args.source_dir)
+    else:
+        logger.info("Examining source: %s", args.source_dir)
     logger.info("Writing output to: %s", args.output_dir)
-    if args.portable_names:
-        logger.info("Portable naming enabled (non-Latin titles are romanized).")
+    if args.portable_names == STRIP:
+        logger.info("Portable naming: stripping characters other filesystems reject.")
+    elif args.portable_names:
+        logger.info(
+            "Portable naming: romanizing (non-Latin titles are transliterated)."
+        )
     if args.dry_run:
         logger.info(
             "Running in dry-run mode. No file system modifications will be performed."
@@ -738,4 +926,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(format_summary(report, args.output_dir, args.dry_run, remaining))
     logger.debug("Ending the convert application.")
 
+    if report.interrupted:
+        return 130  # Conventional exit code for termination by SIGINT.
     return 1 if report.failed else 0

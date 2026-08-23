@@ -103,9 +103,10 @@ class TestPortableNaming:
     def test_satisfies_the_protocol(self):
         assert isinstance(naming.PortableNaming(), naming.NamingPolicy)
 
-    def test_build_policy_selects_by_flag(self):
-        assert isinstance(naming.build_policy(portable=False), naming.PassthroughNaming)
-        assert isinstance(naming.build_policy(portable=True), naming.PortableNaming)
+    def test_build_policy_selects_by_mode(self):
+        assert isinstance(naming.build_policy(None), naming.PassthroughNaming)
+        assert isinstance(naming.build_policy(naming.STRIP), naming.StripNaming)
+        assert isinstance(naming.build_policy(naming.ROMANIZE), naming.PortableNaming)
 
 
 class TestPortableExport:
@@ -174,7 +175,17 @@ class TestPortableCli:
         make_package(source, "Sapiens: A Brief History.epub")
 
         code = convert.main(
-            ["-s", str(source), "-o", str(output_dir), "-m", "0", "-p", "-q"]
+            [
+                "-s",
+                str(source),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "-p",
+                "romanize",
+                "-q",
+            ]
         )
 
         assert code == 0
@@ -198,9 +209,12 @@ class TestPortableCli:
 
         short = convert.parse_args(["-s", str(source), "-p"])
         long = convert.parse_args(["-s", str(source), "--portable-names"])
+        explicit = convert.parse_args(["-s", str(source), "-p", "romanize"])
 
-        assert short.portable_names is True
-        assert long.portable_names is True
+        # A bare -p selects the loss-free mode, which needs no extra package.
+        assert short.portable_names == naming.STRIP
+        assert long.portable_names == naming.STRIP
+        assert explicit.portable_names == naming.ROMANIZE
 
     def test_help_warns_about_romanization(self):
         help_text = convert.build_parser().format_help()
@@ -214,14 +228,14 @@ class TestMissingExtra:
         monkeypatch.setattr(naming, "disarm", None)
 
         with pytest.raises(naming.PortableNamesUnavailableError) as excinfo:
-            naming.build_policy(portable=True)
+            naming.build_policy(naming.ROMANIZE)
 
         assert "pip install" in str(excinfo.value)
 
     def test_passthrough_still_works_without_disarm(self, monkeypatch):
         monkeypatch.setattr(naming, "disarm", None)
 
-        assert naming.build_policy(portable=False).filename("Dune.epub") == "Dune.epub"
+        assert naming.build_policy(None).filename("Dune.epub") == "Dune.epub"
 
     def test_cli_exits_2_when_the_extra_is_missing(self, tmp_path, output_dir):
         monkeypatch = pytest.MonkeyPatch()
@@ -229,7 +243,9 @@ class TestMissingExtra:
         make_package(source, "Dune.epub")
         monkeypatch.setattr(naming, "disarm", None)
         try:
-            code = convert.main(["-s", str(source), "-o", str(output_dir), "-p", "-q"])
+            code = convert.main(
+                ["-s", str(source), "-o", str(output_dir), "-p", "romanize", "-q"]
+            )
         finally:
             monkeypatch.undo()
 
