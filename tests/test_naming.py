@@ -251,3 +251,96 @@ class TestMissingExtra:
 
         assert code == 2
         assert list(output_dir.iterdir()) == []
+
+
+class TestStripUnsafe:
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Sapiens: A Brief History.epub",
+            "War and Peace (Vol. 1/2).epub",
+            "Où sont les enfants ?.epub",
+            'A "Quoted" Title.epub',
+            "Pipe|Star*.epub",
+        ],
+    )
+    def test_illegal_characters_are_removed(self, name):
+        assert not WINDOWS_ILLEGAL & set(naming.strip_unsafe(name))
+
+    def test_script_is_preserved(self):
+        # The whole point of strip mode: every target filesystem stores these
+        # correctly, so romanizing them would be gratuitous loss.
+        assert naming.strip_unsafe("こころ.epub") == "こころ.epub"
+        assert naming.strip_unsafe("Хождение.epub") == "Хождение.epub"
+        assert naming.strip_unsafe("L'Étranger.epub") == "L'Étranger.epub"
+
+    def test_clean_names_are_untouched(self):
+        assert naming.strip_unsafe("The Hobbit.epub") == "The Hobbit.epub"
+
+    def test_whitespace_runs_collapse(self):
+        assert naming.strip_unsafe("A   B.epub") == "A B.epub"
+
+    def test_reserved_device_names_are_escaped(self):
+        assert naming.strip_unsafe("CON.epub").startswith("_")
+        assert naming.strip_unsafe("LPT1.epub").startswith("_")
+        assert naming.strip_unsafe("NUL").startswith("_")
+
+    def test_trailing_dot_and_space_are_dropped(self):
+        assert naming.strip_unsafe("Trailing .") == "Trailing"
+
+    def test_result_fits_the_byte_budget(self):
+        long_name = "Ä" * 400 + ".epub"
+
+        result = naming.strip_unsafe(long_name)
+
+        assert len(result.encode()) <= naming.MAX_FILENAME_BYTES
+        assert result.endswith(".epub")
+
+    def test_truncation_does_not_split_a_character(self):
+        result = naming.strip_unsafe("é" * 400 + ".epub")
+
+        result.encode().decode()  # would raise if a sequence were split
+        assert len(result.encode()) <= naming.MAX_FILENAME_BYTES
+
+    def test_empty_input_yields_a_usable_name(self):
+        assert naming.strip_unsafe("") == "_"
+        assert naming.strip_unsafe("///") != ""
+
+    def test_is_idempotent(self):
+        for name in ["Sapiens: A Brief.epub", "CON.epub", "Ä" * 400 + ".epub"]:
+            once = naming.strip_unsafe(name)
+            assert naming.strip_unsafe(once) == once
+
+
+class TestStripNaming:
+    def test_identity_folds_case(self):
+        policy = naming.StripNaming()
+
+        assert policy.identity("The Hobbit.epub") == policy.identity("THE HOBBIT.epub")
+
+    def test_identity_round_trips_from_disk(self):
+        policy = naming.StripNaming()
+        on_disk = policy.filename("Sapiens: A Brief History.epub")
+
+        assert policy.identity(on_disk) == policy.identity(
+            policy.filename("Sapiens: A Brief History.epub")
+        )
+
+    def test_satisfies_the_protocol(self):
+        assert isinstance(naming.StripNaming(), naming.NamingPolicy)
+
+    def test_needs_no_disarm(self, monkeypatch):
+        monkeypatch.setattr(naming, "disarm", None)
+
+        policy = naming.build_policy(naming.STRIP)
+
+        assert policy.filename("A: B.epub") == "A B.epub"
+
+    def test_end_to_end_keeps_the_script(self, tmp_path, output_dir):
+        source = tmp_path / "lib"
+        make_package(source, "こころ: Kokoro.epub")
+
+        convert.main(["-s", str(source), "-o", str(output_dir), "-m", "0", "-p", "-q"])
+
+        names = [p.name for p in output_dir.glob("*.epub")]
+        assert names == ["こころ Kokoro.epub"]

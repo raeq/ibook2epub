@@ -6,10 +6,12 @@
 # pylint: disable=use-implicit-booleaness-not-comparison
 
 import logging
+import os
 
 import pytest
 
 from epubconvert import app_logger, convert
+from tests.conftest import make_package
 
 
 class TestParseArgs:
@@ -225,3 +227,64 @@ class TestMain:
         assert code == 0
         # The run lock is expected; no books should have been written.
         assert list(output_dir.glob("*.epub")) == []
+
+
+class TestSourceDiscovery:
+    def test_prefers_a_candidate_holding_books(self, tmp_path, monkeypatch):
+        empty = tmp_path / "empty"
+        stocked = tmp_path / "stocked"
+        empty.mkdir()
+        make_package(stocked, "Dune.epub")
+        monkeypatch.setattr(convert, "SOURCE_CANDIDATES", (empty, stocked))
+
+        assert convert.discover_source() == stocked
+
+    def test_falls_back_to_one_that_exists(self, tmp_path, monkeypatch):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        missing = tmp_path / "missing"
+        monkeypatch.setattr(convert, "SOURCE_CANDIDATES", (empty, missing))
+
+        assert convert.discover_source() == empty
+
+    def test_falls_back_to_the_default_when_nothing_exists(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            convert, "SOURCE_CANDIDATES", (tmp_path / "a", tmp_path / "b")
+        )
+
+        assert convert.discover_source() == convert.DEFAULT_SOURCE
+
+    def test_explicit_source_skips_discovery(self, library):
+        args = convert.parse_args(["-s", str(library)])
+
+        assert args.source_dir == library
+        assert args.source_auto is False
+
+
+class TestLockDiagnostics:
+    def test_lock_file_records_the_pid(self, output_dir):
+        pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
+        with convert.output_lock(output_dir):
+            contents = (output_dir / convert.LOCK_NAME).read_text(encoding="utf-8")
+
+        assert f"pid={os.getpid()}" in contents
+
+    def test_contended_error_names_the_holder(self, output_dir):
+        pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
+        with (
+            convert.output_lock(output_dir),
+            pytest.raises(convert.OutputLockedError) as excinfo,
+            convert.output_lock(output_dir),
+        ):
+            pass
+
+        assert f"pid={os.getpid()}" in str(excinfo.value)
+
+    def test_a_stale_lock_file_does_not_block(self, output_dir):
+        # flock is released by the kernel when the holder dies, so a lock file
+        # left behind by a killed run is inert. No PID liveness check needed.
+        pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
+        (output_dir / convert.LOCK_NAME).write_text("pid=999999 host=ghost\n")
+
+        with convert.output_lock(output_dir):
+            pass  # acquired without complaint
