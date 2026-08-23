@@ -8,7 +8,7 @@
 import json
 import os
 
-from epubconvert import convert
+from epubconvert import convert, planning
 from epubconvert.naming import PassthroughNaming
 from tests.conftest import make_package
 
@@ -172,15 +172,46 @@ class TestListing:
         assert list(output_dir.glob("*.epub")) == []
 
 
-class TestCountPendingWithStatuses:
-    def test_drm_books_still_count_as_not_exported(self, tmp_path, output_dir):
-        # count_pending is pure name arithmetic: it asks only whether the
-        # output file exists, so a book that can never be converted still
-        # shows up in the "N remaining" figure.
+class TestCountPending:
+    def test_unexported_books_are_counted(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        packages = convert.collect_package_dirs(library)
+
+        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 1
+
+    def test_books_that_can_never_be_exported_are_excluded(self, tmp_path, output_dir):
+        # A remaining count that can never reach zero is not progress. A
+        # DRM-protected book is reported on its own line instead.
         library = tmp_path / "lib"
         locked = make_package(library, "Locked.epub")
         (locked / "META-INF").mkdir(parents=True, exist_ok=True)
         (locked / "META-INF" / "sinf.xml").write_text("<sinf/>", encoding="utf-8")
         packages = convert.collect_package_dirs(library)
 
-        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 1
+        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 0
+
+    def test_suffixed_collisions_are_counted_separately(self, tmp_path, output_dir):
+        # Both books need writing, under two different names. Comparing bare
+        # filenames would see one.
+        library = tmp_path / "lib"
+        make_package(library / "a", "Same.epub")
+        make_package(library / "b", "Same.epub")
+        packages = convert.collect_package_dirs(library)
+
+        count = convert.count_pending(
+            packages,
+            output_dir,
+            PassthroughNaming(),
+            planning.PlanOptions(on_collision="suffix"),
+        )
+
+        assert count == 2
+
+    def test_exported_books_are_not_counted(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        packages = convert.collect_package_dirs(library)
+
+        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 0

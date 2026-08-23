@@ -86,9 +86,35 @@ class TestDrmDetection:
 
         assert source.inspect_package(package).drm
 
-    def test_unreadable_encryption_file_does_not_raise(self, tmp_path):
+    def test_an_unreadable_encryption_file_fails_closed(self, tmp_path):
+        # A truncated encryption.xml is a realistic partly-synced state. It
+        # must not read as "no protection": doing so exports the book as an
+        # unopenable archive that is then recorded as finished work.
         package = make_package(tmp_path, "Odd.epub")
         add_meta(package, "META-INF/encryption.xml", "not xml at all")
+
+        status = source.inspect_package(package)
+
+        assert status.drm
+        assert "could not be checked" in (status.reason or "")
+
+    def test_a_truncated_encryption_file_fails_closed(self, tmp_path):
+        package = make_package(tmp_path, "Cut.epub")
+        add_meta(package, "META-INF/encryption.xml", REAL_ENCRYPTION[:60])
+
+        assert source.inspect_package(package).drm
+
+    def test_an_oversized_encryption_file_fails_closed(self, tmp_path):
+        package = make_package(tmp_path, "Huge.epub")
+        add_meta(package, "META-INF/encryption.xml", "<x/>")
+        (package / "META-INF" / "encryption.xml").write_text(
+            "<x>" + "y" * (source.MAX_ENCRYPTION_BYTES + 1) + "</x>", encoding="utf-8"
+        )
+
+        assert source.inspect_package(package).drm
+
+    def test_a_package_with_no_encryption_file_is_readable(self, tmp_path):
+        package = make_package(tmp_path, "Open.epub")
 
         assert source.inspect_package(package).convertible
 

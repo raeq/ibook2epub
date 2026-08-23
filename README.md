@@ -196,7 +196,9 @@ default, so repeated runs work through the library a batch at a time. Pass
 reproducible.
 
 Each run reports how much is left, so the default batching reads as progress
-rather than a limit:
+rather than a limit. The figure counts only books that can still be
+exported — a DRM-protected or undownloaded book is reported on its own line
+instead, so the count can actually reach zero:
 
 ```text
 Exported 5 epub file(s) (412 member files) to /Users/you/Books, skipped 37. 212 remaining; rerun to continue.
@@ -297,6 +299,10 @@ output directory back off disk.
 | `2`  | `--portable-names` was requested but the `portable` extra is not installed. |
 | `3`  | Another `ibook2epub` run already holds the output directory lock. |
 | `130` | Interrupted with Ctrl-C. Finished books are intact; rerun to continue. |
+
+`1` also covers a run that could not proceed at all — for example when the
+output volume is below `--min-free`. Nothing is counted as *failed* in that
+case, because nothing was attempted.
 
 A book that fails to convert is logged and the run continues with the rest.
 

@@ -48,6 +48,10 @@ SF_DATALESS = 0x40000000
 MAX_ENCRYPTION_BYTES = 1024 * 1024
 
 
+class UnreadableEncryptionError(Exception):
+    """Raised when a package declares encryption that cannot be interpreted."""
+
+
 @dataclass(frozen=True)
 class SourceStatus:
     """What inspection found out about one package."""
@@ -73,23 +77,29 @@ def encryption_algorithms(package: Path) -> set[str]:
 
     :param package: The ``*.epub/`` package directory.
 
-    :return: The encryption algorithm URIs found, empty if the file is absent
-        or unreadable.
+    :return: The encryption algorithm URIs found, empty if the file is absent.
+
+    :raises UnreadableEncryptionError: If the file exists but cannot be read
+        or parsed. This deliberately does not fail open: a truncated
+        encryption.xml -- a realistic state for a partly synced iCloud file --
+        must not be read as "no protection", or a protected book is exported
+        as an unopenable archive that no rerun will retry.
     """
     path = package / ENCRYPTION_PATH
+    if not path.is_file():
+        return set()
+
     try:
-        if not path.is_file() or path.stat().st_size > MAX_ENCRYPTION_BYTES:
-            return set()
+        if path.stat().st_size > MAX_ENCRYPTION_BYTES:
+            raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is implausibly large")
         data = path.read_bytes()
     except OSError as exc:
-        logger.debug("Could not read %s: %s", path, exc)
-        return set()
+        raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
 
     try:
         root = ElementTree.fromstring(data)
     except ElementTree.ParseError as exc:
-        logger.debug("Could not parse %s: %s", path, exc)
-        return set()
+        raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not valid XML") from exc
 
     algorithms: set[str] = set()
     for element in root.iter():
@@ -115,7 +125,15 @@ def has_drm(package: Path) -> tuple[bool, str | None]:
     if (package / SINF_PATH).is_file():
         return True, "FairPlay protected (META-INF/sinf.xml)"
 
-    algorithms = encryption_algorithms(package)
+    try:
+        algorithms = encryption_algorithms(package)
+    except UnreadableEncryptionError as exc:
+        # Treated as protected rather than readable: exporting a book whose
+        # protection could not be ruled out produces a broken archive that is
+        # then recorded as finished work.
+        logger.debug("Assuming %s is protected: %s", package.name, exc)
+        return True, f"encryption could not be checked ({exc})"
+
     protecting = algorithms - FONT_OBFUSCATION_ALGORITHMS
     if protecting:
         return True, f"encrypted with {sorted(protecting)[0]}"

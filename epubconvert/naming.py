@@ -131,6 +131,12 @@ class NamingPolicy(Protocol):
     #: Short name used in log output.
     label: str
 
+    #: Byte budget for a generated name, or 0 for no clamping. Passthrough
+    #: deliberately imposes none: its names come from the source directory and
+    #: are already valid, and truncating one would break the round trip that
+    #: rerun safety depends on.
+    max_bytes: int
+
     def filename(self, package_name: str) -> str:
         """Return the name to write this package under."""
 
@@ -147,6 +153,7 @@ class PassthroughNaming:
     """
 
     label = "passthrough"
+    max_bytes = 0
 
     def filename(self, package_name: str) -> str:
         """Return *package_name* unchanged."""
@@ -170,6 +177,7 @@ class StripNaming:
     """
 
     label = "portable(strip)"
+    max_bytes = MAX_FILENAME_BYTES
 
     def __init__(self, separator: str = " ") -> None:
         self.separator = separator
@@ -200,6 +208,7 @@ class PortableNaming:
     """
 
     label = "portable(romanize)"
+    max_bytes = MAX_FILENAME_BYTES
 
     def __init__(self, platform: Platform = "universal", separator: str = " ") -> None:
         if disarm is None:

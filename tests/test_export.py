@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile
 
-from epubconvert import convert
+from epubconvert import convert, inspect_output
 from tests.conftest import make_package
 
 
@@ -201,6 +201,8 @@ class TestDiskFloor:
             ]
         )
 
+        # Non-zero because the run could not do its job -- but nothing is
+        # counted as failed, since nothing was attempted.
         assert code == 1
         assert list(output_dir.glob("*.epub")) == []
 
@@ -227,7 +229,7 @@ class TestDiskFloor:
         assert len(list(output_dir.glob("*.epub"))) == 1
 
     def test_free_space_is_reported_as_an_int(self, tmp_path):
-        assert isinstance(convert.free_megabytes(tmp_path), int)
+        assert isinstance(inspect_output.free_megabytes(tmp_path), int)
 
 
 class TestCovers:
@@ -263,6 +265,44 @@ class TestCovers:
 
         # Identity globs *.epub, so the .jpg beside it must not affect reruns.
         assert "skipped 1" in capsys.readouterr().out
+
+    def test_a_cover_named_like_a_book_cannot_overwrite_it(self, tmp_path, output_dir):
+        # Regression: the cover path was built with Path.with_suffix, which
+        # *replaces* the extension. A cover href ending in ".epub" therefore
+        # resolved to the exported archive itself and overwrote the book with
+        # image bytes -- while the run still reported it as exported, so the
+        # output directory recorded a destroyed book as finished work.
+        library = tmp_path / "lib"
+        package = _cover_package(library / "Book.epub")
+        (package / "OEBPS" / "images" / "cover.jpg").unlink()
+        (package / "OEBPS" / "images" / "cover.epub").write_bytes(b"NOT-A-BOOK")
+        opf = package / "OEBPS" / "content.opf"
+        opf.write_text(
+            opf.read_text(encoding="utf-8").replace("cover.jpg", "cover.epub"),
+            encoding="utf-8",
+        )
+
+        convert.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
+        )
+
+        exported = output_dir / "Book.epub"
+        assert exported.read_bytes() != b"NOT-A-BOOK"
+        with ZipFile(exported) as archive:
+            assert archive.namelist()[0] == "mimetype"
+            assert archive.testzip() is None
+
+    def test_a_cover_never_clobbers_an_existing_file(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        _cover_package(library / "Book.epub")
+        guard = output_dir / "Book.jpg"
+        guard.write_bytes(b"PRE-EXISTING")
+
+        convert.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
+        )
+
+        assert guard.read_bytes() == b"PRE-EXISTING"
 
     def test_a_book_without_a_cover_is_fine(self, tmp_path, output_dir):
         library = tmp_path / "lib"

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from epubconvert import convert, naming
+from epubconvert import cli, convert, naming
 from tests.conftest import make_package
 
 disarm = pytest.importorskip("disarm", reason="portable naming needs the disarm extra")
@@ -207,9 +207,9 @@ class TestPortableCli:
         source = tmp_path / "lib"
         make_package(source, "Dune.epub")
 
-        short = convert.parse_args(["-s", str(source), "-p"])
-        long = convert.parse_args(["-s", str(source), "--portable-names"])
-        explicit = convert.parse_args(["-s", str(source), "-p", "romanize"])
+        short = cli.parse_args(["-s", str(source), "-p"])
+        long = cli.parse_args(["-s", str(source), "--portable-names"])
+        explicit = cli.parse_args(["-s", str(source), "-p", "romanize"])
 
         # A bare -p selects the loss-free mode, which needs no extra package.
         assert short.portable_names == naming.STRIP
@@ -217,7 +217,7 @@ class TestPortableCli:
         assert explicit.portable_names == naming.ROMANIZE
 
     def test_help_warns_about_romanization(self):
-        help_text = convert.build_parser().format_help()
+        help_text = cli.build_parser().format_help()
 
         assert "-p" in help_text
         assert "omaniz" in help_text  # "romanizes"/"Romanizes"

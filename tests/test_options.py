@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import __version__, convert
+from epubconvert import __version__, cli, convert
 from epubconvert.naming import PassthroughNaming
 from tests.conftest import make_package
 
@@ -26,7 +26,7 @@ def small_library_fixture(tmp_path: Path) -> Path:
 class TestVersion:
     def test_version_flag_prints_the_package_version(self, capsys):
         with pytest.raises(SystemExit) as excinfo:
-            convert.parse_args(["--version"])
+            cli.parse_args(["--version"])
 
         assert excinfo.value.code == 0
         assert __version__ in capsys.readouterr().out
@@ -101,20 +101,20 @@ class TestForce:
         assert (output_dir / "Dune.epub").stat().st_mtime_ns == stamp
 
     def test_short_flag(self, small_library):
-        assert convert.parse_args(["-s", str(small_library), "-f"]).force is True
+        assert cli.parse_args(["-s", str(small_library), "-f"]).force is True
 
 
 class TestWorkers:
     def test_defaults_to_none(self, small_library):
-        assert convert.parse_args(["-s", str(small_library)]).workers is None
+        assert cli.parse_args(["-s", str(small_library)]).workers is None
 
     def test_accepts_a_count(self, small_library):
-        assert convert.parse_args(["-s", str(small_library), "-w", "16"]).workers == 16
+        assert cli.parse_args(["-s", str(small_library), "-w", "16"]).workers == 16
 
     def test_rejects_zero_and_negatives(self, small_library):
         for bad in ["0", "-4"]:
             with pytest.raises(SystemExit):
-                convert.parse_args(["-s", str(small_library), "-w", bad])
+                cli.parse_args(["-s", str(small_library), "-w", bad])
 
     def test_a_high_count_still_produces_correct_output(
         self, small_library, output_dir

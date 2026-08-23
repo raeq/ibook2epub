@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from epubconvert import app_logger, convert
+from epubconvert import app_logger, cli, convert, defaults
 from tests.conftest import make_package
 
 
@@ -18,15 +18,15 @@ class TestParseArgs:
     """Command line parsing and validation."""
 
     def test_defaults(self, library):
-        args = convert.parse_args(["-s", str(library)])
+        args = cli.parse_args(["-s", str(library)])
 
-        assert args.max_export_files == convert.DEFAULT_MAX_EXPORT_FILES
-        assert args.output_dir == convert.DEFAULT_OUTPUT
+        assert args.max_export_files == defaults.DEFAULT_MAX_EXPORT_FILES
+        assert args.output_dir == defaults.DEFAULT_OUTPUT
         assert args.dry_run is False
         assert args.verbose == 0
 
     def test_short_flags(self, library, tmp_path):
-        args = convert.parse_args(
+        args = cli.parse_args(
             ["-s", str(library), "-o", str(tmp_path / "out"), "-m", "0", "-d"]
         )
 
@@ -38,7 +38,7 @@ class TestParseArgs:
     def test_output_dir_need_not_exist_yet(self, library, tmp_path):
         # Regression: the old click.Path(exists=True) rejected an output
         # directory the program was perfectly capable of creating.
-        args = convert.parse_args(
+        args = cli.parse_args(
             ["-s", str(library), "-o", str(tmp_path / "brand" / "new")]
         )
 
@@ -48,33 +48,33 @@ class TestParseArgs:
         # Regression: .part files and finished exports landed inside the tree
         # being scanned, polluting the next run's picture of the library.
         with pytest.raises(SystemExit):
-            convert.parse_args(["-s", str(library), "-o", str(library / "out")])
+            cli.parse_args(["-s", str(library), "-o", str(library / "out")])
 
     def test_output_equal_to_source_is_rejected(self, library):
         with pytest.raises(SystemExit):
-            convert.parse_args(["-s", str(library), "-o", str(library)])
+            cli.parse_args(["-s", str(library), "-o", str(library)])
 
     def test_output_beside_source_is_allowed(self, library, tmp_path):
-        args = convert.parse_args(["-s", str(library), "-o", str(tmp_path / "out")])
+        args = cli.parse_args(["-s", str(library), "-o", str(tmp_path / "out")])
 
         assert args.output_dir == tmp_path / "out"
 
     def test_missing_source_dir_is_rejected(self, tmp_path):
         with pytest.raises(SystemExit):
-            convert.parse_args(["-s", str(tmp_path / "absent")])
+            cli.parse_args(["-s", str(tmp_path / "absent")])
 
     def test_negative_cap_is_rejected(self, library):
         with pytest.raises(SystemExit):
-            convert.parse_args(["-s", str(library), "-m", "-1"])
+            cli.parse_args(["-s", str(library), "-m", "-1"])
 
     def test_verbosity_accumulates(self, library):
-        args = convert.parse_args(["-s", str(library), "-vv"])
+        args = cli.parse_args(["-s", str(library), "-vv"])
 
         assert args.verbose == 2
 
     def test_help_documents_the_no_limit_sentinel(self):
         # The README quotes this help text; keep them honest about 0=no limit.
-        help_text = convert.build_parser().format_help()
+        help_text = cli.build_parser().format_help()
 
         assert "0=no limit" in help_text
 
@@ -235,27 +235,27 @@ class TestSourceDiscovery:
         stocked = tmp_path / "stocked"
         empty.mkdir()
         make_package(stocked, "Dune.epub")
-        monkeypatch.setattr(convert, "SOURCE_CANDIDATES", (empty, stocked))
+        monkeypatch.setattr(defaults, "SOURCE_CANDIDATES", (empty, stocked))
 
-        assert convert.discover_source() == stocked
+        assert defaults.discover_source() == stocked
 
     def test_falls_back_to_one_that_exists(self, tmp_path, monkeypatch):
         empty = tmp_path / "empty"
         empty.mkdir()
         missing = tmp_path / "missing"
-        monkeypatch.setattr(convert, "SOURCE_CANDIDATES", (empty, missing))
+        monkeypatch.setattr(defaults, "SOURCE_CANDIDATES", (empty, missing))
 
-        assert convert.discover_source() == empty
+        assert defaults.discover_source() == empty
 
     def test_falls_back_to_the_default_when_nothing_exists(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            convert, "SOURCE_CANDIDATES", (tmp_path / "a", tmp_path / "b")
+            defaults, "SOURCE_CANDIDATES", (tmp_path / "a", tmp_path / "b")
         )
 
-        assert convert.discover_source() == convert.DEFAULT_SOURCE
+        assert defaults.discover_source() == defaults.DEFAULT_SOURCE
 
     def test_explicit_source_skips_discovery(self, library):
-        args = convert.parse_args(["-s", str(library)])
+        args = cli.parse_args(["-s", str(library)])
 
         assert args.source_dir == library
         assert args.source_auto is False

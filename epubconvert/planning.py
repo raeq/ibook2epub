@@ -17,13 +17,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .app_logger import logger
-from .naming import MAX_FILENAME_BYTES, NamingPolicy, truncate_bytes
+from .naming import NamingPolicy, truncate_bytes
 from .source import inspect_package
+from .spec import PACKAGE_SUFFIX
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
-
-PACKAGE_SUFFIX = ".epub"
 
 
 @dataclass(frozen=True)
@@ -60,17 +59,20 @@ COLLISION_MODES = (SKIP, SUFFIX)
 MAX_SUFFIX = 99
 
 
-def _suffixed(filename: str, position: int) -> str:
+def _suffixed(filename: str, position: int, max_bytes: int) -> str:
     """
     Render the *position*-th candidate name for a filename.
 
-    The suffix is applied within the same byte budget the naming policy
-    already clamped to. Appending to a name that is exactly at the limit would
-    otherwise push it over, and the export would fail at the closing rename
-    with a filesystem error rather than a name collision.
+    The suffix is applied within the budget the naming policy declares.
+    Appending to a name already at that limit would push it over and the
+    export would fail at the closing rename with a filesystem error rather
+    than a name collision. A policy declaring no budget is left alone: its
+    names come from the source directory, and truncating one would break the
+    identity round trip that rerun safety depends on.
 
     :param filename: The base filename.
     :param position: 1 for the base name itself, 2 upwards for suffixes.
+    :param max_bytes: The policy's byte budget, or 0 for no clamping.
 
     :return: The candidate filename.
     """
@@ -80,10 +82,10 @@ def _suffixed(filename: str, position: int) -> str:
     base = Path(filename)
     marker = f" ({position})"
     candidate = f"{base.stem}{marker}{base.suffix}"
-    if len(candidate.encode("utf-8")) <= MAX_FILENAME_BYTES:
+    if not max_bytes or len(candidate.encode("utf-8")) <= max_bytes:
         return candidate
 
-    budget = MAX_FILENAME_BYTES - len(marker.encode("utf-8"))
+    budget = max_bytes - len(marker.encode("utf-8"))
     budget -= len(base.suffix.encode("utf-8"))
     stem = truncate_bytes(base.stem, max(budget, 1)).rstrip(" .") or "_"
     return f"{stem}{marker}{base.suffix}"
@@ -96,9 +98,18 @@ def _assign_names(
     Give every package an output name, resolving collisions deterministically.
 
     Assignment walks the packages in sorted order rather than the order they
-    were selected, so a shuffled run still produces the same name for the same
-    book. Without that, which of two colliding books got the plain name would
-    change between runs.
+    were selected, so the same set of packages always produces the same names
+    regardless of shuffling.
+
+    It is stable for a **fixed** set of packages only. Suffixes are positions
+    within the colliding group, so adding a book that sorts earlier shifts
+    every later member of that group, and ``--max-export-files`` selecting a
+    different subset changes the group. Nothing here can do better without
+    recording which archive belongs to which package, and this tool
+    deliberately keeps no state file; identity keyed on the package document's
+    dc:identifier would be the real fix. Until then, ``--on-collision
+    suffix`` is best used with ``-m 0 --no-shuffle`` on a library that is not
+    changing underneath it.
 
     :param packages: Packages to name.
     :param policy: Naming policy supplying filenames and identities.
@@ -115,7 +126,7 @@ def _assign_names(
         limit = MAX_SUFFIX if on_collision == SUFFIX else 1
 
         for position in range(1, limit + 1):
-            candidate = _suffixed(wanted, position)
+            candidate = _suffixed(wanted, position, getattr(policy, "max_bytes", 0))
             key = policy.identity(candidate)
             if key not in claimed:
                 claimed.add(key)
@@ -161,46 +172,61 @@ def plan_exports(
         )
     }
 
-    decisions: list[Decision] = []
-    for package in packages:
-        filename, key = named[package]
+    return [
+        _decide(package, named[package], existing, output_dir, settings)
+        for package in packages
+    ]
 
-        if not filename:
-            wanted = policy.filename(package.name)
-            decisions.append(
-                Decision(
-                    package,
-                    COLLISION,
-                    reason=f"another book already claims {wanted!r}",
-                )
-            )
-            continue
 
-        target = output_dir / filename
-        found = existing.get(key)
-        refreshing = False
+def _decide(
+    package: Path,
+    assignment: tuple[str, str],
+    existing: dict[str, Path],
+    output_dir: Path,
+    settings: PlanOptions,
+) -> Decision:
+    """
+    Decide what to do with a single package.
 
-        # Settled before the package is inspected: a book that is already
-        # exported needs no source walk, and --skip-incomplete would otherwise
-        # pay for one on every book of the library on every rerun.
-        if found is not None and not settings.force:
-            if not (settings.refresh and _source_is_newer(package, found)):
-                decisions.append(Decision(package, ALREADY, found))
-                continue
-            refreshing = True
+    :param package: The package directory.
+    :param assignment: Its assigned filename and identity.
+    :param existing: Identities already present in the output directory.
+    :param output_dir: Directory the epub files are written into.
+    :param settings: Planning behaviour.
 
-        status = inspect_package(package, check_incomplete=settings.check_incomplete)
-        if status.drm:
-            decisions.append(Decision(package, DRM, reason=status.reason))
-            continue
-        if status.incomplete:
-            decisions.append(Decision(package, INCOMPLETE, reason=status.reason))
-            continue
+    :return: The decision for this package.
+    """
+    filename, key = assignment
+    if not filename:
+        return Decision(
+            package, COLLISION, reason="another book already claims this name"
+        )
 
-        reason = "source is newer" if refreshing else None
-        decisions.append(Decision(package, PENDING, target, reason=reason))
+    found = existing.get(key)
+    refreshing = False
 
-    return decisions
+    # Settled before the package is inspected: a book that is already
+    # exported needs no source walk, and --skip-incomplete would otherwise
+    # pay for one on every book of the library on every rerun.
+    if found is not None and not settings.force:
+        if not (settings.refresh and _source_is_newer(package, found)):
+            return Decision(package, ALREADY, found)
+        refreshing = True
+
+    status = inspect_package(package, check_incomplete=settings.check_incomplete)
+    if status.drm:
+        return Decision(package, DRM, reason=status.reason)
+    if status.incomplete:
+        return Decision(package, INCOMPLETE, reason=status.reason)
+
+    if refreshing and found is not None:
+        # Write over the archive judged stale, not over a freshly computed
+        # name. Under a policy whose identity is looser than its filename the
+        # two differ, and targeting the new name would leave the stale file in
+        # place, still satisfying the identity check forever.
+        return Decision(package, PENDING, found, reason="source is newer")
+
+    return Decision(package, PENDING, output_dir / filename)
 
 
 def _source_is_newer(package: Path, exported: Path) -> bool:

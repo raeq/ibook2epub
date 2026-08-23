@@ -10,7 +10,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert import convert, validate
+from epubconvert import cli, convert, validate
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0"
@@ -357,15 +357,15 @@ class TestEpubcheck:
         ]
 
     def test_flag_is_rejected_without_the_tool(self, library, monkeypatch):
-        monkeypatch.setattr(convert, "epubcheck_available", lambda: False)
+        monkeypatch.setattr(cli, "epubcheck_available", lambda: False)
 
         with pytest.raises(SystemExit):
-            convert.parse_args(["-s", str(library), "--epubcheck"])
+            cli.parse_args(["-s", str(library), "--epubcheck"])
 
     def test_flag_implies_validate(self, library, monkeypatch):
-        monkeypatch.setattr(convert, "epubcheck_available", lambda: True)
+        monkeypatch.setattr(cli, "epubcheck_available", lambda: True)
 
-        args = convert.parse_args(["-s", str(library), "--epubcheck"])
+        args = cli.parse_args(["-s", str(library), "--epubcheck"])
 
         assert args.validate is True
 

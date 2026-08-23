@@ -28,12 +28,13 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
-from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
-from . import __version__, app_logger
+from . import app_logger
 from .app_logger import logger
+from .cli import parse_args
+from .inspect_output import extract_cover, free_megabytes, verify_output
 from .naming import (
-    PORTABLE_MODES,
     STRIP,
     NamingPolicy,
     PassthroughNaming,
@@ -41,20 +42,16 @@ from .naming import (
     build_policy,
 )
 from .planning import (
-    COLLISION_MODES,
     PENDING,
-    SKIP,
     PlanOptions,
     plan_exports,
     record_decisions,
     render_listing,
 )
+from .spec import MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
 from .validate import (
     ArchiveInvalidError,
-    ValidationError,
     ValidationOptions,
-    epubcheck_available,
-    read_package,
 )
 
 try:
@@ -64,27 +61,10 @@ try:
 except ImportError:  # pragma: no cover - Windows has no fcntl
     HAVE_FLOCK = False
 
-# Apple has moved the library between releases, so probe both known homes
-# rather than assuming one and reporting an empty library on the other.
-SOURCE_CANDIDATES = (
-    Path.home() / "Library/Mobile Documents/iCloud~com~apple~iBooks/Documents",
-    Path.home()
-    / "Library/Containers/com.apple.BKAgentService/Data/Documents/iBooks/Books",
-)
-DEFAULT_SOURCE = SOURCE_CANDIDATES[0]
-DEFAULT_OUTPUT = Path.home() / "Books"
-DEFAULT_MAX_EXPORT_FILES = 5
-
-#: Refuse to keep writing once the output volume falls below this, in MiB.
-DEFAULT_MIN_FREE_MB = 128
-
 # Zip cannot represent a timestamp before 1980; using its floor keeps every
 # export byte-identical regardless of when it ran.
 ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
-MIMETYPE_NAME = "mimetype"
-MIMETYPE_CONTENT = "application/epub+zip"
-PACKAGE_SUFFIX = ".epub"
 PARTIAL_SUFFIX = ".part"
 COMPRESS_LEVEL = 9
 ARCHIVE_MODE = 0o644
@@ -131,6 +111,7 @@ class Report:
     drm: int = 0  # Packages skipped as DRM-protected.
     incomplete: int = 0  # Packages skipped as not downloaded from iCloud.
     interrupted: bool = False  # The run was stopped with Ctrl-C.
+    aborted: bool = False  # The run could not proceed, e.g. no disk space.
 
 
 def is_excluded(name: str, *, at_root: bool) -> bool:
@@ -326,6 +307,13 @@ def _zip_and_record(
     :param progress: Shared counter for the ``[n/total]`` prefix.
     :param run: Options for this run.
     """
+    if not _has_room(target.parent, run.min_free_mb):
+        with _REPORT_LOCK:
+            report.failed += 1
+            marker = progress.tick()
+        logger.error("%s Skipped %s: not enough free space", marker, package.name)
+        return
+
     try:
         file_count = zip_package(package, target, run.validation)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
@@ -336,7 +324,7 @@ def _zip_and_record(
         return
 
     if run.covers:
-        extract_cover(target)
+        extract_cover(package, target)
 
     with _REPORT_LOCK:
         report.exported += 1
@@ -394,7 +382,6 @@ async def export_packages(
     :param dry_run: When True, report what would happen without writing.
     :param max_workers: Size of the compression thread pool.
     :param naming: Naming policy; defaults to :class:`PassthroughNaming`.
-    :param force: Re-export books already present in the output directory.
     :param report: Report to accumulate into. Pass one to retain the partial
         counts if the run is interrupted.
     :param options: Everything else about the run.
@@ -424,7 +411,10 @@ async def export_packages(
         return report
 
     if not _has_room(output_dir, run.min_free_mb):
-        report.failed += len(pending)
+        # Nothing was attempted, so nothing failed. Reporting these as
+        # failures would claim work that never started.
+        logger.warning("Nothing exported: %d book(s) left unattempted.", len(pending))
+        report.aborted = True
         return report
 
     progress = _Progress(len(pending))
@@ -447,31 +437,6 @@ async def export_packages(
         pool.shutdown(wait=True, cancel_futures=True)
 
     return report
-
-
-def discover_source() -> Path:
-    """
-    Pick the iBooks library location that actually holds books.
-
-    Apple has used more than one home for the library, and a single hardcoded
-    default silently reports an empty library on a machine using the other
-    one. Prefer a candidate that contains packages; fall back to one that at
-    least exists.
-
-    :return: The best source directory found.
-    """
-    existing = [candidate for candidate in SOURCE_CANDIDATES if candidate.is_dir()]
-
-    for candidate in existing:
-        try:
-            if any(
-                child.name.endswith(PACKAGE_SUFFIX) for child in candidate.iterdir()
-            ):
-                return candidate
-        except OSError as exc:  # pragma: no cover - unreadable candidate
-            logger.debug("Could not inspect %s: %s", candidate, exc)
-
-    return existing[0] if existing else DEFAULT_SOURCE
 
 
 def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]:
@@ -502,26 +467,43 @@ def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]
 
 
 def count_pending(
-    packages: Sequence[Path], output_dir: Path, policy: NamingPolicy
+    packages: Sequence[Path],
+    output_dir: Path,
+    policy: NamingPolicy,
+    options: PlanOptions | None = None,
 ) -> int:
     """
-    Count distinct books that are not yet in the output directory.
+    Count books that still have an export ahead of them.
 
-    This is what makes the batching workflow legible: with the default cap,
-    a run can report how much of the library is still to do.
+    This asks the planner rather than repeating its name arithmetic, so the
+    figure matches what a run would actually do -- including the suffixes
+    ``--on-collision suffix`` assigns, which a plain filename comparison
+    collapses into one.
+
+    Books that can never be exported -- DRM-protected, undownloaded, or
+    holding a name another book has claimed -- are deliberately excluded. A
+    remaining count that can never reach zero is not progress; those are
+    reported on their own lines instead.
 
     :param packages: All packages under consideration.
     :param output_dir: Directory the epub files are written into.
     :param policy: Naming policy supplying filenames and identities.
+    :param options: Planning behaviour, so the count reflects the same flags.
 
     :return: The number of books still to export.
     """
-    on_disk = {
-        policy.identity(existing.name)
-        for existing in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-    }
-    wanted = {policy.identity(policy.filename(p.name)) for p in packages}
-    return len(wanted - on_disk)
+    # The stub walk is the expensive check and cannot change the count here:
+    # an undownloaded book is excluded either way, as incomplete rather than
+    # as pending.
+    settings = options or PlanOptions()
+    cheap = PlanOptions(
+        force=settings.force,
+        refresh=settings.refresh,
+        check_incomplete=False,
+        on_collision=settings.on_collision,
+    )
+    decisions = plan_exports(packages, output_dir, policy, cheap)
+    return sum(1 for decision in decisions if decision.status == PENDING)
 
 
 @contextmanager
@@ -588,260 +570,6 @@ def _read_lock_holder(handle: object) -> str:
     except OSError:  # pragma: no cover - unreadable lock file
         return "holder unknown"
     return details or "holder unknown"
-
-
-def build_parser() -> argparse.ArgumentParser:
-    """
-    Build the command line parser.
-
-    :return: The configured argument parser.
-    """
-    parser = argparse.ArgumentParser(
-        prog="ibook2epub",
-        description="Convert Apple iBooks epub packages to zipped epub files.",
-    )
-    parser.add_argument(
-        "-m",
-        "--max-export-files",
-        type=int,
-        default=DEFAULT_MAX_EXPORT_FILES,
-        metavar="N",
-        help=(
-            "Maximum number of epub files to export, "
-            f"default={DEFAULT_MAX_EXPORT_FILES}, 0=no limit."
-        ),
-    )
-    parser.add_argument(
-        "-o",
-        "--output-dir",
-        type=Path,
-        default=DEFAULT_OUTPUT,
-        help="Path of the output directory; created if it does not exist.",
-    )
-    parser.add_argument(
-        "-s",
-        "--source-dir",
-        type=Path,
-        default=None,
-        help=(
-            "Path of the source directory containing *.epub/ packages. "
-            "Defaults to whichever known iBooks location holds books."
-        ),
-    )
-    parser.add_argument(
-        "-d",
-        "--dry-run",
-        action="store_true",
-        help="Report what would be exported without writing anything.",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
-    )
-    parser.add_argument(
-        "-f",
-        "--force",
-        action="store_true",
-        help="Re-export books even if they are already in the output directory.",
-    )
-    parser.add_argument(
-        "--match",
-        default=None,
-        metavar="PATTERN",
-        help=(
-            "Only convert books whose name matches PATTERN. A pattern without "
-            "wildcards matches anywhere in the name, so --match hobbit finds "
-            "'The Hobbit.epub'; otherwise it is a glob. Case-insensitive."
-        ),
-    )
-    parser.add_argument(
-        "-w",
-        "--workers",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "Number of compression threads. The work is I/O bound on a cloud "
-            "library, so a value above the CPU count often helps."
-        ),
-    )
-    parser.add_argument(
-        "-p",
-        "--portable-names",
-        nargs="?",
-        const=STRIP,
-        default=None,
-        choices=PORTABLE_MODES,
-        metavar="MODE",
-        help=(
-            "Rewrite output names so they survive a copy to Windows, exFAT or "
-            "a Kindle. 'strip' (the default when -p is given alone) removes "
-            "the characters those filesystems reject and needs no extra "
-            "packages. 'romanize' also transliterates non-Latin titles and "
-            "folds accents when deciding whether a book is already exported, "
-            "and needs the 'disarm' extra. Either mode renames books an "
-            "earlier run already exported."
-        ),
-    )
-    parser.add_argument(
-        "--list",
-        action="store_true",
-        dest="list_only",
-        help=(
-            "List every book with its status (pending, exported, collision, "
-            "drm, incomplete) and exit without converting anything."
-        ),
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        dest="as_json",
-        help="With --list, emit machine-readable JSON instead of a table.",
-    )
-    parser.add_argument(
-        "--refresh",
-        action="store_true",
-        help=(
-            "Re-export a book when its source directory is newer than the "
-            "exported file. Compares directory timestamps, so a book "
-            "re-downloaded in place may not be noticed; use --force for that."
-        ),
-    )
-    parser.add_argument(
-        "--skip-incomplete",
-        action="store_true",
-        help=(
-            "Skip books iCloud has not downloaded, which would otherwise "
-            "export as empty files. Requires walking every package, which is "
-            "slow on a cloud library, so it is off by default."
-        ),
-    )
-    parser.add_argument(
-        "--on-collision",
-        choices=COLLISION_MODES,
-        default=SKIP,
-        help=(
-            "What to do when two books want the same output name: 'skip' "
-            "exports only the first, 'suffix' keeps both by appending ' (2)'."
-        ),
-    )
-    parser.add_argument(
-        "--min-free",
-        type=int,
-        default=DEFAULT_MIN_FREE_MB,
-        metavar="MB",
-        help=(
-            "Stop before the output volume drops below this many megabytes, "
-            f"default={DEFAULT_MIN_FREE_MB}. 0 disables the check. Useful "
-            "when writing to an SD card or a Kindle."
-        ),
-    )
-    parser.add_argument(
-        "--covers",
-        action="store_true",
-        help="Also write each book's cover image beside its epub file.",
-    )
-    parser.add_argument(
-        "--validate",
-        action="store_true",
-        help=(
-            "Check each archive before it is moved into place: zip integrity, "
-            "the mimetype entry, and that every file the package document "
-            "lists is really present. A book that fails is not written, so it "
-            "is retried on the next run."
-        ),
-    )
-    parser.add_argument(
-        "--epubcheck",
-        action="store_true",
-        help=(
-            "Also run the external 'epubcheck' tool on each archive. Implies "
-            "--validate and requires epubcheck on PATH."
-        ),
-    )
-    parser.add_argument(
-        "--verify",
-        action="store_true",
-        help=(
-            "Check the archives already in the output directory and report "
-            "any that are damaged, then exit without converting anything."
-        ),
-    )
-    parser.add_argument(
-        "--no-shuffle",
-        action="store_true",
-        help=(
-            "Take the first N packages in sorted order instead of a random "
-            "selection when --max-export-files applies."
-        ),
-    )
-    parser.add_argument(
-        "-v",
-        "--verbose",
-        action="count",
-        default=0,
-        help="Increase log verbosity; -v for debug, -vv for trace.",
-    )
-    parser.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        help="Only log warnings and errors.",
-    )
-    parser.add_argument(
-        "--log-file",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="Also write log records to this file.",
-    )
-    return parser
-
-
-def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    """
-    Parse and validate command line arguments.
-
-    :param argv: Argument list, defaulting to ``sys.argv[1:]``.
-
-    :return: The parsed arguments.
-    """
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    if args.max_export_files < 0:
-        parser.error("--max-export-files must be 0 or greater")
-
-    if args.workers is not None and args.workers < 1:
-        parser.error("--workers must be 1 or greater")
-
-    if args.epubcheck:
-        args.validate = True
-        if not epubcheck_available():
-            parser.error("--epubcheck needs the 'epubcheck' tool on PATH")
-
-    args.source_auto = args.source_dir is None
-    if args.source_auto:
-        args.source_dir = discover_source()
-
-    # --verify only reads the output directory. Requiring an iBooks library
-    # for it would stop anyone checking a shelf of exported books on a machine
-    # that never had one.
-    if not args.verify and not args.source_dir.is_dir():
-        parser.error(f"source directory does not exist: {args.source_dir}")
-
-    # Writing into the tree being scanned pollutes the next run: temporary
-    # files land mid-scan and finished exports look like source packages.
-    source = args.source_dir.resolve()
-    output = args.output_dir.resolve()
-    if output == source or output.is_relative_to(source):
-        parser.error(
-            f"output directory must not be inside the source directory: "
-            f"{args.output_dir}"
-        )
-
-    return args
 
 
 def select_packages(
@@ -928,40 +656,6 @@ def format_summary(
     return summary
 
 
-def verify_output(output_dir: Path, epubcheck: bool = False) -> tuple[int, int]:
-    """
-    Check the archives already sitting in the output directory.
-
-    The output directory is the record of completed work, but nothing ever
-    re-reads that record, so a damaged export stays invisible. This reads it
-    back.
-
-    :param output_dir: Directory holding exported epub files.
-    :param epubcheck: Also run the external epubcheck tool.
-
-    :return: The number of archives checked, and the number found damaged.
-    """
-    options = ValidationOptions(enabled=True, epubcheck=epubcheck)
-    archives = sorted(output_dir.glob(f"*{PACKAGE_SUFFIX}"))
-    damaged = 0
-
-    for position, archive in enumerate(archives, start=1):
-        problems = options.check(archive)
-        if problems:
-            damaged += 1
-            logger.error(
-                "[%d/%d] %s is damaged: %s",
-                position,
-                len(archives),
-                archive.name,
-                "; ".join(problems[:3]),
-            )
-        else:
-            logger.debug("[%d/%d] %s is sound", position, len(archives), archive.name)
-
-    return len(archives), damaged
-
-
 def _has_room(output_dir: Path, min_free_mb: int) -> bool:
     """
     Report whether the output volume has enough space to keep writing.
@@ -986,61 +680,18 @@ def _has_room(output_dir: Path, min_free_mb: int) -> bool:
     return True
 
 
-def free_megabytes(path: Path) -> int:
-    """
-    Report free space on the volume holding *path*, in MiB.
-
-    :param path: A path on the volume to measure.
-
-    :return: Free space in MiB, or a large number if it cannot be determined.
-    """
-    try:
-        return shutil.disk_usage(path).free // (1024 * 1024)
-    except OSError:  # pragma: no cover - unusual filesystem
-        return 1 << 30
-
-
-def extract_cover(archive_path: Path) -> Path | None:
-    """
-    Writing the image is a convenience, never the point of the run, so every
-    failure is swallowed. The book itself is already complete and atomically in
-    place by this point; letting a full disk or a rejected filename escape from
-    here would abort the whole run and lose the counts for books that had
-    already succeeded.
-
-    :param archive_path: The exported epub file.
-
-    :return: The cover file written, or None if no cover could be written.
-    """
-    try:
-        with ZipFile(archive_path) as archive:
-            package = read_package(archive)
-            if not package.cover_id:
-                return None
-            href = package.manifest.get(package.cover_id)
-            if not href or href not in archive.namelist():
-                return None
-            data = archive.read(href)
-        cover = archive_path.with_suffix(Path(href).suffix or ".jpg")
-        cover.write_bytes(data)
-    except (OSError, ValueError, ValidationError, BadZipFile) as exc:
-        logger.debug("No cover for %s: %s", archive_path.name, exc)
-        return None
-
-    return cover
-
-
 def exit_code(report: Report) -> int:
     """
     Translate a run's outcome into a process exit code.
 
     :param report: The run's report.
 
-    :return: 130 if interrupted, 1 if anything failed, otherwise 0.
+    :return: 130 if interrupted, 1 if anything failed or the run could not
+        proceed at all, otherwise 0.
     """
     if report.interrupted:
         return 130  # Conventional exit code for termination by SIGINT.
-    return 1 if report.failed else 0
+    return 1 if report.failed or report.aborted else 0
 
 
 def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
@@ -1129,7 +780,9 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
     if not packages:
         logger.warning("No matching *.epub packages found under %s", args.source_dir)
 
-    pending_before = count_pending(packages, args.output_dir, policy)
+    pending_before = count_pending(
+        packages, args.output_dir, policy, _plan_options(args)
+    )
     selected = select_packages(
         packages, args.max_export_files, randomise=not args.no_shuffle
     )
@@ -1190,18 +843,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _log_preamble(args, policy)
 
+    # --list and --verify only read. Creating the destination for them would
+    # turn a typo in -o into a stray directory instead of a report about the
+    # one that was meant.
+    if args.list_only:
+        return _run_listing(args, policy)
+
+    if args.verify:
+        return _run_verify(args)
+
     if not args.dry_run:
         try:
             args.output_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             logger.critical("Could not create output directory: %s", exc)
             return 1
-
-    if args.list_only:
-        return _run_listing(args, policy)
-
-    if args.verify:
-        return _run_verify(args)
 
     try:
         report, remaining = _run_export(args, policy)

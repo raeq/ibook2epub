@@ -28,16 +28,15 @@ from xml.etree import ElementTree
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
 from .app_logger import logger
+from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
-CONTAINER_PATH = "META-INF/container.xml"
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
 
-MIMETYPE_NAME = "mimetype"
-MIMETYPE_CONTENT = b"application/epub+zip"
-
-#: Cap on XML read from an archive. The parser does not resolve external
-#: entities, but a hostile file should not be able to exhaust memory either.
+#: Cap on the *stored* size of XML read from an archive. This bounds the read,
+#: not the parse: ElementTree expands internal entities, so a small document
+#: can still expand to something far larger, and this limit does not prevent
+#: that. It exists to reject implausible files early, not as a memory bound.
 MAX_XML_BYTES = 16 * 1024 * 1024
 
 EPUBCHECK = "epubcheck"
@@ -197,7 +196,18 @@ def read_package(archive: ZipFile) -> Package:
     :raises ValidationError: If the package document is missing or unparsable.
     """
     opf_path = find_opf_path(archive)
-    root = _read_xml(archive, opf_path)
+    return _package_from_root(_read_xml(archive, opf_path), opf_path)
+
+
+def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
+    """
+    Build a :class:`Package` from a parsed package document.
+
+    :param root: The parsed OPF root element.
+    :param opf_path: Path of the package document, used to resolve hrefs.
+
+    :return: The package metadata, manifest and spine.
+    """
     package = Package(opf_path=opf_path)
 
     title = root.find(".//{http://purl.org/dc/elements/1.1/}title")
@@ -236,6 +246,47 @@ def read_package(archive: ZipFile) -> Package:
                 break
 
     return package
+
+
+def read_package_dir(package: Path) -> Package:
+    """
+    Parse the package document of an unpacked ``*.epub/`` directory.
+
+    Reading from the source directory avoids re-opening and re-inflating an
+    archive that was just written, which on a cloud-backed library doubles the
+    read work per book for no benefit.
+
+    :param package: The package directory.
+
+    :return: The package metadata, manifest and spine.
+
+    :raises ValidationError: If the container or package document is missing
+        or unparsable.
+    """
+    container = package / CONTAINER_PATH
+    try:
+        root = ElementTree.fromstring(container.read_bytes())
+    except OSError as exc:
+        raise ValidationError(f"missing {CONTAINER_PATH}") from exc
+    except ElementTree.ParseError as exc:
+        raise ValidationError(f"{CONTAINER_PATH} is not valid XML: {exc}") from exc
+
+    opf_path = ""
+    for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
+        opf_path = rootfile.get("full-path") or ""
+        if opf_path:
+            break
+    if not opf_path:
+        raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+
+    try:
+        opf_root = ElementTree.fromstring((package / opf_path).read_bytes())
+    except OSError as exc:
+        raise ValidationError(f"missing {opf_path}") from exc
+    except ElementTree.ParseError as exc:
+        raise ValidationError(f"{opf_path} is not valid XML: {exc}") from exc
+
+    return _package_from_root(opf_root, opf_path)
 
 
 def validate_archive(path: Path) -> list[str]:
@@ -326,6 +377,8 @@ def _check_manifest(archive: ZipFile, package: Package) -> list[str]:
     dangling = sorted(set(package.spine) - set(package.manifest))
     for idref in dangling[:5]:
         problems.append(f"spine references unknown manifest id: {idref}")
+    if len(dangling) > 5:
+        problems.append(f"...and {len(dangling) - 5} more dangling spine id(s)")
 
     if not package.spine:
         problems.append(f"{package.opf_path} declares no spine")
