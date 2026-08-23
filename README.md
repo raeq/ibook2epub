@@ -28,8 +28,8 @@ file (including `iTunesMetadata.plist`), files whose names begin with
 
 ## Requirements
 
-Python 3.9 or newer. There are no runtime dependencies — the tool uses only the
-standard library.
+Python 3.10 or newer. There are no runtime dependencies — the tool uses only
+the standard library.
 
 ## Installation
 
@@ -155,5 +155,5 @@ mypy                                # type check (strict)
 pylint --fail-under=8.0 $(git ls-files '*.py')
 ```
 
-CI runs all of these: lint and type checks once on Python 3.12, and the test
-suite across Python 3.9 through 3.13.
+CI runs all of these: lint and type checks once on Python 3.14, and the test
+suite across Python 3.10 through 3.14.

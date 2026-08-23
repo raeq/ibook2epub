@@ -7,7 +7,7 @@ name = "ibook2epub"
 version = "1.0.0"
 description = "Convert Apple iBooks epub packages to zipped epub files."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Richard Quinn" }]
 keywords = ["epub", "ibooks", "apple", "ebook", "converter"]
@@ -15,6 +15,12 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Utilities",
 ]
 dependencies = []
@@ -46,7 +52,7 @@ disable = ["duplicate-code"]
 max-line-length = 100
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 88
 exclude = ["venv*", ".venv"]
 
@@ -59,9 +65,7 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RET", "A
 "tests/*" = ["ARG001", "ARG002"]
 
 [tool.mypy]
-# No python_version pin: mypy 2.x refuses targets below 3.10, so it checks
-# against the running interpreter. Ruff's target-version = "py39" is what
-# actually guards the requires-python floor.
+python_version = "3.10"
 files = ["epubconvert", "tests"]
 strict = true
 warn_unreachable = true
