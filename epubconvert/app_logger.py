@@ -1,33 +1,92 @@
+"""
+Logging setup for the epub conversion tool.
+
+Importing this module has no side effects beyond registering a custom TRACE
+level and creating a package logger with a null handler. Handlers are only
+attached when :func:`configure` is called, which keeps the library importable
+from tests without spraying an ``app.log`` into the current directory.
+"""
+
+from __future__ import annotations
+
 import logging
+from pathlib import Path
+from typing import Any, cast
 
-logging.basicConfig(
-    filename="app.log",
-    encoding="utf-8",
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%m/%d/%Y %I:%M:%S %p",
-)
-TRACE_LEVEL_NUM = 5  # For TRACE level, use a numeric value lower than DEBUG (10).
-
-logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
+TRACE = 5  # Below DEBUG (10), for very chatty per-file messages.
+logging.addLevelName(TRACE, "TRACE")
 
 
-# Define a function for the TRACE level logging.
-def trace(self, message, *args, **kwargs):
-    self.log(TRACE_LEVEL_NUM, message, *args, **kwargs)
+class TraceLogger(logging.Logger):
+    """A logger with an extra TRACE level below DEBUG."""
+
+    def trace(self, message: str, *args: Any, **kwargs: Any) -> None:
+        """Log a message at the custom TRACE level."""
+        if self.isEnabledFor(TRACE):
+            self._log(TRACE, message, args, **kwargs)
 
 
-# Attach the `trace` function to the Logger class, allowing it to be used in logger instances.
-logging.Logger.trace = trace
+# Register the subclass only for the duration of our own getLogger call, so
+# that loggers created elsewhere in the process are left alone.
+_previous_class = logging.getLoggerClass()
+logging.setLoggerClass(TraceLogger)
+logger = cast(TraceLogger, logging.getLogger("epubconvert"))
+logging.setLoggerClass(_previous_class)
 
-# Create a logger and set its level to TRACE.
-logger = logging.getLogger("example")
-logger.setLevel(logging.INFO)
+logger.addHandler(logging.NullHandler())
+logger.propagate = False
 
-# Add a console handler with a simple format
-console_handler = logging.StreamHandler()
-console_handler.setLevel(TRACE_LEVEL_NUM)
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+# verbosity 0 = -q, 1 = default, 2 = -v, 3 = -vv (and above)
+_LEVELS = (logging.WARNING, logging.INFO, logging.DEBUG, TRACE)
 
+_CONSOLE_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+_FILE_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+_FILE_DATEFMT = "%m/%d/%Y %I:%M:%S %p"
+
+
+def level_for_verbosity(verbosity: int) -> int:
+    """
+    Map a verbosity count onto a logging level.
+
+    :param verbosity: 0 quiet, 1 normal, 2 debug, 3+ trace.
+
+    :return: The corresponding logging level.
+    """
+    return _LEVELS[max(0, min(verbosity, len(_LEVELS) - 1))]
+
+
+def configure(verbosity: int = 1, log_file: Path | None = None) -> TraceLogger:
+    """
+    Attach handlers to the package logger.
+
+    Calling this more than once replaces the previously attached handlers, so
+    it is safe to use from tests.
+
+    :param verbosity: 0 quiet, 1 normal, 2 debug, 3+ trace.
+    :param log_file: Optional path to also write log records to.
+
+    :return: The configured package logger.
+    """
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+
+    level = level_for_verbosity(verbosity)
+    logger.setLevel(level)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(logging.Formatter(_CONSOLE_FORMAT))
+    logger.addHandler(console_handler)
+
+    if log_file is not None:
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setLevel(level)
+        file_handler.setFormatter(
+            logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT)
+        )
+        logger.addHandler(file_handler)
+
+    return logger

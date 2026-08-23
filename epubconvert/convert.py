@@ -1,289 +1,432 @@
 """
-Convert Apple iBooks epub packages to zipped epub files
+Convert Apple iBooks epub packages to zipped epub files.
 
-This module is designed to convert epub packages located in a specific directory
-to epub files and exports them to another directory. It leverages `pathlib` and
-`zipfile` libraries for handling directory navigation and archive processing.
-The main steps include collecting directory names, creating the epub files, and
-function orchestration through the main() function.
+Apple stores books as ``*.epub/`` directories rather than as epub archives.
+This module walks a source directory for those packages and writes a
+spec-valid epub file for each one: a zip archive whose first member is an
+uncompressed ``mimetype`` entry containing ``application/epub+zip``, followed
+by the deflated remainder of the package.
+
+Archives are built to a temporary ``.part`` file and moved into place only on
+success, so an interrupted run never leaves a truncated ``.epub`` behind that
+a later run would mistake for finished work.
 """
 
+from __future__ import annotations
+
+import argparse
 import asyncio
 import os
-import pathlib
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
+from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
-from zipfile import ZipFile, ZIP_DEFLATED, ZIP_STORED
+from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
-import click
+from . import app_logger
+from .app_logger import logger
 
-import app_logger
-
-
-# Get the current username and directories
-USER = os.getenv("USER")
-PATH_INPUT = (
-    f"/Users/{USER}/Library/Mobile Documents/iCloud~com~apple~iBooks/Documents/"
+DEFAULT_SOURCE = (
+    Path.home() / "Library/Mobile Documents/iCloud~com~apple~iBooks/Documents"
 )
-PATH_OUTPUT = rf"/Users/{USER}/Books/"
-MAX_EXPORT_FILES = 5
-DRY_RUN = False
+DEFAULT_OUTPUT = Path.home() / "Books"
+DEFAULT_MAX_EXPORT_FILES = 5
+
+MIMETYPE_NAME = "mimetype"
+MIMETYPE_CONTENT = "application/epub+zip"
+PACKAGE_SUFFIX = ".epub"
+PARTIAL_SUFFIX = ".part"
+COMPRESS_LEVEL = 9
+
+# Apple-specific bookkeeping that must not be copied into the exported epub.
+# ``mimetype`` is excluded here because it is written separately, uncompressed
+# and first, as the epub specification requires.
+EXCLUDED_NAMES = frozenset({MIMETYPE_NAME, ".DS_Store"})
+EXCLUDED_SUFFIXES = frozenset({".plist"})
+EXCLUDED_PREFIXES = ("bookmarks",)
 
 
-async def create_zip_file_from_dir(source_dir: str, target_archive: str, task_id: int) -> int:
+@dataclass
+class Report:
+    """Outcome of an export run."""
+
+    exported: int = 0
+    files_written: int = 0
+    skipped: int = 0
+    failed: int = 0
+    planned: int = 0  # Dry-run only: exports that would have been attempted.
+
+
+def is_excluded(name: str) -> bool:
     """
-    Create a ZIP file from the provided source directory.
+    Report whether a package member should be left out of the epub.
 
-    This function takes a source directory, its target archive path, and
-    optionally, a list of exclusions. It returns the count of processed EPUB
-    items. The ZIP file created is compliant with the EPUB specifications.
+    :param name: The bare file name (not a path) to test.
 
-    :param task_id: The task ID for the current task.
-    :param source_dir: The source directory containing the epub package files.
-    :param target_archive: The output path for the resulting epub file.
-
-    :return: The count of processed EPUB items.
+    :return: True if the file must not be copied into the archive.
     """
-    if DRY_RUN:
-        return 0
-
-    source_dir = pathlib.Path(source_dir)
-    epub_processed_count = 0
-
-    # Use "run_in_executor" to run the ZIP compression in a separate thread
-    loop = asyncio.get_event_loop()
-    with ThreadPoolExecutor() as executor:
-        with ZipFile(target_archive, "w", ZIP_DEFLATED) as zf:
-            future_writestr = loop.run_in_executor(
-                executor,
-                partial(
-                    zf.writestr,
-                    zinfo_or_arcname="mimetype",
-                    compress_type=ZIP_STORED,
-                    data="application/epub+zip",
-                ),
-            )
-            await future_writestr
-
-            for root, _, files in os.walk(source_dir):
-                for filename in files:
-                    if any(s in filename for s in ["mimetype", ".plist", "bookmarks"]):
-                        app_logger.logger.trace(f"Skipped object: <{filename}>")
-                        continue
-                    file_path = os.path.join(root, filename)
-                    name_in_archive = os.path.relpath(file_path, source_dir)
-                    future_write = loop.run_in_executor(
-                        executor,
-                        partial(
-                            zf.write,
-                            file_path,
-                            name_in_archive,
-                            compresslevel=9,
-                        )
-                    )
-                    await future_write
-            await asyncio.sleep(0)
-            app_logger.logger.info(f"Completed task {task_id} for: {target_archive}")
-    return epub_processed_count
+    return (
+        name in EXCLUDED_NAMES
+        or Path(name).suffix in EXCLUDED_SUFFIXES
+        or name.startswith(EXCLUDED_PREFIXES)
+    )
 
 
-def collect_directory_names() -> list:
+def collect_package_dirs(source_dir: Path) -> list[Path]:
     """
-    Collect all directory names containing ".epub/" and return them in a list.
+    Find every ``*.epub/`` package directory beneath the source directory.
 
-    This function iterates through the input directory, filtering out directories
-    containing ".epub/" and returns them in a sorted list.
+    The walk does not descend into a package once it has been found, so files
+    inside a package can never be mistaken for packages themselves. Results are
+    full paths, which keeps nested packages addressable; earlier versions
+    returned bare directory names and silently broke on anything that was not
+    a direct child of the source directory.
 
-    :return: A sorted list of directory names.
+    :param source_dir: The directory to search.
+
+    :return: Package directories, sorted by path.
     """
-    fn = []
+    found: list[Path] = []
 
     try:
-        for root, dirs, files in os.walk(PATH_INPUT):
-            for d in dirs:
-                if d.endswith(".epub"):
-                    fn.append(d)
-    except Exception as e:
-        app_logger.logger.error(e)
-    else:
-        app_logger.logger.debug(
-            f"Will process the following folders: {list(enumerate(fn))}"
-        )
+        for root, dirs, _files in os.walk(source_dir):
+            descend = []
+            for name in dirs:
+                if name.endswith(PACKAGE_SUFFIX):
+                    found.append(Path(root) / name)
+                else:
+                    descend.append(name)
+            dirs[:] = descend
+    except OSError as exc:
+        logger.error("Could not scan %s: %s", source_dir, exc)
+        return []
 
-    return sorted(fn)
+    found.sort()
+    logger.debug("Found %d epub package(s) under %s", len(found), source_dir)
+    return found
 
 
-#   Function to generate new epub files
-async def create_epub(filenames: list = None) -> int:
+def zip_package(source_dir: Path, target_archive: Path) -> int:
     """
-    Create EPUB files from the provided filenames.
+    Write a single package directory out as a spec-valid epub archive.
 
-    This function takes a list of directory names as input and processes each
-    one to create an EPUB file. It returns the count of successfully exported
-    EPUB files. Source files whose output already exists in PATH_OUTPUT are
-    skipped, so the output directory itself is the record of what's done.
+    This is a blocking function, intended to be handed to a worker thread. The
+    archive is assembled under a temporary name and only moved to
+    ``target_archive`` once it is complete.
 
-    :param filenames: A list of directory names to be processed into EPUB files.
+    :param source_dir: The ``*.epub/`` package directory to compress.
+    :param target_archive: The path of the epub file to create.
 
-    :return: The count of successfully exported EPUB files.
+    :return: The number of package files stored, excluding ``mimetype``.
     """
+    partial = target_archive.parent / (target_archive.name + PARTIAL_SUFFIX)
+    file_count = 0
 
-    tasks = []
-    skipped = 0
+    try:
+        with ZipFile(partial, "w", ZIP_DEFLATED) as archive:
+            # The mimetype entry must come first and must be stored, not deflated.
+            archive.writestr(MIMETYPE_NAME, MIMETYPE_CONTENT, compress_type=ZIP_STORED)
 
-    for i, filename in enumerate(filenames):
-        clean_name = filename.strip()
-        output_zip_file = (Path(PATH_OUTPUT) / clean_name).as_posix()
-        folder_to_zip = (Path(PATH_INPUT) / filename).as_posix()
+            for path in sorted(source_dir.rglob("*")):
+                if not path.is_file():
+                    continue
+                if is_excluded(path.name):
+                    logger.trace("Skipped object: <%s>", path.name)
+                    continue
+                arcname = path.relative_to(source_dir).as_posix()
+                archive.write(path, arcname, compresslevel=COMPRESS_LEVEL)
+                file_count += 1
 
-        if Path(output_zip_file).exists():
-            app_logger.logger.info(f"Already exported, skipping: {clean_name}")
-            skipped += 1
+        partial.replace(target_archive)
+    except BaseException:
+        # Leave no partial archive behind, so the "already exported" check
+        # stays a reliable record of completed work.
+        partial.unlink(missing_ok=True)
+        raise
+
+    return file_count
+
+
+async def _export_one(
+    pool: ThreadPoolExecutor, package: Path, target: Path
+) -> int | None:
+    """
+    Export one package in a worker thread, absorbing any failure.
+
+    :param pool: The executor running the compression work.
+    :param package: The package directory to compress.
+    :param target: The epub file to create.
+
+    :return: The file count on success, or None if the export failed.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        file_count = await loop.run_in_executor(pool, zip_package, package, target)
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+        logger.error("Failed to export %s: %s", package.name, exc)
+        return None
+
+    logger.info("Exported %s (%d files)", target.name, file_count)
+    return file_count
+
+
+async def export_packages(
+    packages: Sequence[Path],
+    output_dir: Path,
+    dry_run: bool = False,
+    max_workers: int | None = None,
+) -> Report:
+    """
+    Export a batch of packages concurrently.
+
+    A package whose output already exists is skipped, which makes re-running
+    the command safe and makes the output directory the record of what has
+    been converted.
+
+    :param packages: Package directories to export.
+    :param output_dir: Directory to write the epub files into.
+    :param dry_run: When True, report what would happen without writing.
+    :param max_workers: Size of the compression thread pool.
+
+    :return: A report of what was exported, skipped and failed.
+    """
+    report = Report()
+    pending: list[tuple[Path, Path]] = []
+    claimed: set[Path] = set()
+
+    for package in packages:
+        target = output_dir / package.name
+
+        if target in claimed:
+            logger.warning(
+                "Duplicate package name, skipping: %s (already exporting to %s)",
+                package,
+                target,
+            )
+            report.skipped += 1
             continue
 
-        app_logger.logger.debug(f"Processing folder: {folder_to_zip}")
+        if target.exists():
+            logger.info("Already exported, skipping: %s", package.name)
+            report.skipped += 1
+            continue
 
-        task = asyncio.create_task(create_zip_file_from_dir(folder_to_zip, output_zip_file, i), name=f"Task {i}")
-        tasks.append(task)
-        app_logger.logger.debug(f"Created task {i} for: {folder_to_zip}")
+        claimed.add(target)
 
-    if skipped:
-        app_logger.logger.info(f"Skipped {skipped} already-exported file(s).")
+        if dry_run:
+            logger.info("Would export: %s -> %s", package, target)
+            report.planned += 1
+            continue
 
-    if not tasks:
-        return 0
+        logger.debug("Queued for export: %s", package)
+        pending.append((package, target))
 
-    epub_processed_count = await asyncio.gather(*tasks)
+    if report.skipped:
+        logger.info("Skipped %d already-exported file(s).", report.skipped)
 
-    return len(epub_processed_count)
+    if not pending:
+        return report
 
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="zip") as pool:
+        results = await asyncio.gather(
+            *(_export_one(pool, package, target) for package, target in pending)
+        )
 
-def ensure_directory_exists(source_dir, target_dir) -> bool:
-    """
-    Ensure the output directory exists, and if not, create it.
-
-    :param source_dir: The source directory containing the epub package files.
-    :param target_dir: The output path for the resulting epub file.
-
-    :return: True if the directory exists or was created successfully.
-    """
-
-    # Firstly; ensure that the source directory exists,
-    # otherwise return False
-    try:
-        if Path(source_dir).exists():
-            pass
+    for file_count in results:
+        if file_count is None:
+            report.failed += 1
         else:
-            app_logger.logger.critical(f"Source directory does not exist: {source_dir}")
-    except Exception as e:
-        app_logger.logger.exception(e)
-        raise RuntimeError(e) from e
+            report.exported += 1
+            report.files_written += file_count
 
-    # Secondly; ensure that the target directory exists,
-    # otherwise create it
-    try:
-        if not Path(target_dir).exists():
-            if not DRY_RUN:
-                os.makedirs(target_dir)
-                app_logger.logger.info(f"Created output directory: {target_dir}")
-    except Exception as e:
-        app_logger.logger.exception(e)
-        raise RuntimeError(e) from e
-
-    # only return True if both source _and_ target directories exist
-    return Path(source_dir).exists() and Path(target_dir).exists()
+    return report
 
 
-@click.command()
-@click.option(
-    "-m",
-    "--max-export-files",
-    default=5,
-    type=int,
-    help="Override the maximum number of exported files, default=5.",
-)
-@click.option(
-    "-o",
-    "--output-dir",
-    default=None,
-    type=click.Path(exists=True, file_okay=False),
-    help="Path of the output directory.",
-)
-@click.option(
-    "-s",
-    "--source-dir",
-    default=None,
-    type=click.Path(exists=True, file_okay=False),
-    help="Path of the source directory.",
-)
-@click.option("--dry-run", "-d", is_flag=True, help="Run the program in dry-run mode.")
-def main(
-        max_export_files: int, output_dir: str, source_dir: str, dry_run: bool = False
-) -> None:
+def build_parser() -> argparse.ArgumentParser:
     """
-    Convert Apple iBooks epub packages to zipped epub files.
+    Build the command line parser.
 
-    This function collects directory names, creates EPUB files, and handles
-    the process flow. It limits the total number of files processed based on
-    the MAX_EXPORT_FILES global constant.
+    :return: The configured argument parser.
     """
+    parser = argparse.ArgumentParser(
+        prog="ibook2epub",
+        description="Convert Apple iBooks epub packages to zipped epub files.",
+    )
+    parser.add_argument(
+        "-m",
+        "--max-export-files",
+        type=int,
+        default=DEFAULT_MAX_EXPORT_FILES,
+        metavar="N",
+        help=(
+            "Maximum number of epub files to export, "
+            f"default={DEFAULT_MAX_EXPORT_FILES}, 0=no limit."
+        ),
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_OUTPUT,
+        help="Path of the output directory; created if it does not exist.",
+    )
+    parser.add_argument(
+        "-s",
+        "--source-dir",
+        type=Path,
+        default=DEFAULT_SOURCE,
+        help="Path of the source directory containing *.epub/ packages.",
+    )
+    parser.add_argument(
+        "-d",
+        "--dry-run",
+        action="store_true",
+        help="Report what would be exported without writing anything.",
+    )
+    parser.add_argument(
+        "--no-shuffle",
+        action="store_true",
+        help=(
+            "Take the first N packages in sorted order instead of a random "
+            "selection when --max-export-files applies."
+        ),
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Increase log verbosity; -v for debug, -vv for trace.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Only log warnings and errors.",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Also write log records to this file.",
+    )
+    return parser
 
-    global MAX_EXPORT_FILES, PATH_OUTPUT, PATH_INPUT, DRY_RUN
-    ctx = click.get_current_context()
 
-    # Set the Dry Run flag
-    app_logger.logger.info(f"Starting the convert application {ctx.params}")
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    """
+    Parse and validate command line arguments.
+
+    :param argv: Argument list, defaulting to ``sys.argv[1:]``.
+
+    :return: The parsed arguments.
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.max_export_files < 0:
+        parser.error("--max-export-files must be 0 or greater")
+
+    if not args.source_dir.is_dir():
+        parser.error(f"source directory does not exist: {args.source_dir}")
+
+    return args
+
+
+def select_packages(
+    packages: Sequence[Path], max_export_files: int, randomise: bool = True
+) -> list[Path]:
+    """
+    Apply the export cap to the discovered packages.
+
+    :param packages: All discovered package directories.
+    :param max_export_files: The cap, where 0 means no limit.
+    :param randomise: Choose the capped subset at random.
+
+    :return: The packages to export.
+    """
+    selected = list(packages)
+
+    if not max_export_files:
+        logger.info("All %d epub package(s) will be processed.", len(selected))
+        return selected
+
+    if randomise:
+        shuffle(selected)
+    selected = selected[:max_export_files]
+    logger.info("Limiting activity to a maximum of %d epub file(s).", max_export_files)
+    return selected
+
+
+def format_summary(report: Report, output_dir: Path, dry_run: bool) -> str:
+    """
+    Render a one-line human readable summary of a run.
+
+    :param report: The report to render.
+    :param output_dir: The directory the run targeted.
+    :param dry_run: Whether the run was a dry run.
+
+    :return: The summary line.
+    """
     if dry_run:
-        DRY_RUN = dry_run
-        app_logger.logger.info(
-            "User has chosen to run the program in dry-run mode. "
-            "No file system modifications will be performed."
+        return (
+            f"Dry run: would export {report.planned} epub file(s) to "
+            f"{output_dir} (skipped {report.skipped} already present)."
         )
 
-    # Override the MAX_EXPORT_FILES if needed
-    if max_export_files is not None:
-        MAX_EXPORT_FILES = max_export_files
+    summary = (
+        f"Exported {report.exported} epub file(s) "
+        f"({report.files_written} member files) to {output_dir}"
+    )
+    if report.skipped:
+        summary += f", skipped {report.skipped}"
+    if report.failed:
+        summary += f", failed {report.failed}"
+    return summary + "."
 
-    # Update the output directory if the user provides a value
-    if output_dir is not None:
-        PATH_OUTPUT = output_dir
 
-    # Update the source directory if the user provides a value
-    if source_dir is not None:
-        PATH_INPUT = source_dir
+def main(argv: Sequence[str] | None = None) -> int:
+    """
+    Run the conversion from the command line.
 
-    # Log the actual paths in use AFTER any -s / -o overrides have been applied.
-    app_logger.logger.info(f"Examining source: {PATH_INPUT}")
-    app_logger.logger.info(f"Writing output to: {PATH_OUTPUT}")
+    :param argv: Argument list, defaulting to ``sys.argv[1:]``.
 
-    try:
-        if not ensure_directory_exists(PATH_INPUT, PATH_OUTPUT):
-            raise FileNotFoundError(
-                "Error ensuring directories exist."
-            )
-    except FileNotFoundError as e:
-        app_logger.logger.exception(e)
-        raise RuntimeError(ctx.params) from e
+    :return: A process exit code; non-zero if any export failed.
+    """
+    args = parse_args(argv)
 
-    files = collect_directory_names()
+    verbosity = 0 if args.quiet else 1 + args.verbose
+    app_logger.configure(verbosity=verbosity, log_file=args.log_file)
 
-    if MAX_EXPORT_FILES:
-        shuffle(files)
-        files = files[:MAX_EXPORT_FILES]
-        app_logger.logger.info(
-            f"Limiting activity to a maximum of {MAX_EXPORT_FILES} epub files."
-        )
-    else:
-        app_logger.logger.info(
-            f"All epub files up to a maximum of {len(files)} will be processed."
+    logger.info("Examining source: %s", args.source_dir)
+    logger.info("Writing output to: %s", args.output_dir)
+    if args.dry_run:
+        logger.info(
+            "Running in dry-run mode. No file system modifications will be performed."
         )
 
-    count = asyncio.run(create_epub(files))
-    print(f"Exported {count} epub files to {PATH_OUTPUT}")
-    app_logger.logger.debug("Ending the convert application.")
+    if not args.dry_run:
+        try:
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.critical("Could not create output directory: %s", exc)
+            return 1
 
+    packages = collect_package_dirs(args.source_dir)
+    if not packages:
+        logger.warning("No *.epub packages found under %s", args.source_dir)
 
-if __name__ == "__main__":
-    main()  # pylint: disable=no-value-for-parameter  # args injected by @click.option
+    selected = select_packages(
+        packages, args.max_export_files, randomise=not args.no_shuffle
+    )
+
+    report = asyncio.run(
+        export_packages(selected, args.output_dir, dry_run=args.dry_run)
+    )
+
+    print(format_summary(report, args.output_dir, args.dry_run))
+    logger.debug("Ending the convert application.")
+
+    return 1 if report.failed else 0

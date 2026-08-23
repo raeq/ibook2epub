@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ibook2epub"
+version = "1.0.0"
+description = "Convert Apple iBooks epub packages to zipped epub files."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Richard Quinn" }]
+keywords = ["epub", "ibooks", "apple", "ebook", "converter"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Topic :: Utilities",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pylint>=3.0", "ruff>=0.6", "mypy>=1.11"]
+
+[project.urls]
+Homepage = "https://github.com/raeq/ibook2epub"
+Issues = "https://github.com/raeq/ibook2epub/issues"
+
+[project.scripts]
+ibook2epub = "epubconvert.convert:main"
+
+[tool.setuptools]
+packages = ["epubconvert"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.pylint.main]
+ignore-paths = ["^venv.*$"]
+
+[tool.pylint."messages control"]
+disable = ["duplicate-code"]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.ruff]
+target-version = "py39"
+line-length = 88
+exclude = ["venv*", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RET", "ARG", "BLE", "FA"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures take pytest arguments by name; unused-argument and shadowing
+# rules fight that convention rather than catching anything real.
+"tests/*" = ["ARG001", "ARG002"]
+
+[tool.mypy]
+# No python_version pin: mypy 2.x refuses targets below 3.10, so it checks
+# against the running interpreter. Ruff's target-version = "py39" is what
+# actually guards the requires-python floor.
+files = ["epubconvert", "tests"]
+strict = true
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+# Test bodies are assertions, not typed API surface; requiring annotations on
+# every test function adds noise without adding safety.
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
