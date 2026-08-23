@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/raeq/ibook2epub/actions/workflows/ci.yml/badge.svg)](https://github.com/raeq/ibook2epub/actions/workflows/ci.yml)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
-![License: CC BY-NC 4.0](https://img.shields.io/badge/license-CC%20BY--NC%204.0-lightgrey)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 Export your **Apple Books** (formerly **iBooks**) library as standard **epub**
 files, ready for Calibre, a Kindle, a Kobo, or any other e-reader.

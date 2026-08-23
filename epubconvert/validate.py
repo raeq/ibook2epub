@@ -1,0 +1,352 @@
+"""
+Structural validation of exported epub archives.
+
+Checks the properties a reader actually depends on: the archive opens, the
+``mimetype`` entry is first and stored, the container points at a package
+document, and every file the package document promises is really present.
+
+That last check is the one that matters most here. A converter that silently
+drops a content file still produces a structurally valid *zip*; what breaks is
+the book, when a reader follows a manifest entry to a file that is not there.
+Exactly that bug shipped in this project once, and this module is what catches
+it.
+
+This module also holds the OPF reading used elsewhere: resolving the package
+document from ``META-INF/container.xml`` and pulling the manifest, spine and
+metadata out of it.
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import unquote, urldefrag
+from xml.etree import ElementTree
+from zipfile import ZIP_STORED, BadZipFile, ZipFile
+
+from .app_logger import logger
+
+CONTAINER_PATH = "META-INF/container.xml"
+CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
+OPF_NS = "http://www.idpf.org/2007/opf"
+
+MIMETYPE_NAME = "mimetype"
+MIMETYPE_CONTENT = b"application/epub+zip"
+
+#: Cap on XML read from an archive. The parser does not resolve external
+#: entities, but a hostile file should not be able to exhaust memory either.
+MAX_XML_BYTES = 16 * 1024 * 1024
+
+EPUBCHECK = "epubcheck"
+
+
+@dataclass
+class Package:
+    """The parts of a package document (OPF) this tool cares about."""
+
+    opf_path: str
+    title: str | None = None
+    creator: str | None = None
+    creator_sort: str | None = None
+    identifier: str | None = None
+    #: Manifest item id to archive path, already resolved and unquoted.
+    manifest: dict[str, str] = field(default_factory=dict)
+    #: Manifest ids referenced by the spine, in reading order.
+    spine: list[str] = field(default_factory=list)
+    #: Manifest id of the cover image, when the package declares one.
+    cover_id: str | None = None
+
+
+class ValidationError(Exception):
+    """Raised when an archive cannot be validated at all."""
+
+
+class ArchiveInvalidError(Exception):
+    """Raised when a freshly written archive fails its checks."""
+
+    def __init__(self, name: str, problems: list[str]) -> None:
+        self.name = name
+        self.problems = problems
+        shown = "; ".join(problems[:3])
+        extra = f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""
+        super().__init__(f"{shown}{extra}")
+
+
+@dataclass(frozen=True)
+class ValidationOptions:
+    """How thoroughly to check an archive after writing it."""
+
+    enabled: bool = False
+    epubcheck: bool = False
+
+    def check(self, path: Path) -> list[str]:
+        """
+        Run the configured checks over *path*.
+
+        :param path: The archive to check.
+
+        :return: A list of problems; empty means it passed.
+        """
+        if not self.enabled:
+            return []
+        problems = validate_archive(path)
+        if problems or not self.epubcheck:
+            return problems
+        return run_epubcheck(path)
+
+
+def _read_xml(archive: ZipFile, name: str) -> ElementTree.Element:
+    """
+    Read and parse one XML member of an archive.
+
+    :param archive: The open archive.
+    :param name: Path of the member to read.
+
+    :return: The parsed root element.
+
+    :raises ValidationError: If the member is missing or not valid XML.
+    """
+    try:
+        info = archive.getinfo(name)
+    except KeyError as exc:
+        raise ValidationError(f"missing {name}") from exc
+
+    if info.file_size > MAX_XML_BYTES:
+        raise ValidationError(f"{name} is implausibly large ({info.file_size} bytes)")
+
+    try:
+        data = archive.read(name)
+    except (BadZipFile, OSError) as exc:
+        raise ValidationError(f"could not read {name}: {exc}") from exc
+
+    try:
+        return ElementTree.fromstring(data)
+    except ElementTree.ParseError as exc:
+        raise ValidationError(f"{name} is not valid XML: {exc}") from exc
+
+
+def find_opf_path(archive: ZipFile) -> str:
+    """
+    Resolve the package document path from ``META-INF/container.xml``.
+
+    :param archive: The open archive.
+
+    :return: Archive path of the package document.
+
+    :raises ValidationError: If the container is missing or names no rootfile.
+    """
+    root = _read_xml(archive, CONTAINER_PATH)
+    for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
+        full_path = rootfile.get("full-path")
+        if full_path:
+            return full_path
+    raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+
+
+def _resolve(base: str, href: str) -> str:
+    """
+    Resolve a manifest href against the package document's directory.
+
+    :param base: Archive path of the package document.
+    :param href: The href to resolve.
+
+    :return: The archive path the href points at.
+    """
+    target, _ = urldefrag(href)
+    target = unquote(target)
+    parent = Path(base).parent
+    if str(parent) in (".", ""):
+        return target
+    return (parent / target).as_posix()
+
+
+def read_package(archive: ZipFile) -> Package:
+    """
+    Parse the package document of an archive.
+
+    :param archive: The open archive.
+
+    :return: The package metadata, manifest and spine.
+
+    :raises ValidationError: If the package document is missing or unparsable.
+    """
+    opf_path = find_opf_path(archive)
+    root = _read_xml(archive, opf_path)
+    package = Package(opf_path=opf_path)
+
+    title = root.find(".//{http://purl.org/dc/elements/1.1/}title")
+    if title is not None and title.text:
+        package.title = title.text.strip()
+
+    creator = root.find(".//{http://purl.org/dc/elements/1.1/}creator")
+    if creator is not None and creator.text:
+        package.creator = creator.text.strip()
+        # Publishers usually supply an inverted form here; it beats guessing.
+        package.creator_sort = creator.get(f"{{{OPF_NS}}}file-as")
+
+    identifier = root.find(".//{http://purl.org/dc/elements/1.1/}identifier")
+    if identifier is not None and identifier.text:
+        package.identifier = identifier.text.strip()
+
+    for item in root.iter(f"{{{OPF_NS}}}item"):
+        item_id = item.get("id")
+        href = item.get("href")
+        if item_id and href:
+            package.manifest[item_id] = _resolve(opf_path, href)
+        if item_id and "cover-image" in (item.get("properties") or ""):
+            package.cover_id = item_id
+
+    for itemref in root.iter(f"{{{OPF_NS}}}itemref"):
+        idref = itemref.get("idref")
+        if idref:
+            package.spine.append(idref)
+
+    if package.cover_id is None:
+        for meta in root.iter(f"{{{OPF_NS}}}meta"):
+            if meta.get("name") == "cover":
+                package.cover_id = meta.get("content")
+                break
+
+    return package
+
+
+def validate_archive(path: Path) -> list[str]:
+    """
+    Check one exported archive and describe anything wrong with it.
+
+    :param path: The epub file to check.
+
+    :return: A list of problems; empty means the archive is sound.
+    """
+    problems: list[str] = []
+
+    try:
+        with ZipFile(path) as archive:
+            problems.extend(_check_mimetype(archive))
+
+            broken = archive.testzip()
+            if broken is not None:
+                problems.append(f"corrupt member: {broken}")
+
+            try:
+                package = read_package(archive)
+            except ValidationError as exc:
+                problems.append(str(exc))
+                return problems
+
+            problems.extend(_check_manifest(archive, package))
+    except BadZipFile as exc:
+        return [f"not a readable zip archive: {exc}"]
+    except OSError as exc:
+        return [f"could not open: {exc}"]
+
+    return problems
+
+
+def _check_mimetype(archive: ZipFile) -> list[str]:
+    """
+    Check the ``mimetype`` entry the epub specification mandates.
+
+    :param archive: The open archive.
+
+    :return: A list of problems.
+    """
+    problems: list[str] = []
+    names = archive.namelist()
+
+    if not names:
+        return ["archive is empty"]
+    if names[0] != MIMETYPE_NAME:
+        problems.append(f"first member is {names[0]!r}, not 'mimetype'")
+        if MIMETYPE_NAME not in names:
+            return problems
+
+    info = archive.getinfo(MIMETYPE_NAME)
+    if info.compress_type != ZIP_STORED:
+        problems.append("mimetype is compressed; it must be stored")
+    if archive.read(MIMETYPE_NAME) != MIMETYPE_CONTENT:
+        problems.append("mimetype does not contain 'application/epub+zip'")
+
+    return problems
+
+
+def _check_manifest(archive: ZipFile, package: Package) -> list[str]:
+    """
+    Check that everything the package document promises is present.
+
+    :param archive: The open archive.
+    :param package: The parsed package document.
+
+    :return: A list of problems.
+    """
+    problems: list[str] = []
+    members = set(archive.namelist())
+
+    if not package.manifest:
+        problems.append(f"{package.opf_path} declares no manifest items")
+
+    missing = sorted(
+        f"{item_id} -> {href}"
+        for item_id, href in package.manifest.items()
+        if href not in members
+    )
+    for entry in missing[:5]:
+        problems.append(f"manifest item is not in the archive: {entry}")
+    if len(missing) > 5:
+        problems.append(f"...and {len(missing) - 5} more missing manifest item(s)")
+
+    dangling = sorted(set(package.spine) - set(package.manifest))
+    for idref in dangling[:5]:
+        problems.append(f"spine references unknown manifest id: {idref}")
+
+    if not package.spine:
+        problems.append(f"{package.opf_path} declares no spine")
+
+    return problems
+
+
+def epubcheck_available() -> bool:
+    """
+    Report whether the external ``epubcheck`` tool is on PATH.
+
+    :return: True if it can be run.
+    """
+    return shutil.which(EPUBCHECK) is not None
+
+
+def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
+    """
+    Run the external ``epubcheck`` validator over an archive.
+
+    This is a much stricter check than the structural one, and is only
+    attempted when the user asks for it.
+
+    :param path: The epub file to check.
+    :param timeout: Seconds to allow before giving up.
+
+    :return: A list of problems; empty means epubcheck was happy.
+    """
+    executable = shutil.which(EPUBCHECK)
+    if executable is None:
+        return ["epubcheck is not on PATH"]
+
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed executable, no shell
+            [executable, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [f"epubcheck could not be run: {exc}"]
+
+    if completed.returncode == 0:
+        return []
+
+    output = (completed.stderr or completed.stdout).strip().splitlines()
+    errors = [line.strip() for line in output if "ERROR" in line]
+    logger.debug("epubcheck exited %d for %s", completed.returncode, path.name)
+    return errors[:10] or [f"epubcheck failed with exit code {completed.returncode}"]

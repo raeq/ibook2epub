@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "1.1.0"
 description = "Convert Apple iBooks epub packages to zipped epub files."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Richard Quinn" }]
 keywords = ["epub", "ibooks", "apple", "ebook", "converter"]
 classifiers = [
@@ -62,8 +63,9 @@ max-line-length = 100
 
 [tool.pylint.design]
 # Keyword-only options do not carry the readability cost this check targets;
-# the positional limit stays at the default.
+# the positional limit stays at the default. Package is a data holder.
 max-args = 8
+max-attributes = 10
 
 [tool.ruff]
 target-version = "py310"

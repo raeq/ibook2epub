@@ -187,11 +187,11 @@ class TestInterrupt:
         real = convert.zip_package
         calls = {"n": 0}
 
-        def stop_after_one(source: Path, target: Path) -> int:
+        def stop_after_one(source: Path, target: Path, *args) -> int:
             calls["n"] += 1
             if calls["n"] > 1:
                 raise KeyboardInterrupt
-            return real(source, target)
+            return real(source, target, *args)
 
         monkeypatch.setattr(convert, "zip_package", stop_after_one)
 
@@ -220,11 +220,11 @@ class TestInterrupt:
         real = convert.zip_package
         calls = {"n": 0}
 
-        def stop_after_one(source: Path, target: Path) -> int:
+        def stop_after_one(source: Path, target: Path, *args) -> int:
             calls["n"] += 1
             if calls["n"] > 1:
                 raise KeyboardInterrupt
-            return real(source, target)
+            return real(source, target, *args)
 
         monkeypatch.setattr(convert, "zip_package", stop_after_one)
         convert.main(
@@ -252,11 +252,11 @@ class TestInterrupt:
         real = convert.zip_package
         calls = {"n": 0}
 
-        def stop_after_one(source: Path, target: Path) -> int:
+        def stop_after_one(source: Path, target: Path, *args) -> int:
             calls["n"] += 1
             if calls["n"] > 1:
                 raise KeyboardInterrupt
-            return real(source, target)
+            return real(source, target, *args)
 
         monkeypatch.setattr(convert, "zip_package", stop_after_one)
         argv = [

@@ -28,7 +28,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 from . import __version__, app_logger
 from .app_logger import logger
@@ -39,6 +39,22 @@ from .naming import (
     PassthroughNaming,
     PortableNamesUnavailableError,
     build_policy,
+)
+from .planning import (
+    COLLISION_MODES,
+    PENDING,
+    SKIP,
+    PlanOptions,
+    plan_exports,
+    record_decisions,
+    render_listing,
+)
+from .validate import (
+    ArchiveInvalidError,
+    ValidationError,
+    ValidationOptions,
+    epubcheck_available,
+    read_package,
 )
 
 try:
@@ -58,6 +74,9 @@ SOURCE_CANDIDATES = (
 DEFAULT_SOURCE = SOURCE_CANDIDATES[0]
 DEFAULT_OUTPUT = Path.home() / "Books"
 DEFAULT_MAX_EXPORT_FILES = 5
+
+#: Refuse to keep writing once the output volume falls below this, in MiB.
+DEFAULT_MIN_FREE_MB = 128
 
 # Zip cannot represent a timestamp before 1980; using its floor keeps every
 # export byte-identical regardless of when it ran.
@@ -85,6 +104,16 @@ EXCLUDED_ROOT_SUFFIXES = frozenset({".plist"})
 EXCLUDED_ROOT_PREFIXES = ("bookmarks",)
 
 
+@dataclass(frozen=True)
+class ExportOptions:
+    """Everything about a run that is not the packages or the destination."""
+
+    covers: bool = False
+    min_free_mb: int = 0
+    validation: ValidationOptions | None = None
+    plan: PlanOptions | None = None
+
+
 class OutputLockedError(RuntimeError):
     """Raised when another run already holds the output directory lock."""
 
@@ -99,6 +128,8 @@ class Report:
     failed: int = 0
     planned: int = 0  # Dry-run only: exports that would have been attempted.
     collisions: int = 0  # Distinct packages that share one output name.
+    drm: int = 0  # Packages skipped as DRM-protected.
+    incomplete: int = 0  # Packages skipped as not downloaded from iCloud.
     interrupted: bool = False  # The run was stopped with Ctrl-C.
 
 
@@ -183,7 +214,11 @@ def _entry(arcname: str, compress_type: int) -> ZipInfo:
     return entry
 
 
-def zip_package(source_dir: Path, target_archive: Path) -> int:
+def zip_package(
+    source_dir: Path,
+    target_archive: Path,
+    validation: ValidationOptions | None = None,
+) -> int:
     """
     Write a single package directory out as a spec-valid epub archive.
 
@@ -191,10 +226,18 @@ def zip_package(source_dir: Path, target_archive: Path) -> int:
     archive is assembled under a temporary name and only moved to
     ``target_archive`` once it is complete.
 
+    Validation, when asked for, runs against the temporary file *before* the
+    move. A book that fails therefore leaves nothing in the output directory
+    and will be attempted again on the next run, rather than being recorded as
+    finished work.
+
     :param source_dir: The ``*.epub/`` package directory to compress.
     :param target_archive: The path of the epub file to create.
+    :param validation: Checks to run before the archive is moved into place.
 
     :return: The number of package files stored, excluding ``mimetype``.
+
+    :raises ArchiveInvalidError: If validation was requested and failed.
     """
     # Deriving the temporary name from the target overflows the filesystem's
     # per-component limit when the target is already at it: 255 bytes plus
@@ -229,6 +272,11 @@ def zip_package(source_dir: Path, target_archive: Path) -> int:
                     shutil.copyfileobj(source, target)
                 file_count += 1
 
+        if validation is not None:
+            problems = validation.check(partial)
+            if problems:
+                raise ArchiveInvalidError(target_archive.name, problems)
+
         partial.replace(target_archive)
     except BaseException:
         # Leave no partial archive behind, so the "already exported" check
@@ -257,7 +305,11 @@ class _Progress:  # pylint: disable=too-few-public-methods
 
 
 def _zip_and_record(
-    package: Path, target: Path, report: Report, progress: _Progress
+    package: Path,
+    target: Path,
+    report: Report,
+    progress: _Progress,
+    run: ExportOptions,
 ) -> None:
     """
     Export one package and record the outcome, all in the worker thread.
@@ -272,15 +324,19 @@ def _zip_and_record(
     :param target: The epub file to create.
     :param report: Report to record the outcome in.
     :param progress: Shared counter for the ``[n/total]`` prefix.
+    :param run: Options for this run.
     """
     try:
-        file_count = zip_package(package, target)
+        file_count = zip_package(package, target, run.validation)
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         with _REPORT_LOCK:
             report.failed += 1
             marker = progress.tick()
         logger.error("%s Failed to export %s: %s", marker, package.name, exc)
         return
+
+    if run.covers:
+        extract_cover(target)
 
     with _REPORT_LOCK:
         report.exported += 1
@@ -293,8 +349,10 @@ async def _export_one(
     pool: ThreadPoolExecutor,
     package: Path,
     target: Path,
+    *,
     report: Report,
     progress: _Progress,
+    run: ExportOptions,
 ) -> None:
     """
     Hand one package to a worker thread.
@@ -304,80 +362,12 @@ async def _export_one(
     :param target: The epub file to create.
     :param report: Report to record the outcome in.
     :param progress: Shared counter for the ``[n/total]`` prefix.
+    :param run: Options for this run.
     """
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(pool, _zip_and_record, package, target, report, progress)
-
-
-def _plan_exports(
-    packages: Sequence[Path],
-    output_dir: Path,
-    policy: NamingPolicy,
-    *,
-    dry_run: bool,
-    report: Report,
-    force: bool = False,
-) -> list[tuple[Path, Path]]:
-    """
-    Decide which packages to export and under what names.
-
-    Books already present in *output_dir* are recognised by recomputing their
-    identity from the filenames on disk, so no state file is needed. Two
-    packages that want the same output name are a collision: the first wins
-    and the second is reported rather than silently overwritten.
-
-    :param packages: Package directories to consider.
-    :param output_dir: Directory the epub files are written into.
-    :param policy: Naming policy supplying filenames and identities.
-    :param dry_run: When True, plan the work but queue nothing.
-    :param report: Report to accumulate skip, collision and plan counts into.
-
-    :return: The (package, target) pairs to export.
-    """
-    pending: list[tuple[Path, Path]] = []
-
-    # Missing directories glob to nothing, which is what a dry run wants.
-    # --force pretends the output directory is empty so everything re-exports.
-    on_disk = (
-        set()
-        if force
-        else {
-            policy.identity(existing.name)
-            for existing in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-        }
+    await loop.run_in_executor(
+        pool, _zip_and_record, package, target, report, progress, run
     )
-    claimed: set[str] = set()
-
-    for package in packages:
-        filename = policy.filename(package.name)
-        target = output_dir / filename
-        key = policy.identity(filename)
-
-        if key in on_disk:
-            logger.info("Already exported, skipping: %s", package.name)
-            report.skipped += 1
-            continue
-
-        if key in claimed:
-            logger.warning(
-                "Name collision, skipping: %s would also export to %s",
-                package,
-                target.name,
-            )
-            report.collisions += 1
-            continue
-
-        claimed.add(key)
-
-        if dry_run:
-            logger.info("Would export: %s -> %s", package, target)
-            report.planned += 1
-            continue
-
-        logger.debug("Queued for export: %s", package)
-        pending.append((package, target))
-
-    return pending
 
 
 async def export_packages(
@@ -387,8 +377,8 @@ async def export_packages(
     dry_run: bool = False,
     max_workers: int | None = None,
     naming: NamingPolicy | None = None,
-    force: bool = False,
     report: Report | None = None,
+    options: ExportOptions | None = None,
 ) -> Report:
     """
     Export a batch of packages concurrently.
@@ -407,24 +397,34 @@ async def export_packages(
     :param force: Re-export books already present in the output directory.
     :param report: Report to accumulate into. Pass one to retain the partial
         counts if the run is interrupted.
+    :param options: Everything else about the run.
 
     :return: A report of what was exported, skipped and failed.
     """
     policy = naming if naming is not None else PassthroughNaming()
     report = report if report is not None else Report()
-    pending = _plan_exports(
-        packages, output_dir, policy, dry_run=dry_run, report=report, force=force
-    )
+    run = options if options is not None else ExportOptions()
 
-    if report.skipped:
-        logger.info("Skipped %d already-exported file(s).", report.skipped)
-    if report.collisions:
-        logger.warning(
-            "%d package(s) skipped because another book claims the same output name.",
-            report.collisions,
-        )
+    decisions = plan_exports(packages, output_dir, policy, run.plan)
+    record_decisions(decisions, report)
+
+    pending = [
+        (decision.package, decision.target)
+        for decision in decisions
+        if decision.status == PENDING and decision.target is not None
+    ]
+
+    if dry_run:
+        for package, target in pending:
+            logger.info("Would export: %s -> %s", package, target)
+        report.planned = len(pending)
+        return report
 
     if not pending:
+        return report
+
+    if not _has_room(output_dir, run.min_free_mb):
+        report.failed += len(pending)
         return report
 
     progress = _Progress(len(pending))
@@ -432,7 +432,9 @@ async def export_packages(
     try:
         await asyncio.gather(
             *(
-                _export_one(pool, package, target, report, progress)
+                _export_one(
+                    pool, package, target, report=report, progress=progress, run=run
+                )
                 for package, target in pending
             )
         )
@@ -683,6 +685,90 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_only",
+        help=(
+            "List every book with its status (pending, exported, collision, "
+            "drm, incomplete) and exit without converting anything."
+        ),
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="With --list, emit machine-readable JSON instead of a table.",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help=(
+            "Re-export a book when its source directory is newer than the "
+            "exported file. Compares directory timestamps, so a book "
+            "re-downloaded in place may not be noticed; use --force for that."
+        ),
+    )
+    parser.add_argument(
+        "--skip-incomplete",
+        action="store_true",
+        help=(
+            "Skip books iCloud has not downloaded, which would otherwise "
+            "export as empty files. Requires walking every package, which is "
+            "slow on a cloud library, so it is off by default."
+        ),
+    )
+    parser.add_argument(
+        "--on-collision",
+        choices=COLLISION_MODES,
+        default=SKIP,
+        help=(
+            "What to do when two books want the same output name: 'skip' "
+            "exports only the first, 'suffix' keeps both by appending ' (2)'."
+        ),
+    )
+    parser.add_argument(
+        "--min-free",
+        type=int,
+        default=DEFAULT_MIN_FREE_MB,
+        metavar="MB",
+        help=(
+            "Stop before the output volume drops below this many megabytes, "
+            f"default={DEFAULT_MIN_FREE_MB}. 0 disables the check. Useful "
+            "when writing to an SD card or a Kindle."
+        ),
+    )
+    parser.add_argument(
+        "--covers",
+        action="store_true",
+        help="Also write each book's cover image beside its epub file.",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Check each archive before it is moved into place: zip integrity, "
+            "the mimetype entry, and that every file the package document "
+            "lists is really present. A book that fails is not written, so it "
+            "is retried on the next run."
+        ),
+    )
+    parser.add_argument(
+        "--epubcheck",
+        action="store_true",
+        help=(
+            "Also run the external 'epubcheck' tool on each archive. Implies "
+            "--validate and requires epubcheck on PATH."
+        ),
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help=(
+            "Check the archives already in the output directory and report "
+            "any that are damaged, then exit without converting anything."
+        ),
+    )
+    parser.add_argument(
         "--no-shuffle",
         action="store_true",
         help=(
@@ -729,6 +815,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     if args.workers is not None and args.workers < 1:
         parser.error("--workers must be 1 or greater")
+
+    if args.epubcheck:
+        args.validate = True
+        if not epubcheck_available():
+            parser.error("--epubcheck needs the 'epubcheck' tool on PATH")
 
     args.source_auto = args.source_dir is None
     if args.source_auto:
@@ -803,6 +894,10 @@ def format_summary(
         )
         if report.collisions:
             summary += f", {report.collisions} name collision(s)"
+        if report.drm:
+            summary += f", {report.drm} DRM-protected"
+        if report.incomplete:
+            summary += f", {report.incomplete} not downloaded"
         summary += ")."
         if remaining:
             summary += f" {remaining} remaining."
@@ -816,6 +911,10 @@ def format_summary(
         summary += f", skipped {report.skipped}"
     if report.collisions:
         summary += f", {report.collisions} name collision(s)"
+    if report.drm:
+        summary += f", {report.drm} DRM-protected"
+    if report.incomplete:
+        summary += f", {report.incomplete} not downloaded"
     if report.failed:
         summary += f", failed {report.failed}"
     summary += "."
@@ -824,6 +923,188 @@ def format_summary(
     if remaining:
         summary += f" {remaining} remaining; rerun to continue."
     return summary
+
+
+def verify_output(output_dir: Path, epubcheck: bool = False) -> tuple[int, int]:
+    """
+    Check the archives already sitting in the output directory.
+
+    The output directory is the record of completed work, but nothing ever
+    re-reads that record, so a damaged export stays invisible. This reads it
+    back.
+
+    :param output_dir: Directory holding exported epub files.
+    :param epubcheck: Also run the external epubcheck tool.
+
+    :return: The number of archives checked, and the number found damaged.
+    """
+    options = ValidationOptions(enabled=True, epubcheck=epubcheck)
+    archives = sorted(output_dir.glob(f"*{PACKAGE_SUFFIX}"))
+    damaged = 0
+
+    for position, archive in enumerate(archives, start=1):
+        problems = options.check(archive)
+        if problems:
+            damaged += 1
+            logger.error(
+                "[%d/%d] %s is damaged: %s",
+                position,
+                len(archives),
+                archive.name,
+                "; ".join(problems[:3]),
+            )
+        else:
+            logger.debug("[%d/%d] %s is sound", position, len(archives), archive.name)
+
+    return len(archives), damaged
+
+
+def _has_room(output_dir: Path, min_free_mb: int) -> bool:
+    """
+    Report whether the output volume has enough space to keep writing.
+
+    :param output_dir: Directory being written to.
+    :param min_free_mb: Floor in MiB; 0 disables the check.
+
+    :return: True when it is safe to continue.
+    """
+    if not min_free_mb:
+        return True
+    free = free_megabytes(output_dir)
+    if free < min_free_mb:
+        logger.critical(
+            "Only %d MiB free on %s, below the --min-free floor of %d MiB.",
+            free,
+            output_dir,
+            min_free_mb,
+        )
+        return False
+    logger.debug("%d MiB free on %s", free, output_dir)
+    return True
+
+
+def free_megabytes(path: Path) -> int:
+    """
+    Report free space on the volume holding *path*, in MiB.
+
+    :param path: A path on the volume to measure.
+
+    :return: Free space in MiB, or a large number if it cannot be determined.
+    """
+    try:
+        return shutil.disk_usage(path).free // (1024 * 1024)
+    except OSError:  # pragma: no cover - unusual filesystem
+        return 1 << 30
+
+
+def extract_cover(archive_path: Path) -> Path | None:
+    """
+    Write a book's cover image beside its archive.
+
+    :param archive_path: The exported epub file.
+
+    :return: The cover file written, or None if the book declares no cover.
+    """
+    try:
+        with ZipFile(archive_path) as archive:
+            package = read_package(archive)
+            if not package.cover_id:
+                return None
+            href = package.manifest.get(package.cover_id)
+            if not href or href not in archive.namelist():
+                return None
+            data = archive.read(href)
+    except (OSError, ValidationError, BadZipFile) as exc:
+        logger.debug("No cover for %s: %s", archive_path.name, exc)
+        return None
+
+    cover = archive_path.with_suffix(Path(href).suffix or ".jpg")
+    cover.write_bytes(data)
+    return cover
+
+
+def exit_code(report: Report) -> int:
+    """
+    Translate a run's outcome into a process exit code.
+
+    :param report: The run's report.
+
+    :return: 130 if interrupted, 1 if anything failed, otherwise 0.
+    """
+    if report.interrupted:
+        return 130  # Conventional exit code for termination by SIGINT.
+    return 1 if report.failed else 0
+
+
+def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
+    """
+    Say what this run is about to do, before it does it.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+    """
+    logger.debug("Naming policy: %s", policy.label)
+    if args.source_auto:
+        logger.info("Using discovered iBooks library: %s", args.source_dir)
+    else:
+        logger.info("Examining source: %s", args.source_dir)
+    logger.info("Writing output to: %s", args.output_dir)
+    if args.portable_names == STRIP:
+        logger.info("Portable naming: stripping characters other filesystems reject.")
+    elif args.portable_names:
+        logger.info(
+            "Portable naming: romanizing (non-Latin titles are transliterated)."
+        )
+    if args.dry_run:
+        logger.info(
+            "Running in dry-run mode. No file system modifications will be performed."
+        )
+
+
+def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
+    """
+    Render the plan without converting anything.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+
+    :return: A process exit code.
+    """
+    packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
+    decisions = plan_exports(packages, args.output_dir, policy, _plan_options(args))
+    print(render_listing(decisions, args.as_json))
+    return 0
+
+
+def _run_verify(args: argparse.Namespace) -> int:
+    """
+    Check the archives already in the output directory.
+
+    :param args: Parsed command line arguments.
+
+    :return: A process exit code; non-zero if anything is damaged.
+    """
+    checked, damaged = verify_output(args.output_dir, epubcheck=args.epubcheck)
+    print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
+    if damaged:
+        print("Re-export the damaged books with --force.")
+    return 1 if damaged else 0
+
+
+def _plan_options(args: argparse.Namespace) -> PlanOptions:
+    """
+    Build planning options from parsed arguments.
+
+    :param args: Parsed command line arguments.
+
+    :return: The planner's settings.
+    """
+    return PlanOptions(
+        force=args.force,
+        refresh=args.refresh,
+        check_incomplete=args.skip_incomplete,
+        on_collision=args.on_collision,
+    )
 
 
 def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report, int]:
@@ -846,6 +1127,13 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         packages, args.max_export_files, randomise=not args.no_shuffle
     )
 
+    options = ExportOptions(
+        covers=args.covers,
+        min_free_mb=args.min_free,
+        validation=ValidationOptions(enabled=args.validate, epubcheck=args.epubcheck),
+        plan=_plan_options(args),
+    )
+
     # Held here rather than inside export_packages so the partial counts
     # survive a Ctrl-C.
     report = Report()
@@ -861,8 +1149,8 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
                     dry_run=args.dry_run,
                     max_workers=args.workers,
                     naming=policy,
-                    force=args.force,
                     report=report,
+                    options=options,
                 )
             )
         except KeyboardInterrupt:
@@ -893,22 +1181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.critical("%s", exc)
         return 2
 
-    logger.debug("Naming policy: %s", policy.label)
-    if args.source_auto:
-        logger.info("Using discovered iBooks library: %s", args.source_dir)
-    else:
-        logger.info("Examining source: %s", args.source_dir)
-    logger.info("Writing output to: %s", args.output_dir)
-    if args.portable_names == STRIP:
-        logger.info("Portable naming: stripping characters other filesystems reject.")
-    elif args.portable_names:
-        logger.info(
-            "Portable naming: romanizing (non-Latin titles are transliterated)."
-        )
-    if args.dry_run:
-        logger.info(
-            "Running in dry-run mode. No file system modifications will be performed."
-        )
+    _log_preamble(args, policy)
 
     if not args.dry_run:
         try:
@@ -916,6 +1189,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         except OSError as exc:
             logger.critical("Could not create output directory: %s", exc)
             return 1
+
+    if args.list_only:
+        packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
+        decisions = plan_exports(
+            packages,
+            args.output_dir,
+            policy,
+            _plan_options(args),
+        )
+        print(render_listing(decisions, args.as_json))
+        return 0
+
+    if args.verify:
+        checked, damaged = verify_output(args.output_dir, epubcheck=args.epubcheck)
+        print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
+        if damaged:
+            print("Re-export the damaged books with --force.")
+        return 1 if damaged else 0
 
     try:
         report, remaining = _run_export(args, policy)
@@ -926,6 +1217,4 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(format_summary(report, args.output_dir, args.dry_run, remaining))
     logger.debug("Ending the convert application.")
 
-    if report.interrupted:
-        return 130  # Conventional exit code for termination by SIGINT.
-    return 1 if report.failed else 0
+    return exit_code(report)
