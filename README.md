@@ -142,8 +142,14 @@ reproducible.
 
 macOS happily stores a book called `Sapiens: A Brief History.epub`, but the
 colon is illegal on Windows and exFAT, so copying that file to an SD card, a
-Kindle or a Windows share fails. In a sample of realistic book titles, roughly
-a third contain a character from `<>:"/\|?*`.
+Kindle or a Windows share fails.
+
+How often that bites depends entirely on the library. Measured against a real
+2,805-book iBooks library, **1.3% of titles contain a character from
+`<>:"/\|?*`** and 1.6% are changed by sanitisation — a few dozen books, not a
+large fraction. If you only ever read from `~/Books` on APFS, `-p` buys you
+close to nothing. If you copy to a Kindle or an SD card, it is the difference
+between those books arriving and failing.
 
 `-p` / `--portable-names` rewrites output names so they survive that copy, and
 treats case and accent variants of a title as the same book:
