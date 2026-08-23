@@ -26,7 +26,16 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pylint>=3.0", "ruff>=0.6", "mypy>=1.11"]
+# Cross-filesystem filename sanitisation and case/accent-insensitive dedup.
+# Optional so the default install stays pure standard library.
+portable = ["disarm>=0.13"]
+dev = [
+    "pytest>=7.0",
+    "pylint>=3.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "ibook2epub[portable]",
+]
 
 [project.urls]
 Homepage = "https://github.com/raeq/ibook2epub"
@@ -76,3 +85,8 @@ warn_unreachable = true
 module = "tests.*"
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+
+[[tool.mypy.overrides]]
+# disarm is an optional extra; environments without it must still type-check.
+module = "disarm"
+ignore_missing_imports = true

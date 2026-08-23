@@ -39,6 +39,28 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        pip install -e ".[portable]" pytest
+    - name: Run tests
+      run: pytest
+
+  test-minimal:
+    # Proves the default install stays pure standard library: no disarm, no
+    # compiled wheel. The portable-naming tests skip themselves here.
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.14"
+    - name: Install without extras
+      run: |
+        python -m pip install --upgrade pip
         pip install -e . pytest
+    - name: Assert no third-party runtime dependency
+      run: |
+        if python -c "import disarm" 2>/dev/null; then
+          echo "disarm leaked into the base install"; exit 1
+        fi
     - name: Run tests
       run: pytest

@@ -26,6 +26,12 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 from . import app_logger
 from .app_logger import logger
+from .naming import (
+    NamingPolicy,
+    PassthroughNaming,
+    PortableNamesUnavailableError,
+    build_policy,
+)
 
 DEFAULT_SOURCE = (
     Path.home() / "Library/Mobile Documents/iCloud~com~apple~iBooks/Documents"
@@ -56,6 +62,7 @@ class Report:
     skipped: int = 0
     failed: int = 0
     planned: int = 0  # Dry-run only: exports that would have been attempted.
+    collisions: int = 0  # Distinct packages that share one output name.
 
 
 def is_excluded(name: str) -> bool:
@@ -171,48 +178,58 @@ async def _export_one(
     return file_count
 
 
-async def export_packages(
+def _plan_exports(
     packages: Sequence[Path],
     output_dir: Path,
-    dry_run: bool = False,
-    max_workers: int | None = None,
-) -> Report:
+    policy: NamingPolicy,
+    dry_run: bool,
+    report: Report,
+) -> list[tuple[Path, Path]]:
     """
-    Export a batch of packages concurrently.
+    Decide which packages to export and under what names.
 
-    A package whose output already exists is skipped, which makes re-running
-    the command safe and makes the output directory the record of what has
-    been converted.
+    Books already present in *output_dir* are recognised by recomputing their
+    identity from the filenames on disk, so no state file is needed. Two
+    packages that want the same output name are a collision: the first wins
+    and the second is reported rather than silently overwritten.
 
-    :param packages: Package directories to export.
-    :param output_dir: Directory to write the epub files into.
-    :param dry_run: When True, report what would happen without writing.
-    :param max_workers: Size of the compression thread pool.
+    :param packages: Package directories to consider.
+    :param output_dir: Directory the epub files are written into.
+    :param policy: Naming policy supplying filenames and identities.
+    :param dry_run: When True, plan the work but queue nothing.
+    :param report: Report to accumulate skip, collision and plan counts into.
 
-    :return: A report of what was exported, skipped and failed.
+    :return: The (package, target) pairs to export.
     """
-    report = Report()
     pending: list[tuple[Path, Path]] = []
-    claimed: set[Path] = set()
+
+    # Missing directories glob to nothing, which is what a dry run wants.
+    on_disk = {
+        policy.identity(existing.name)
+        for existing in output_dir.glob(f"*{PACKAGE_SUFFIX}")
+    }
+    claimed: set[str] = set()
 
     for package in packages:
-        target = output_dir / package.name
+        filename = policy.filename(package.name)
+        target = output_dir / filename
+        key = policy.identity(filename)
 
-        if target in claimed:
-            logger.warning(
-                "Duplicate package name, skipping: %s (already exporting to %s)",
-                package,
-                target,
-            )
-            report.skipped += 1
-            continue
-
-        if target.exists():
+        if key in on_disk:
             logger.info("Already exported, skipping: %s", package.name)
             report.skipped += 1
             continue
 
-        claimed.add(target)
+        if key in claimed:
+            logger.warning(
+                "Name collision, skipping: %s would also export to %s",
+                package,
+                target.name,
+            )
+            report.collisions += 1
+            continue
+
+        claimed.add(key)
 
         if dry_run:
             logger.info("Would export: %s -> %s", package, target)
@@ -222,8 +239,44 @@ async def export_packages(
         logger.debug("Queued for export: %s", package)
         pending.append((package, target))
 
+    return pending
+
+
+async def export_packages(
+    packages: Sequence[Path],
+    output_dir: Path,
+    dry_run: bool = False,
+    max_workers: int | None = None,
+    naming: NamingPolicy | None = None,
+) -> Report:
+    """
+    Export a batch of packages concurrently.
+
+    Whether a book has already been exported is decided by its *identity*
+    under the naming policy, not by an exact filename match. Identities of
+    completed work are recomputed by reading the output directory, so that
+    directory remains the sole record of what has been converted and no state
+    file is needed.
+
+    :param packages: Package directories to export.
+    :param output_dir: Directory to write the epub files into.
+    :param dry_run: When True, report what would happen without writing.
+    :param max_workers: Size of the compression thread pool.
+    :param naming: Naming policy; defaults to :class:`PassthroughNaming`.
+
+    :return: A report of what was exported, skipped and failed.
+    """
+    policy = naming if naming is not None else PassthroughNaming()
+    report = Report()
+    pending = _plan_exports(packages, output_dir, policy, dry_run, report)
+
     if report.skipped:
         logger.info("Skipped %d already-exported file(s).", report.skipped)
+    if report.collisions:
+        logger.warning(
+            "%d package(s) skipped because another book claims the same output name.",
+            report.collisions,
+        )
 
     if not pending:
         return report
@@ -283,6 +336,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Report what would be exported without writing anything.",
+    )
+    parser.add_argument(
+        "-p",
+        "--portable-names",
+        action="store_true",
+        help=(
+            "Rewrite output names so they survive a copy to Windows, exFAT or "
+            "a Kindle, and treat case/accent variants of a title as the same "
+            "book. Romanizes non-Latin titles, and renames files an earlier "
+            "run already exported. Needs the 'disarm' extra."
+        ),
     )
     parser.add_argument(
         "--no-shuffle",
@@ -371,10 +435,13 @@ def format_summary(report: Report, output_dir: Path, dry_run: bool) -> str:
     :return: The summary line.
     """
     if dry_run:
-        return (
+        summary = (
             f"Dry run: would export {report.planned} epub file(s) to "
-            f"{output_dir} (skipped {report.skipped} already present)."
+            f"{output_dir} (skipped {report.skipped} already present"
         )
+        if report.collisions:
+            summary += f", {report.collisions} name collision(s)"
+        return summary + ")."
 
     summary = (
         f"Exported {report.exported} epub file(s) "
@@ -382,6 +449,8 @@ def format_summary(report: Report, output_dir: Path, dry_run: bool) -> str:
     )
     if report.skipped:
         summary += f", skipped {report.skipped}"
+    if report.collisions:
+        summary += f", {report.collisions} name collision(s)"
     if report.failed:
         summary += f", failed {report.failed}"
     return summary + "."
@@ -400,8 +469,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     verbosity = 0 if args.quiet else 1 + args.verbose
     app_logger.configure(verbosity=verbosity, log_file=args.log_file)
 
+    try:
+        policy = build_policy(args.portable_names)
+    except PortableNamesUnavailableError as exc:
+        logger.critical("%s", exc)
+        return 2
+
     logger.info("Examining source: %s", args.source_dir)
     logger.info("Writing output to: %s", args.output_dir)
+    if args.portable_names:
+        logger.info("Portable naming enabled (non-Latin titles are romanized).")
     if args.dry_run:
         logger.info(
             "Running in dry-run mode. No file system modifications will be performed."
@@ -423,7 +500,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     report = asyncio.run(
-        export_packages(selected, args.output_dir, dry_run=args.dry_run)
+        export_packages(selected, args.output_dir, dry_run=args.dry_run, naming=policy)
     )
 
     print(format_summary(report, args.output_dir, args.dry_run))

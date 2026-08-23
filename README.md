@@ -29,12 +29,14 @@ file (including `iTunesMetadata.plist`), files whose names begin with
 ## Requirements
 
 Python 3.10 or newer. There are no runtime dependencies — the tool uses only
-the standard library.
+the standard library. The optional `portable` extra adds
+[disarm](https://pypi.org/project/disarm/) for `--portable-names`.
 
 ## Installation
 
 ```bash
-pip install -e .
+pip install -e .              # standard library only
+pip install -e ".[portable]"  # adds --portable-names support
 ```
 
 This installs the `ibook2epub` command. You can also run the package directly
@@ -60,7 +62,7 @@ output directory is what the program uses to decide what has already been done.
 ### Command Line
 
 ```text
-usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
+usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d] [-p]
                   [--no-shuffle] [-v] [-q] [--log-file PATH]
 
 Convert Apple iBooks epub packages to zipped epub files.
@@ -78,6 +80,11 @@ options:
                         packages.
   -d, --dry-run         Report what would be exported without writing
                         anything.
+  -p, --portable-names  Rewrite output names so they survive a copy to
+                        Windows, exFAT or a Kindle, and treat case/accent
+                        variants of a title as the same book. Romanizes non-
+                        Latin titles, and renames files an earlier run already
+                        exported. Needs the 'disarm' extra.
   --no-shuffle          Take the first N packages in sorted order instead of a
                         random selection when --max-export-files applies.
   -v, --verbose         Increase log verbosity; -v for debug, -vv for trace.
@@ -131,12 +138,51 @@ default, so repeated runs work through the library a batch at a time. Pass
 `--no-shuffle` to take books in sorted order instead, which makes a run
 reproducible.
 
+### Portable filenames (`-p`)
+
+macOS happily stores a book called `Sapiens: A Brief History.epub`, but the
+colon is illegal on Windows and exFAT, so copying that file to an SD card, a
+Kindle or a Windows share fails. In a sample of realistic book titles, roughly
+a third contain a character from `<>:"/\|?*`.
+
+`-p` / `--portable-names` rewrites output names so they survive that copy, and
+treats case and accent variants of a title as the same book:
+
+```bash
+pip install "ibook2epub[portable]"
+ibook2epub -s "$HOME/iBooks/" -o /Volumes/KINDLE/documents/ -m 0 -p
+```
+
+```text
+Sapiens: A Brief History.epub  ->  Sapiens A Brief History.epub
+The Hobbit.epub  +  THE HOBBIT.epub  ->  one export, not two
+```
+
+Spaces are preserved — they are legal everywhere, so replacing them would be
+gratuitous churn. Three things to know before turning this on:
+
+- **Non-Latin titles are romanized.** `こころ.epub` becomes `kokoro.epub`. This
+  is lossy, and it is why the flag is opt-in rather than the default.
+- **It renames books an earlier run already exported.** A book whose name
+  changes under sanitisation will be exported again under its new name, and
+  the old file is left behind. Start with `-d` to preview.
+- **Distinct books can want the same name.** `Vol 1:2` and `Vol 1?2` both
+  become `Vol 1 2`. The first wins; the rest are reported as name collisions
+  and skipped rather than silently overwritten.
+
+Without `-p`, names are used exactly as they appear in the source directory and
+no third-party package is involved.
+
 ### Tracking what's been converted
 
-The output directory is the source of truth. On each run, any book whose
-output `.epub` already exists in the output directory is skipped and logged as
+The output directory is the source of truth — there is no state file. On each
+run, any book already present in the output directory is skipped and logged as
 `Already exported, skipping: <name>`. Re-running the command is therefore
-safe — it will only export books that have not yet been converted.
+safe: it only exports books that have not yet been converted.
+
+With `-p` this still holds. A book's identity is derived from its *sanitised*
+filename, so the identity of completed work can be recomputed by reading the
+output directory back off disk.
 
 ### Exit codes
 

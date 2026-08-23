@@ -166,7 +166,10 @@ class TestExportPackages:
         report = export([first, second], output_dir)
 
         assert report.exported == 1
-        assert report.skipped == 1
+        # Counted as a collision rather than a skip: the second book was not
+        # already exported, it lost a race for the name.
+        assert report.collisions == 1
+        assert report.skipped == 0
 
     def test_a_failing_package_is_reported_not_raised(
         self, library, output_dir, monkeypatch
