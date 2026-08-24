@@ -87,7 +87,17 @@ def _run_verify(args: argparse.Namespace) -> int:
 
     :return: A process exit code; non-zero if anything is damaged.
     """
+    # A glob over a missing directory yields nothing, which read as a clean
+    # bill of health: the one command whose purpose is finding damage reported
+    # success having checked not a single file.
+    if not args.output_dir.is_dir():
+        logger.critical("Output directory does not exist: %s", args.output_dir)
+        return 2
+
     checked, damaged = verify_output(args.output_dir, epubcheck=args.epubcheck)
+    if not checked:
+        print(f"No archives found in {args.output_dir}.")
+        return 0
     print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
     if damaged:
         print("Re-export the damaged books with --force.")

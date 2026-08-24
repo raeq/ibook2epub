@@ -395,6 +395,12 @@ def validate_archive(path: Path) -> list[str]:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
         return [f"could not open: {exc}"]
+    except (NotImplementedError, RuntimeError, ValueError) as exc:
+        # zipfile raises NotImplementedError for a compression method it does
+        # not implement and RuntimeError for an encrypted member. --verify is
+        # the one command whose job is finding damage, so it must report a
+        # hostile archive rather than die on it and check nothing further.
+        return [f"unreadable archive: {exc}"]
 
     return problems
 

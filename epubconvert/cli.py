@@ -249,6 +249,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.workers is not None and args.workers < 1:
         parser.error("--workers must be 1 or greater")
 
+    # Silently ignoring a flag the user typed is worse than refusing it: the
+    # run does something other than what was asked and says nothing.
+    if args.as_json and not args.list_only:
+        parser.error("--json only applies with --list")
+
+    if args.list_only and args.verify:
+        parser.error("--list and --verify cannot be combined")
+
     if args.epubcheck:
         args.validate = True
         if not epubcheck_available():

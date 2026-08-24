@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from .app_logger import logger
-from .naming import NamingPolicy, filesystem_key, truncate_bytes
+from .naming import NamingPolicy, filesystem_key, split_extension, truncate_bytes
 from .source import inspect_package
 from .spec import PACKAGE_SUFFIX
 
@@ -67,7 +67,7 @@ class Decision:
     reason: str | None = None
 
 
-def _suffixed(filename: str, position: int, max_bytes: int) -> str:
+def suffixed(filename: str, position: int, max_bytes: int) -> str:
     """
     Render the *position*-th candidate name for a filename.
 
@@ -87,16 +87,19 @@ def _suffixed(filename: str, position: int, max_bytes: int) -> str:
     if position == 1:
         return filename
 
-    base = Path(filename)
+    # The module's own splitter, not Path().suffix: pathlib treats ".epub" as
+    # extension-less, so the marker landed after it -- ".epub (2)" -- and no
+    # *.epub glob matches that.
+    stem_text, extension = split_extension(filename)
     marker = f" ({position})"
-    candidate = f"{base.stem}{marker}{base.suffix}"
+    candidate = f"{stem_text}{marker}{extension}"
     if not max_bytes or len(candidate.encode("utf-8")) <= max_bytes:
         return candidate
 
     budget = max_bytes - len(marker.encode("utf-8"))
-    budget -= len(base.suffix.encode("utf-8"))
-    stem = truncate_bytes(base.stem, max(budget, 1)).rstrip(" .") or "_"
-    return f"{stem}{marker}{base.suffix}"
+    budget -= len(extension.encode("utf-8"))
+    stem_text = truncate_bytes(stem_text, max(budget, 1)).rstrip(" .") or "_"
+    return f"{stem_text}{marker}{extension}"
 
 
 def _assign_names(
@@ -139,7 +142,7 @@ def _assign_names(
         limit = MAX_SUFFIX if on_collision == SUFFIX else 1
 
         for position in range(1, limit + 1):
-            candidate = _suffixed(wanted, position, getattr(policy, "max_bytes", 0))
+            candidate = suffixed(wanted, position, getattr(policy, "max_bytes", 0))
             key = policy.identity(candidate)
             path_key = filesystem_key(candidate)
             if key not in claimed and path_key not in claimed_paths:
@@ -179,6 +182,7 @@ def plan_exports(
     existing = {
         policy.identity(found.name): found
         for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
+        if found.is_file()
     }
     named = {
         package: (filename, key)
@@ -218,15 +222,10 @@ def _decide(
         )
 
     found = existing.get(key)
-    refreshing = False
-
-    # Settled before the package is inspected: a book that is already
-    # exported needs no source walk, and --skip-incomplete would otherwise
-    # pay for one on every book of the library on every rerun.
-    if found is not None and not settings.force:
-        if not (settings.refresh and _source_is_newer(package, found)):
-            return Decision(package, EXPORTED, found)
-        refreshing = True
+    settled = _decide_against_existing(package, found, settings)
+    if settled is not None:
+        return settled
+    refreshing = found is not None
 
     status = inspect_package(package, check_incomplete=settings.check_incomplete)
     if status.drm:
@@ -242,6 +241,36 @@ def _decide(
         return Decision(package, PENDING, found, reason="source is newer")
 
     return Decision(package, PENDING, output_dir / filename)
+
+
+def _decide_against_existing(
+    package: Path, found: Path | None, settings: PlanOptions
+) -> Decision | None:
+    """
+    Decide what an archive already in the output directory settles, if anything.
+
+    Answered before the package is inspected: a book that is already exported
+    needs no source walk, and ``--skip-incomplete`` would otherwise pay for one
+    on every book of the library on every rerun.
+
+    Both branches that write target ``found`` rather than a freshly computed
+    name. Under a policy whose identity is looser than its filename the two are
+    different paths, and targeting the new one leaves the stale archive in
+    place, still satisfying the identity check for ever.
+
+    :param package: The package directory.
+    :param found: The archive already present under this identity, if any.
+    :param settings: Planning behaviour.
+
+    :return: The decision, or None when the package still needs inspecting.
+    """
+    if found is None:
+        return None
+    if settings.force:
+        return Decision(package, PENDING, found, reason="forced")
+    if settings.refresh and _source_is_newer(package, found):
+        return None
+    return Decision(package, EXPORTED, found)
 
 
 def _source_is_newer(package: Path, exported: Path) -> bool:

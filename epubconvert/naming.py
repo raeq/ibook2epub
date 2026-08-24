@@ -105,7 +105,7 @@ def truncate_bytes(text: str, limit: int) -> str:
     return encoded[:limit].decode("utf-8", errors="ignore")
 
 
-def _split_extension(name: str) -> tuple[str, str]:
+def split_extension(name: str) -> tuple[str, str]:
     """
     Split a filename into its stem and its extension.
 
@@ -163,7 +163,7 @@ def strip_unsafe(
 
     :return: A filename safe to write on any of the target filesystems.
     """
-    stem, extension = _split_extension(name)
+    stem, extension = split_extension(name)
     stem = _replace_illegal(stem, separator)
     extension = _replace_illegal(extension, separator)
 
@@ -296,7 +296,7 @@ class PortableNaming:
         already exported, so that book is re-converted on every run for ever.
         """
         assert disarm is not None  # noqa: S101 - guarded in __init__
-        stem, extension = _split_extension(package_name)
+        stem, extension = split_extension(package_name)
         cleaned = disarm.sanitize_filename(
             stem, separator=self.separator, platform=self.platform
         )
