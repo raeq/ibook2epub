@@ -216,8 +216,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
 
     print(format_summary(report, args.output_dir, args.dry_run, remaining))
-    logger.debug(
-        "Run finished: %d exported, %d failed", report.exported, report.failed
-    )
+    logger.debug("Run finished: %d exported, %d failed", report.exported, report.failed)
 
     return exit_code(report)

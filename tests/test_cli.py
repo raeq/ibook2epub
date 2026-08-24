@@ -171,9 +171,7 @@ class TestMain:
         assert "Exported 2" in capsys.readouterr().out
 
     def test_dry_run_touches_nothing(self, library, output_dir, capsys):
-        code = run.main(
-            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-d"]
-        )
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-d"])
 
         out = capsys.readouterr().out
         assert code == 0

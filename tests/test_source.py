@@ -124,9 +124,7 @@ class TestDrmDetection:
         locked = make_package(library, "Locked.epub")
         add_meta(locked, "META-INF/sinf.xml", "<sinf/>")
 
-        code = run.main(
-            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
-        )
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert code == 0
         assert [p.name for p in output_dir.glob("*.epub")] == ["Good.epub"]

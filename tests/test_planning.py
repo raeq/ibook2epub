@@ -156,9 +156,7 @@ class TestListing:
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
 
-        run.main(
-            ["-s", str(library), "-o", str(output_dir), "--list", "--json", "-q"]
-        )
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "--json", "-q"])
 
         payload = json.loads(capsys.readouterr().out)
         assert payload[0]["name"] == "Book.epub"
@@ -171,9 +169,7 @@ class TestListing:
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
         capsys.readouterr()
 
-        run.main(
-            ["-s", str(library), "-o", str(output_dir), "--list", "--json", "-q"]
-        )
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "--json", "-q"])
 
         payload = json.loads(capsys.readouterr().out)
         assert payload[0]["status"] == "exported"
@@ -250,7 +246,4 @@ class TestCountPending:
         )
 
         assert [d.status for d in decisions] == [planning.INCOMPLETE]
-        assert (
-            pending_count(packages, output_dir, PassthroughNaming(), options)
-            == 0
-        )
+        assert pending_count(packages, output_dir, PassthroughNaming(), options) == 0

@@ -269,9 +269,7 @@ class TestValidateDuringExport:
         target = output_dir / "Bad.epub"
 
         with pytest.raises(validate.ArchiveInvalidError):
-            zip_package(
-                source, target, validate.ValidationOptions(enabled=True)
-            )
+            zip_package(source, target, validate.ValidationOptions(enabled=True))
 
         # The whole point of validating before the replace: nothing lands, so
         # the book is retried rather than recorded as done.
@@ -301,9 +299,7 @@ class TestValidateDuringExport:
     def test_without_the_flag_the_bad_book_is_written(self, tmp_path, output_dir):
         _package_from_members(tmp_path / "lib" / "Bad.epub", drop="text/chapter1.xhtml")
 
-        run.main(
-            ["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-m", "0", "-q"]
-        )
+        run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert len(list(output_dir.glob("*.epub"))) == 1
 
@@ -314,9 +310,7 @@ class TestVerifyMode:
         source = tmp_path / "lib"
         source.mkdir()
 
-        code = run.main(
-            ["-s", str(source), "-o", str(output_dir), "--verify", "-q"]
-        )
+        code = run.main(["-s", str(source), "-o", str(output_dir), "--verify", "-q"])
 
         assert code == 0
         assert "0 damaged" in capsys.readouterr().out
@@ -327,9 +321,7 @@ class TestVerifyMode:
         source = tmp_path / "lib"
         source.mkdir()
 
-        code = run.main(
-            ["-s", str(source), "-o", str(output_dir), "--verify", "-q"]
-        )
+        code = run.main(["-s", str(source), "-o", str(output_dir), "--verify", "-q"])
 
         out = capsys.readouterr().out
         assert code == 1
@@ -339,9 +331,7 @@ class TestVerifyMode:
     def test_verify_converts_nothing(self, tmp_path, output_dir):
         _package_from_members(tmp_path / "lib" / "Book.epub")
 
-        run.main(
-            ["-s", str(tmp_path / "lib"), "-o", str(output_dir), "--verify", "-q"]
-        )
+        run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "--verify", "-q"])
 
         assert list(output_dir.glob("*.epub")) == []
 
