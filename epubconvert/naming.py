@@ -38,9 +38,12 @@ except ImportError:  # pragma: no cover - exercised by the no-extra install
 #: Platforms ``disarm.sanitize_filename`` knows how to target.
 Platform = Literal["universal", "windows", "posix"]
 
-#: Values accepted by ``--portable-names``.
-STRIP = "strip"
-ROMANIZE = "romanize"
+#: Values accepted by ``--portable-names``. Typed, like the planner's closed
+#: sets: as a bare str, ``build_policy("romanise")`` type-checked and fell
+#: silently through to the romanizing policy.
+PortableMode = Literal["strip", "romanize"]
+STRIP: PortableMode = "strip"
+ROMANIZE: PortableMode = "romanize"
 PORTABLE_MODES = (STRIP, ROMANIZE)
 
 PORTABLE_HINT = (
@@ -330,7 +333,7 @@ class PortableNaming:
         return disarm.catalog_key(filename)
 
 
-def build_policy(portable: str | None) -> NamingPolicy:
+def build_policy(portable: PortableMode | None) -> NamingPolicy:
     """
     Select a naming policy.
 

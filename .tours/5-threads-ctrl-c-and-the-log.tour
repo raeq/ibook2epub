@@ -15,7 +15,7 @@
       "title": "Why threads at all",
       "file": "README.md",
       "line": 62,
-      "pattern": "The time-consuming part of a conversion is compressing",
+      "pattern": "Each book is compressed in its own worker thread",
       "description": "`zlib` releases the GIL while compressing, so a thread pool gives genuine parallelism here rather than interleaving.\n\nThe measured surprise is in the next paragraph. On a cloud-backed library, compression is **not** the bottleneck: 50 books took 80 seconds at 8% CPU, almost all of it waiting on iCloud. That is why `--workers` above the CPU count often helps — the extra threads spend their time blocked rather than competing."
     },
     {

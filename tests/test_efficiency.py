@@ -12,6 +12,7 @@ really be written.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import asyncio
 import os
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
@@ -180,3 +181,35 @@ class TestFreeSpaceIsSampled:
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert calls["n"] < 8
+
+
+class TestTheProductionSeamIsCovered:
+    """plan -> cap -> export_planned is what main runs; test it directly."""
+
+    def test_planned_decisions_can_be_exported_without_the_wrapper(
+        self, tmp_path, output_dir
+    ):
+        # Regression (P9.6): both test helpers drove export_packages, which
+        # production stopped calling when _run_export began planning once
+        # itself, so the seam that replaced it had only end-to-end coverage.
+        library = tmp_path / "lib"
+        for index in range(3):
+            make_package(library, f"Book{index}.epub")
+        packages = archive.collect_package_dirs(library)
+
+        decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
+        selected = convert.cap_exports(decisions, 2, randomise=False)
+        report = asyncio.run(convert.export_planned(selected, output_dir))
+
+        assert convert.count_pending_decisions(decisions) == 3
+        assert report.exported == 2
+        assert len(list(output_dir.glob("*.epub"))) == 2
+
+    def test_the_wrapper_still_plans_then_exports(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        packages = archive.collect_package_dirs(library)
+
+        report = asyncio.run(convert.export_packages(packages, output_dir))
+
+        assert report.exported == 1

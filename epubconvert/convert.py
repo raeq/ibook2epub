@@ -217,7 +217,7 @@ async def export_packages(
     Plan a batch of packages and export them concurrently.
 
     Convenience wrapper for callers holding packages rather than a plan.
-    :func:`main` does not use it: it plans once itself, under the output lock,
+    :func:`epubconvert.run.main` does not use it: it plans once itself, under
     and calls :func:`export_planned`.
 
     Whether a book has already been exported is decided by its *identity*

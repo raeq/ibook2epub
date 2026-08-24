@@ -34,7 +34,13 @@ from .convert import (
     sweep_partials,
 )
 from .inspect_output import verify_output
-from .naming import STRIP, NamingPolicy, PortableNamesUnavailableError, build_policy
+from .naming import (
+    NamingPolicy,
+    PortableNamesUnavailableError,
+    PortableNaming,
+    StripNaming,
+    build_policy,
+)
 from .planning import PlanOptions, plan_exports, render_listing
 from .validate import ValidationOptions
 
@@ -52,9 +58,13 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
     else:
         logger.info("Examining source: %s", args.source_dir)
     logger.info("Writing output to: %s", args.output_dir)
-    if args.portable_names == STRIP:
+    # Keyed off the policy object rather than re-derived from the raw argument.
+    # Two independent statements of one fact drift apart the moment
+    # build_policy's mapping changes, and the debug line above is the one that
+    # would still be right.
+    if isinstance(policy, StripNaming):
         logger.info("Portable naming: stripping characters other filesystems reject.")
-    elif args.portable_names:
+    elif isinstance(policy, PortableNaming):
         logger.info(
             "Portable naming: romanizing (non-Latin titles are transliterated)."
         )
@@ -178,6 +188,9 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
             # is already complete and atomically in place, so a rerun simply
             # continues.
             report.interrupted = True
+            logger.warning(
+                "Interrupted; %d book(s) exported before stopping.", report.exported
+            )
 
     return report, max(0, pending_before - report.exported)
 
@@ -188,7 +201,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     :param argv: Argument list, defaulting to ``sys.argv[1:]``.
 
-    :return: A process exit code; non-zero if any export failed.
+    :return: A process exit code. 0 success; 1 an export failed, the output
+        directory could not be created, or --verify found damage; 2 portable
+        naming is unavailable or --verify was given a directory that is not
+        there; 3 another run holds the output lock; 130 interrupted.
     """
     args = parse_args(argv)
 
@@ -225,7 +241,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.critical("%s", exc)
         return 3
 
-    print(format_summary(report, args.output_dir, args.dry_run, remaining))
+    summary = format_summary(report, args.output_dir, args.dry_run, remaining)
+    print(summary)
+    # Also logged, so a --log-file transcript of an interrupted run is not
+    # indistinguishable from a complete one.
+    logger.info("%s", summary)
     logger.debug("Run finished: %d exported, %d failed", report.exported, report.failed)
 
     return exit_code(report)

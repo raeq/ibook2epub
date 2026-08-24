@@ -19,7 +19,7 @@ from .defaults import (
     discover_source,
 )
 from .naming import PORTABLE_MODES, STRIP
-from .planning import COLLISION_MODES, SKIP
+from .planning import COLLISION_MODES, SKIP, STATUSES
 from .validate import epubcheck_available
 
 
@@ -124,8 +124,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="list_only",
         help=(
-            "List every book with its status (pending, exported, collision, "
-            "drm, incomplete) and exit without converting anything."
+            f"List every book with its status ({', '.join(STATUSES)}) and "
+            "exit without converting anything."
         ),
     )
     parser.add_argument(

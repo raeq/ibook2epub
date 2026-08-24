@@ -28,6 +28,7 @@ ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 #: matches, and a bare ``*.part`` glob also matches a browser's in-progress
 #: download or a user's own file sitting in the output directory.
 PARTIAL_PREFIX = ".ibook2epub-"
+#: Appended to every temporary this tool writes.
 PARTIAL_SUFFIX = ".part"
 #: Deflate level for text members. Measured on a 3 MB book: level 9 costs 3.2x
 #: the CPU of level 6 for 0.6% less size, and bare zlib on the same text is
@@ -61,6 +62,10 @@ STORED_SUFFIXES = frozenset(
         ".gz",
     }
 )
+#: The permission bits recorded *inside* the zip for each member. Fixed rather
+#: than taken from the umask, because it is archive metadata and re-exports
+#: must stay byte-identical. What the exported file itself gets is a separate
+#: question, answered by :func:`_file_mode` from the user's umask.
 ARCHIVE_MODE = 0o644
 
 # Filesystem junk, never book content, so excluded wherever it appears.

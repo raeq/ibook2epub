@@ -71,7 +71,7 @@
       "title": "Two checks, because neither covers the other",
       "file": "epubconvert/validate.py",
       "line": 206,
-      "pattern": "def contained_file\\(package: Path, href: str\\) -> Path \\| None:",
+      "pattern": "def contained_file\\(",
       "description": "`escapes_archive` rejects the `../` and absolute paths. The resolved comparison on line 230 catches the other case: a symlink that sits inside the package but leads out of it.\n\nThis lives beside `escapes_archive` rather than beside its caller on purpose, so the containment rule is in one place. Any future reader that turns a manifest entry into a path on disk — fonts, thumbnails, metadata sidecars — should come through here rather than reinvent half of it."
     },
     {
@@ -113,7 +113,7 @@
       "title": "Everything the manifest promises",
       "file": "epubconvert/validate.py",
       "line": 429,
-      "pattern": "def _check_manifest\\(archive: ZipFile, package: Package\\) -> list\\[str\\]:",
+      "pattern": "def _check_manifest\\(members: set\\[str\\], package: Package\\) -> list\\[str\\]:",
       "description": "Manifest items must exist as members. Spine idrefs must exist in the manifest. Neither list may be empty.\n\nProblems are capped at five per category with an \"…and N more\" line, because a systematically broken book would otherwise print thousands."
     },
     {

@@ -65,7 +65,7 @@
       "title": "Choosing a naming policy",
       "file": "epubconvert/naming.py",
       "line": 275,
-      "pattern": "def build_policy\\(portable: str \\| None\\) -> NamingPolicy:",
+      "pattern": "def build_policy\\(portable: PortableMode \\| None\\) -> NamingPolicy:",
       "description": "The policy is picked once, before any work starts, and threaded through everything downstream. It answers two questions per book: what to call the file, and how to tell whether that book is already exported.\n\nDefault is `PassthroughNaming` — the package directory name, unchanged, no dependencies. Tour 4 takes this module apart."
     },
     {
@@ -128,7 +128,7 @@
       "title": "What makes it an epub and not a zip",
       "file": "epubconvert/archive.py",
       "line": 169,
-      "pattern": "archive\\.writestr\\(_entry\\(MIMETYPE_NAME, ZIP_STORED\\), MIMETYPE_CONTENT\\)",
+      "pattern": "archive\\.writestr\\(entry\\(MIMETYPE_NAME, ZIP_STORED\\), MIMETYPE_CONTENT\\)",
       "description": "Three requirements, all satisfied on this line and the loop below it:\n\n- `mimetype` is the **first** member\n- it is **stored**, not deflated\n- it contains exactly `application/epub+zip`\n\nThe package's own root `mimetype` is excluded from the copy loop (see `EXCLUDED_ROOT_NAMES`, line 39) precisely because it is rewritten here. Apple's bookkeeping — `*.plist`, anything starting `bookmarks` — is dropped too, but **only at the root**. A chapter named `bookmarks.xhtml` deeper in the tree is real content."
     },
     {

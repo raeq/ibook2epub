@@ -36,6 +36,9 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
 #: comparison from passing the type checker.
 Status = Literal["pending", "exported", "collision", "drm", "incomplete"]
 
+#: The :class:`~epubconvert.convert.Report` fields the outcome table may bump.
+ReportField = Literal["skipped", "collisions", "drm", "incomplete"]
+
 #: Decision statuses. Each constant's value is what a user sees.
 PENDING: Status = "pending"
 EXPORTED: Status = "exported"
@@ -48,6 +51,12 @@ CollisionMode = Literal["skip", "suffix"]
 SKIP: CollisionMode = "skip"
 SUFFIX: CollisionMode = "suffix"
 COLLISION_MODES = (SKIP, SUFFIX)
+
+#: Every status, in the order --list documents them. Exported so the CLI help
+#: can name them without restating the set: Status's own docstring calls that
+#: help part of the contract, and a sixth status would otherwise leave it wrong
+#: with nothing to catch it.
+STATUSES: tuple[Status, ...] = (PENDING, EXPORTED, COLLISION, DRM, INCOMPLETE)
 
 #: Highest ``" (n)"`` suffix the planner will try before giving up on a name.
 MAX_SUFFIX = 99
@@ -334,7 +343,11 @@ class _Outcome:
     """How one non-pending status is counted and reported."""
 
     #: Name of the :class:`~epubconvert.convert.Report` field to increment.
-    counter: str
+    #: Narrowed to a Literal because the table drives a setattr, which turned a
+    #: type-checked ``report.drm += 1`` into a string the checker cannot see:
+    #: renaming a Report field would have broken this at runtime with mypy,
+    #: ruff and pylint all silent.
+    counter: ReportField
     #: Whether the per-book line is a warning rather than information.
     warn: bool
     #: Format string for the per-book line. Every entry uses the same two
@@ -389,9 +402,12 @@ def record_decisions(decisions: Sequence[Decision], report: Report) -> None:
     :param report: Report to accumulate counts into.
     """
     for decision in decisions:
-        outcome = _OUTCOMES.get(decision.status)
-        if outcome is None:  # PENDING, which the exporter counts for itself.
+        if decision.status == PENDING:
+            # Counted by the exporter as it writes, so counting here doubles it.
             continue
+        # Indexed, not .get(): a sixth status should raise here in the tests
+        # rather than disappear silently from the report and the tallies.
+        outcome = _OUTCOMES[decision.status]
 
         setattr(report, outcome.counter, getattr(report, outcome.counter) + 1)
         log = logger.warning if outcome.warn else logger.info
@@ -400,10 +416,14 @@ def record_decisions(decisions: Sequence[Decision], report: Report) -> None:
             {"name": printable(decision.package.name), "reason": decision.reason},
         )
 
-    for outcome in _OUTCOMES.values():
-        count = getattr(report, outcome.counter)
-        if count:
-            (logger.warning if outcome.warn else logger.info)(outcome.tally, count)
+    # Counted from the decisions in hand rather than from the report, which
+    # export_planned documents as something a caller may accumulate across
+    # calls -- so a second call logged the running total as this batch's tally.
+    seen = Counter(decision.status for decision in decisions)
+    for status, outcome in _OUTCOMES.items():
+        if seen[status]:
+            log = logger.warning if outcome.warn else logger.info
+            log(outcome.tally, seen[status])
 
 
 def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:

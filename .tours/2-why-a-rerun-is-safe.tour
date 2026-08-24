@@ -29,7 +29,7 @@
       "title": "Already exported?",
       "file": "epubconvert/planning.py",
       "line": 219,
-      "pattern": "if found is not None and not settings\\.force:",
+      "pattern": "settled = _decide_against_existing\\(package, found, settings\\)",
       "description": "The gate. Found under the same identity and not forced, so the book is done — unless `--refresh` says the source has moved on.\n\nThe comment above it matters for speed: this is settled **before** the package is inspected. An already-exported book needs no source walk, and without this order `--skip-incomplete` would pay for one on every book of the library on every rerun."
     },
     {

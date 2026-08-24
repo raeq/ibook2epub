@@ -223,7 +223,7 @@ def contained_file(package: Path, href: str, root: Path | None = None) -> Path |
     :return: The file to read, or None if there is nothing safe to read.
     """
     if escapes_archive(href):
-        logger.debug("%r escapes the package %s", href, package.name)
+        logger.trace("%r escapes the package %s", href, package.name)
         return None
 
     # The caller may already hold the resolved root; it does not change across
@@ -236,10 +236,10 @@ def contained_file(package: Path, href: str, root: Path | None = None) -> Path |
         # A NUL byte in the href, or a resolve on a broken mount. The
         # documented contract is "None if there is nothing safe to read", and
         # this function invites callers who will not expect a raise.
-        logger.debug("%r could not be resolved inside %s", href, package.name)
+        logger.trace("%r could not be resolved inside %s", href, package.name)
         return None
     if not inside:
-        logger.debug("%r resolves outside the package %s", href, package.name)
+        logger.trace("%r resolves outside the package %s", href, package.name)
         return None
 
     return source if source.is_file() else None

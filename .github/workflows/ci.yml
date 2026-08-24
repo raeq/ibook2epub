@@ -2,9 +2,16 @@ name: CI
 
 on: [push, pull_request]
 
+# Stated rather than inherited. CI runs a pull request's own build backend via
+# `pip install -e ".[dev]"`, so the token it holds should be the minimum, and
+# should not change because a repository default did.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v7
     - name: Set up Python
@@ -22,10 +29,11 @@ jobs:
     - name: Mypy
       run: mypy
     - name: Pylint
-      run: pylint --fail-under=8.0 $(git ls-files '*.py')
+      run: pylint epubconvert tests
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:

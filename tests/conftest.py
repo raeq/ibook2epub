@@ -14,13 +14,19 @@ module, so this map saves a search:
                              (``inspect_output.verify_output``)
 ``test_planning.py``         ``planning``: collisions, refresh, the listings
 ``test_naming.py``           ``naming``, and identity round trips
-``test_cli.py``              ``cli`` argument parsing and ``run.main``
+``test_cli.py``              ``cli`` parsing, ``run.main``, ``app_logger``
+                             levels and ``defaults`` values
 ``test_options.py``          individual flags, the run lock, remaining counts
 ``test_source.py``           ``source``: DRM and iCloud stub detection
 ===========================  ==================================================
 
-``app_logger``, ``defaults`` and ``spec`` are exercised through the modules
-that use them rather than directly.
+``test_integrity.py``        the guarantees that keep the output directory
+                             trustworthy
+``test_hardening.py``        untrusted input and hostile filesystems
+``test_efficiency.py``       work done per book, and work declined
+===========================  ==================================================
+
+``spec`` is exercised through the modules that use it rather than directly.
 """
 
 from pathlib import Path

@@ -22,7 +22,7 @@
       "title": "The trap: split before you clean",
       "file": "epubconvert/naming.py",
       "line": 83,
-      "pattern": "def _split_extension\\(name: str\\) -> tuple\\[str, str\\]:",
+      "pattern": "def split_extension\\(name: str\\) -> tuple\\[str, str\\]:",
       "description": "This function exists because of a real, silent, self-perpetuating bug. Read the docstring in full.\n\nCleaning the whole name and splitting afterwards lets the trailing-dot strip eat the dot separating the extension, whenever the stem cleans away to nothing. A book titled `?` gives `?.epub` → `.epub` → `epub`.\n\nThat name has no extension for the `*.epub` glob to match. So the output directory stops recognising the book as exported, and every rerun exports it again — for ever, with the whole test suite passing throughout.\n\nThe general lesson: name the component a cleanup targets, and apply it to that component alone."
     },
     {
@@ -50,7 +50,7 @@
       "title": "Budget arithmetic",
       "file": "epubconvert/naming.py",
       "line": 158,
-      "pattern": "    budget = max_bytes - len\\(extension\\.encode\\(\"utf-8\"\\)\\)",
+      "pattern": "    budget = max_bytes - len\\(_encode\\(extension\\)\\)",
       "description": "The extension is reserved first, then the stem gets what is left, then a trailing dot or space exposed by the cut is stripped again — falling back to `_` rather than to nothing.\n\nThe `budget < 1` branch is the degenerate case: an extension that alone exceeds the limit leaves nothing worth preserving, so the whole name is clamped and the loss accepted."
     },
     {
@@ -71,21 +71,21 @@
       "title": "Collision candidates",
       "file": "epubconvert/planning.py",
       "line": 70,
-      "pattern": "def _suffixed\\(filename: str, position: int, max_bytes: int\\) -> str:",
+      "pattern": "def suffixed\\(filename: str, position: int, max_bytes: int\\) -> str:",
       "description": "Position 1 is the name itself; 2 upward append ` (2)`, ` (3)` and so on, up to `MAX_SUFFIX`.\n\nThe suffix is applied **within** the policy's byte budget. Appending to a name already at the limit would push it over, and the export would fail at the closing rename with a filesystem error rather than a name collision — a confusing way to learn that two books share a title.\n\nA policy declaring no budget is left alone, for the reason in the previous step."
     },
     {
       "title": "Deterministic assignment, and its limit",
       "file": "epubconvert/planning.py",
       "line": 102,
-      "pattern": "def _assign_names\\(",
+      "pattern": "def assign_names\\(",
       "description": "Names are assigned walking the packages in **sorted** order rather than selection order, so the same set of packages always produces the same names regardless of shuffling.\n\nThe docstring is unusually frank about what that guarantee is not. Suffixes are positions within a colliding group, so adding a book that sorts earlier shifts every later member of that group, and `--max-export-files` selecting a different subset changes the group.\n\nThe real fix — identity keyed on the package document's `dc:identifier` — is named, along with why it is not here: it needs a record of which archive belongs to which package, and this tool keeps no state file. Until then, `--on-collision suffix` is best used with `-m 0 --no-shuffle`."
     },
     {
       "title": "A losing collision is not an error",
       "file": "epubconvert/planning.py",
       "line": 143,
-      "pattern": "        else:\n            assigned\\.append\\(\\(package, \"\", policy\\.identity\\(wanted\\)\\)\\)",
+      "pattern": "claims\\.exhaust\\(group, limit\\)",
       "description": "An empty filename marks a package that lost. Under `--on-collision skip` that is anything after the first claimant; under `suffix` it takes 99 colliding books to get here.\n\n`_decide` turns it into a `collision` decision with a reason, which is reported and counted, never written."
     },
     {

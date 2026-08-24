@@ -59,16 +59,27 @@ with `python3 -m epubconvert`, without installing it.
 
 ## Performance
 
-The time-consuming part of a conversion is compressing a book's files. Each
-book is compressed in its own worker thread, so books are converted in parallel;
-`zlib` releases the GIL while compressing, so this is genuine parallelism rather
-than interleaving. The asyncio layer on top gathers the results and keeps one
-book's failure from taking down the rest of the run.
+Each book is compressed in its own worker thread, so books are converted in
+parallel; `zlib` releases the GIL while compressing, so this is genuine
+parallelism rather than interleaving. The asyncio layer on top gathers the
+results and keeps one book's failure from taking down the rest of the run.
 
 On a cloud-backed library the bottleneck is usually **not** compression. A
 measured run of 50 books took 80 seconds at 8% CPU — almost all of it waiting
-on iCloud. Raising `--workers` above the CPU-derived default helps there, since
-the extra threads spend their time blocked rather than competing.
+on iCloud. The pool is sized for that: it defaults to four times the CPU count,
+capped at 64, rather than to the CPU-derived figure a thread pool normally
+picks. Under a model of that iCloud stall, 14 threads took 19.2 s where 64 took
+4.76 s, and the cost of the larger pool on a purely local library was 6%.
+
+Two smaller choices follow from measurement rather than intuition. Members are
+deflated at zlib's default level 6: level 9 measured 3.2× the CPU for 0.6% less
+size on a real book. Members that are already entropy-coded — JPEG, PNG, fonts
+— are stored rather than deflated, which measured 3.8× faster for 0.02% more
+size. Both rules depend only on the filename, so exports stay byte-identical.
+
+`--validate` is cheaper than it looks: the archive it re-reads is still in the
+page cache, and inflating is far cheaper than deflating, so it measured about
+7% on top of a run rather than doubling it.
 
 ## Safety
 
@@ -103,9 +114,12 @@ killed run is inert and needs no cleanup.
 ### Command Line
 
 ```text
-usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d] [--version]
-                  [-f] [--match PATTERN] [-w N] [-p [MODE]] [--no-shuffle]
-                  [-v] [-q] [--log-file PATH]
+usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
+                  [--version] [-f] [--match PATTERN] [-w N] [-p [MODE]]
+                  [--list] [--json] [--refresh] [--skip-incomplete]
+                  [--on-collision {skip,suffix}] [--min-free MB] [--covers]
+                  [--validate] [--epubcheck] [--verify] [--no-shuffle] [-v]
+                  [-q] [--log-file PATH]
 
 Convert Apple iBooks epub packages to zipped epub files.
 
@@ -124,15 +138,17 @@ options:
   -d, --dry-run         Report what would be exported without writing
                         anything.
   --version             show program's version number and exit
-  -f, --force           Re-export books even if they are already in the output
-                        directory.
+  -f, --force           Re-export books even if they are already in the
+                        output directory.
   --match PATTERN       Only convert books whose name matches PATTERN. A
                         pattern without wildcards matches anywhere in the
                         name, so --match hobbit finds 'The Hobbit.epub';
                         otherwise it is a glob. Case-insensitive.
-  -w, --workers N       Number of compression threads. The work is I/O bound
-                        on a cloud library, so a value above the CPU count
-                        often helps.
+  -w, --workers N       Number of compression threads (default: 4x the CPU
+                        count, capped at 64). The work blocks on iCloud
+                        rather than on the CPU, so raising this well past the
+                        CPU count is what helps; 48-64 is reasonable for a
+                        cloud library.
   -p, --portable-names [MODE]
                         Rewrite output names so they survive a copy to
                         Windows, exFAT or a Kindle. 'strip' (the default when
@@ -142,8 +158,42 @@ options:
                         folds accents when deciding whether a book is already
                         exported, and needs the 'disarm' extra. Either mode
                         renames books an earlier run already exported.
-  --no-shuffle          Take the first N packages in sorted order instead of a
-                        random selection when --max-export-files applies.
+  --list                List every book with its status (pending, exported,
+                        collision, drm, incomplete) and exit without
+                        converting anything.
+  --json                With --list, emit machine-readable JSON instead of a
+                        table.
+  --refresh             Re-export a book when its source directory is newer
+                        than the exported file. Compares directory
+                        timestamps, so a book re-downloaded in place may not
+                        be noticed; use --force for that.
+  --skip-incomplete     Skip books iCloud has not downloaded, which would
+                        otherwise export as empty files. Requires walking
+                        every package, which is slow on a cloud library, so
+                        it is off by default.
+  --on-collision {skip,suffix}
+                        What to do when two books want the same output name:
+                        'skip' exports only the first, 'suffix' keeps both by
+                        appending ' (2)'.
+  --min-free MB         Stop before the output volume drops below this many
+                        megabytes, default=128. 0 disables the check. Useful
+                        when writing to an SD card or a Kindle.
+  --covers              Also write each book's cover image beside its epub
+                        file.
+  --validate            Check each archive before it is moved into place: zip
+                        integrity, the mimetype entry, and that every file
+                        the package document lists is really present. A book
+                        that fails is not written, so it is retried on the
+                        next run.
+  --epubcheck           Also run the external 'epubcheck' tool on each
+                        archive. Implies --validate and requires epubcheck on
+                        PATH.
+  --verify              Check the archives already in the output directory
+                        and report any that are damaged, then exit without
+                        converting anything.
+  --no-shuffle          Take the first N books still needing export, in
+                        sorted order, instead of a random selection when
+                        --max-export-files applies.
   -v, --verbose         Increase log verbosity; -v for debug, -vv for trace.
   -q, --quiet           Only log warnings and errors.
   --log-file PATH       Also write log records to this file.

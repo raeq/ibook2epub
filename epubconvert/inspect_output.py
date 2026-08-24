@@ -1,5 +1,5 @@
 """
-Looking at the output directory rather than writing to it.
+Reading the output directory, and writing beside it.
 
 Writing the output directory is not the same as trusting it. Two of these
 operations read it back: checking that exported archives are still sound, and
