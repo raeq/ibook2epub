@@ -1,0 +1,156 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "1. The Round Trip",
+  "description": "One book, end to end: from `python -m epubconvert` to a spec-valid archive on disk. Start here.",
+  "isPrimary": true,
+  "nextTour": "2. Why a Rerun Is Safe",
+  "steps": [
+    {
+      "title": "The problem",
+      "file": "README.md",
+      "line": 10,
+      "pattern": "On macOS, Books\\.app stores each book as a bare",
+      "description": "Books.app keeps every book as a **directory** ending in `.epub`, not as an archive. Readers expect a zip. Copying the folder out of the library gets you something no Kindle, Kobo or Calibre will open.\n\nThe whole tool is one sentence long: walk the library, zip each package the way the epub specification demands, and never lose track of which books are already done.\n\nThere are no runtime dependencies. Everything you are about to read is standard library."
+    },
+    {
+      "title": "The constants both halves must agree on",
+      "file": "epubconvert/spec.py",
+      "line": 13,
+      "pattern": "MIMETYPE_NAME = \"mimetype\"",
+      "description": "Four constants, in their own module, for one reason: the **writer** and the **validator** must agree about them by construction.\n\nIf each held its own copy, correcting one would leave the other agreeing only with itself — a writer emitting a value its own validator rejects on every archive it produces, or a wrong value the validator happily blesses. Read the module docstring above; it is the whole argument.\n\n`PACKAGE_SUFFIX` (`.epub`) does double duty: it is the extension of an Apple package *directory* and of the archive that comes out. Every glob in the tool leans on that."
+    },
+    {
+      "title": "Entry point",
+      "file": "epubconvert/__main__.py",
+      "line": 5,
+      "pattern": "from \\.run import main",
+      "description": "`python -m epubconvert` lands here, and hands straight to `run.main`."
+    },
+    {
+      "title": "The other entry point",
+      "file": "pyproject.toml",
+      "line": 46,
+      "pattern": "ibook2epub = \"epubconvert\\.run:main\"",
+      "description": "The installed `ibook2epub` command resolves to the same function. Two doors, one room.\n\nIf you ever move `main`, this line and the previous step both need to follow it."
+    },
+    {
+      "title": "main()",
+      "file": "epubconvert/run.py",
+      "line": 175,
+      "pattern": "def main\\(argv: Sequence\\[str\\] \\| None = None\\) -> int:",
+      "description": "The shape of a run, in the order it happens:\n\n1. parse arguments\n2. configure logging\n3. build the naming policy — this can fail with exit code `2`\n4. say what is about to happen\n5. take the `--list` or `--verify` branch and stop, if asked\n6. create the output directory\n7. export, under the output lock — a second concurrent run exits `3`\n8. print the summary and return an exit code\n\nNote the comment on line 196: `--list` and `--verify` only read, so neither is allowed to create the output directory. A typo in `-o` should produce a report about the directory you meant, not a new empty one."
+    },
+    {
+      "title": "The command line surface",
+      "file": "epubconvert/cli.py",
+      "line": 26,
+      "pattern": "def build_parser\\(\\) -> argparse\\.ArgumentParser:",
+      "description": "Every flag lives in this one function, kept away from the conversion logic because argument definitions are long and change often.\n\nWorth reading in full at least once — the help text is where a lot of the design reasoning surfaced first. `--portable-names` (line 102) takes an optional value, so `-p` alone means `strip`. `--epubcheck` (line 188) implies `--validate`."
+    },
+    {
+      "title": "Two guard rails, before anything runs",
+      "file": "epubconvert/cli.py",
+      "line": 269,
+      "pattern": "source = args\\.source_dir\\.resolve\\(\\)",
+      "description": "`parse_args` does more than parse. It rejects an output directory that sits **inside** the source tree, because writing there pollutes the next run: temporary files land mid-scan, and finished exports start looking like source packages to `collect_package_dirs`.\n\nJust above, line 264 skips the source-directory check when `--verify` is given. Checking a shelf of exported books should not require owning an iBooks library."
+    },
+    {
+      "title": "Where books come from",
+      "file": "epubconvert/defaults.py",
+      "line": 30,
+      "pattern": "def discover_source\\(\\) -> Path:",
+      "description": "Apple has moved the library between releases, so both known homes are probed. A candidate that actually *contains* packages wins; failing that, one that at least exists.\n\nA single hardcoded default was the earlier behaviour, and it reported an empty library on any machine using the other location."
+    },
+    {
+      "title": "Choosing a naming policy",
+      "file": "epubconvert/naming.py",
+      "line": 275,
+      "pattern": "def build_policy\\(portable: str \\| None\\) -> NamingPolicy:",
+      "description": "The policy is picked once, before any work starts, and threaded through everything downstream. It answers two questions per book: what to call the file, and how to tell whether that book is already exported.\n\nDefault is `PassthroughNaming` — the package directory name, unchanged, no dependencies. Tour 4 takes this module apart."
+    },
+    {
+      "title": "Collect, then narrow",
+      "file": "epubconvert/run.py",
+      "line": 124,
+      "pattern": "    packages = filter_packages\\(collect_package_dirs\\(args\\.source_dir\\), args\\.match\\)\n    if not packages:",
+      "description": "Find every package under the source directory, then keep the ones matching `--match`. The same pair of calls opens `_run_listing` at line 76, so `--list` describes exactly the library a real run would see."
+    },
+    {
+      "title": "Finding the packages",
+      "file": "epubconvert/archive.py",
+      "line": 69,
+      "pattern": "def collect_package_dirs\\(source_dir: Path\\) -> list\\[Path\\]:",
+      "description": "An `os.walk` that stops descending the moment it recognises a package (line 93), so files *inside* a book can never be mistaken for books themselves.\n\nTwo details worth keeping:\n\n- `on_error` is supplied because `os.walk` swallows `scandir` failures silently otherwise. An unreadable directory should produce a warning, not a shorter list.\n- Results are full paths. An earlier version returned bare directory names and broke on any package that was not a direct child of the source directory."
+    },
+    {
+      "title": "--match",
+      "file": "epubconvert/convert.py",
+      "line": 296,
+      "pattern": "def filter_packages\\(packages: Sequence\\[Path\\], pattern: str \\| None\\) -> list\\[Path\\]:",
+      "description": "A pattern with no glob metacharacter gets wrapped in `*…*`, so `--match hobbit` finds `The Hobbit.epub`. Anything containing `*`, `?` or `[` is passed to `fnmatch` as written. Case-insensitive either way."
+    },
+    {
+      "title": "Deciding, before doing",
+      "file": "epubconvert/planning.py",
+      "line": 149,
+      "pattern": "def plan_exports\\(",
+      "description": "The planner produces one `Decision` per package — `pending`, `exported`, `collision`, `drm` or `incomplete` — and writes nothing.\n\nThat separation is what lets `--list` show you the same decisions the exporter will act on. It is also where rerun safety lives, which is tour 2."
+    },
+    {
+      "title": "--max-export-files",
+      "file": "epubconvert/convert.py",
+      "line": 400,
+      "pattern": "def cap_exports\\(",
+      "description": "The cap applies to the **pending** decisions, not to the library.\n\nThe docstring records why. Capping the library let the cap land on books already exported: `-m 3 --no-shuffle` on a shelf whose first three books were done exported nothing, reported work remaining, and did the same on every rerun. Shuffling hid the stall behind random progress rather than fixing it.\n\nNon-pending decisions are all kept (line 442), so the summary still counts the whole library's skipped and protected books."
+    },
+    {
+      "title": "Running the plan",
+      "file": "epubconvert/convert.py",
+      "line": 219,
+      "pattern": "async def export_planned\\(",
+      "description": "Folds the non-pending decisions into the report, collects the pending ones, and — unless this is a dry run — gathers them across a thread pool.\n\n`export_packages` just above (line 172) is the convenience wrapper for callers holding packages rather than a plan. `main` deliberately does not use it: it plans once itself, inside the lock."
+    },
+    {
+      "title": "One book, one thread",
+      "file": "epubconvert/convert.py",
+      "line": 147,
+      "pattern": "async def _export_one\\(",
+      "description": "Compression is blocking work, so each book goes to `run_in_executor`. `zlib` releases the GIL while deflating, which makes this real parallelism rather than interleaving.\n\nTour 5 covers what happens to all this on Ctrl-C."
+    },
+    {
+      "title": "Writing the archive",
+      "file": "epubconvert/archive.py",
+      "line": 125,
+      "pattern": "def zip_package\\(",
+      "description": "The core of the tool, and it is short.\n\nBuild to a temporary file with `mkstemp` in the destination directory, write `mimetype` first and stored, deflate everything else, validate if asked, then `replace()` into place. Any exception at all unlinks the temporary on the way out (line 189).\n\nRead the comment at line 150 for why the temporary name is *not* derived from the target."
+    },
+    {
+      "title": "What makes it an epub and not a zip",
+      "file": "epubconvert/archive.py",
+      "line": 169,
+      "pattern": "archive\\.writestr\\(_entry\\(MIMETYPE_NAME, ZIP_STORED\\), MIMETYPE_CONTENT\\)",
+      "description": "Three requirements, all satisfied on this line and the loop below it:\n\n- `mimetype` is the **first** member\n- it is **stored**, not deflated\n- it contains exactly `application/epub+zip`\n\nThe package's own root `mimetype` is excluded from the copy loop (see `EXCLUDED_ROOT_NAMES`, line 39) precisely because it is rewritten here. Apple's bookkeeping — `*.plist`, anything starting `bookmarks` — is dropped too, but **only at the root**. A chapter named `bookmarks.xhtml` deeper in the tree is real content."
+    },
+    {
+      "title": "The summary line",
+      "file": "epubconvert/convert.py",
+      "line": 480,
+      "pattern": "def format_summary\\(",
+      "description": "Assembled from the `Report` dataclass at line 67. Each optional clause appears only when its count is non-zero, so a clean run prints one short sentence and a messy one prints why."
+    },
+    {
+      "title": "Exit codes",
+      "file": "epubconvert/convert.py",
+      "line": 555,
+      "pattern": "def exit_code\\(report: Report\\) -> int:",
+      "description": "`130` interrupted, `1` something failed or the run could not proceed, `0` otherwise. Two more are returned directly from `run.main`: `2` for portable naming without `disarm`, `3` for a locked output directory.\n\nThat is the round trip. Tour 2 asks the harder question: how does the next run know what this one finished?"
+    },
+    {
+      "title": "Version",
+      "file": "epubconvert/__init__.py",
+      "line": 3,
+      "pattern": "__version__ = ",
+      "description": "The single source of the version string. `cli.py` imports it for `--version`, `pyproject.toml` carries its own copy for the package metadata — keep the two in step when releasing."
+    }
+  ]
+}

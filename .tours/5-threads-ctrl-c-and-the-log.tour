@@ -1,0 +1,113 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "5. Threads, Ctrl-C and the Log",
+  "description": "Where the concurrency lives, why the bookkeeping happens in the worker thread, and what an interrupted run is allowed to claim.",
+  "nextTour": "6. The Test Suite and the Toolchain",
+  "steps": [
+    {
+      "title": "What this module owns",
+      "file": "epubconvert/convert.py",
+      "line": 2,
+      "pattern": "Exporting a batch of packages: concurrency, bookkeeping and the output lock",
+      "description": "`archive` writes one book. `planning` decides which books to write. This module runs the writes: a thread pool, a shared `Report` the workers update under a lock, the output lock, and the arithmetic that turns the result into a summary line and an exit code.\n\nThe last paragraph is the thesis of this tour."
+    },
+    {
+      "title": "Why threads at all",
+      "file": "README.md",
+      "line": 62,
+      "pattern": "The time-consuming part of a conversion is compressing",
+      "description": "`zlib` releases the GIL while compressing, so a thread pool gives genuine parallelism here rather than interleaving.\n\nThe measured surprise is in the next paragraph. On a cloud-backed library, compression is **not** the bottleneck: 50 books took 80 seconds at 8% CPU, almost all of it waiting on iCloud. That is why `--workers` above the CPU count often helps — the extra threads spend their time blocked rather than competing."
+    },
+    {
+      "title": "One lock, two shared objects",
+      "file": "epubconvert/convert.py",
+      "line": 82,
+      "pattern": "#: Guards the shared Report and progress counter",
+      "description": "The `Report` dataclass and the `_Progress` counter are both mutated from worker threads. Neither is atomic, and `_Progress.tick` is a read-modify-write.\n\nEvery update in `_zip_and_record` takes this lock, and the marker string is computed **inside** it so the `[n/total]` prefixes come out in order."
+    },
+    {
+      "title": "The reason the bookkeeping is here",
+      "file": "epubconvert/convert.py",
+      "line": 109,
+      "pattern": "The bookkeeping deliberately happens here rather than in the awaiting",
+      "description": "The one design decision in this module that is not obvious.\n\nOn Ctrl-C the event loop is torn down and the awaiting coroutines never resume. Count there and a book gets reported as not exported while its file is already atomically in place — the summary would understate what is on disk, and the user would be told to rerun work that was finished.\n\nRecording in the same thread that did the work keeps the summary consistent with the directory."
+    },
+    {
+      "title": "The hand-off",
+      "file": "epubconvert/convert.py",
+      "line": 166,
+      "pattern": "    loop = asyncio\\.get_running_loop\\(\\)",
+      "description": "`_export_one` is the entire asyncio layer: get the loop, push the blocking function into the pool, await it.\n\nasyncio is here to gather results and keep one book's failure from taking down the rest of the run. The work itself is threads."
+    },
+    {
+      "title": "Fan out",
+      "file": "epubconvert/convert.py",
+      "line": 274,
+      "pattern": "    progress = _Progress\\(len\\(pending\\)\\)",
+      "description": "One `_export_one` per pending book, all gathered. `max_workers=None` lets `ThreadPoolExecutor` pick from the CPU count; `--workers` overrides it.\n\n`thread_name_prefix=\"zip\"` is a small kindness in a stack trace."
+    },
+    {
+      "title": "Shutting down mid-run",
+      "file": "epubconvert/convert.py",
+      "line": 285,
+      "pattern": "    finally:\n        # cancel_futures drops books that have not started",
+      "description": "The two arguments pull in opposite directions and both are deliberate.\n\n`cancel_futures=True` drops books that have not started, so an interrupt does not wait for the whole queued backlog. `wait=True` still joins the handful already being written: they finish, replace atomically, and record themselves.\n\nThat combination is what makes the summary honest about what is on disk."
+    },
+    {
+      "title": "Ctrl-C is a normal way to stop",
+      "file": "epubconvert/run.py",
+      "line": 166,
+      "pattern": "        except KeyboardInterrupt:",
+      "description": "Not an error path — a supported one. Every finished book is already complete and atomically in place, so a rerun simply continues.\n\nThe `Report` is created before the lock (line 137) rather than inside the exporter, precisely so the partial counts survive this."
+    },
+    {
+      "title": "130",
+      "file": "epubconvert/convert.py",
+      "line": 564,
+      "pattern": "    if report\\.interrupted:\n        return 130",
+      "description": "The conventional exit code for termination by SIGINT. It takes priority over the failure check below it: an interrupted run reports as interrupted, not as failed."
+    },
+    {
+      "title": "Nothing attempted, nothing failed",
+      "file": "epubconvert/convert.py",
+      "line": 267,
+      "pattern": "    if not _has_room\\(output_dir, run\\.min_free_mb\\):",
+      "description": "A distinction worth copying elsewhere. When the volume is already below `--min-free`, no book is attempted — so `report.aborted` is set rather than `report.failed`.\n\nCounting these as failures would claim work that never started. `exit_code` still returns `1` for it, because the run genuinely did not do its job."
+    },
+    {
+      "title": "The floor, checked twice",
+      "file": "epubconvert/convert.py",
+      "line": 531,
+      "pattern": "def _has_room\\(output_dir: Path, min_free_mb: int\\) -> bool:",
+      "description": "Once before the pool starts, and again inside every worker before it writes (line 121). A long run over a large library can cross the floor halfway through, and the per-book check is what stops it filling the volume.\n\nThat second call reports a **failed** book rather than an aborted run, which is the honest reading: that book was attempted."
+    },
+    {
+      "title": "Importing must not create files",
+      "file": "epubconvert/app_logger.py",
+      "line": 4,
+      "pattern": "Importing this module has no side effects beyond registering a custom TRACE",
+      "description": "Handlers are attached only when `configure` is called. Anything else sprays an `app.log` into whatever directory a test happened to run from."
+    },
+    {
+      "title": "A level below DEBUG",
+      "file": "epubconvert/app_logger.py",
+      "line": 20,
+      "pattern": "class TraceLogger\\(logging\\.Logger\\):",
+      "description": "`TRACE` is 5 — below `DEBUG` — for per-file messages like \"Excluded from archive\", which are useful on one book and unreadable across a library.\n\n`-v` is debug, `-vv` is trace, `-q` is warnings and errors only. `level_for_verbosity` clamps rather than raising, so `-vvvvv` is fine."
+    },
+    {
+      "title": "Borrowing the logger class politely",
+      "file": "epubconvert/app_logger.py",
+      "line": 29,
+      "pattern": "# Register the subclass only for the duration of our own getLogger call",
+      "description": "`logging.setLoggerClass` is process-global. Set it and leave it, and every library in the process that calls `getLogger` afterwards gets your subclass.\n\nSo the previous class is saved, the package logger is created, and the class is put back. Three lines, and the process is left as it was found."
+    },
+    {
+      "title": "configure()",
+      "file": "epubconvert/app_logger.py",
+      "line": 60,
+      "pattern": "def configure\\(verbosity: int = 1, log_file: Path \\| None = None\\) -> TraceLogger:",
+      "description": "Existing handlers are removed and closed first, so calling this twice replaces rather than duplicates — which is what makes it safe from tests.\n\nThe file format uses ISO 8601 with a UTC offset: it sorts lexicographically and is unambiguous across timezones, unlike the 12-hour local clock a default format would give you."
+    }
+  ]
+}

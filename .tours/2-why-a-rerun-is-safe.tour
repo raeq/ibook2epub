@@ -1,0 +1,120 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "2. Why a Rerun Is Safe",
+  "description": "There is no state file. The output directory is the only record of finished work — this tour follows every rule that keeps that record honest.",
+  "nextTour": "3. Trust Nothing You Read",
+  "steps": [
+    {
+      "title": "The claim",
+      "file": "epubconvert/planning.py",
+      "line": 4,
+      "pattern": "Planning is kept separate from exporting so that ``--list`` can render",
+      "description": "The invariant this whole tour defends:\n\n> identity is recomputed from the filenames already in the output directory, which is why this tool needs no state file.\n\nEvery rule that follows exists to keep that true. Break any one of them and the tool either re-converts a book on every run for ever, or records work it did not finish."
+    },
+    {
+      "title": "Identity comes from the output name",
+      "file": "epubconvert/naming.py",
+      "line": 22,
+      "pattern": "The identity is deliberately derived from the \\*sanitized filename\\*",
+      "description": "The subtle half. Identity is derived from the **sanitized filename**, not from the source directory name.\n\nThat is what makes the round trip work: the identity of an already-exported book can be recomputed by reading its filename back off the disk. Derive identity from the source name instead and you would need a mapping from source to output — a state file by another name."
+    },
+    {
+      "title": "Reading the record",
+      "file": "epubconvert/planning.py",
+      "line": 172,
+      "pattern": "    existing = \\{\n        policy\\.identity\\(found\\.name\\): found",
+      "description": "The record, read in one line: glob `*.epub` in the output directory, run each filename back through `policy.identity`.\n\nA missing directory globs to nothing, which is exactly what a dry run against a not-yet-created output directory wants."
+    },
+    {
+      "title": "Already exported?",
+      "file": "epubconvert/planning.py",
+      "line": 219,
+      "pattern": "if found is not None and not settings\\.force:",
+      "description": "The gate. Found under the same identity and not forced, so the book is done — unless `--refresh` says the source has moved on.\n\nThe comment above it matters for speed: this is settled **before** the package is inspected. An already-exported book needs no source walk, and without this order `--skip-incomplete` would pay for one on every book of the library on every rerun."
+    },
+    {
+      "title": "Refresh writes over the old file",
+      "file": "epubconvert/planning.py",
+      "line": 230,
+      "pattern": "if refreshing and found is not None:",
+      "description": "When a book is being refreshed, the target is the archive already on disk (`found`), not the freshly computed name.\n\nUnder a policy whose identity is looser than its filename — `StripNaming` folds case, `PortableNaming` folds accents too — those two differ. Target the new name and the stale file stays behind, still satisfying the identity check, for ever."
+    },
+    {
+      "title": "What counts as newer",
+      "file": "epubconvert/planning.py",
+      "line": 240,
+      "pattern": "def _source_is_newer\\(package: Path, exported: Path\\) -> bool:",
+      "description": "Directory mtime against archive mtime. macOS updates a directory's timestamp when entries are added or removed, so this catches a re-downloaded book that changed shape.\n\nIt does **not** catch a book re-downloaded in place with identical entry names. The docstring says so, and points at `--force`."
+    },
+    {
+      "title": "Never derive the temporary name from the target",
+      "file": "epubconvert/archive.py",
+      "line": 150,
+      "pattern": "# Deriving the temporary name from the target overflows",
+      "description": "A filesystem allows 255 bytes per path component. A book title already at that limit, plus `.part`, is 260 — the export would fail at the closing rename with a filesystem error rather than anything meaningful.\n\n`mkstemp` in the destination directory gives a short unique name instead. Same directory, so the closing `replace` stays atomic."
+    },
+    {
+      "title": "The atomic move",
+      "file": "epubconvert/archive.py",
+      "line": 188,
+      "pattern": "partial\\.replace\\(target_archive\\)",
+      "description": "The only moment a `.epub` appears in the output directory, and it appears complete.\n\nValidation, when enabled, has already run against the temporary file three lines up. A book that fails validation never reaches this line, so it leaves nothing behind and is retried on the next run rather than being recorded as finished work."
+    },
+    {
+      "title": "Leave nothing behind",
+      "file": "epubconvert/archive.py",
+      "line": 189,
+      "pattern": "    except BaseException:",
+      "description": "`BaseException`, not `Exception` — this must catch `KeyboardInterrupt` too.\n\nAn interrupted run therefore never leaves a truncated `.epub`. That matters precisely because the output directory is the record: a half-written file with the right name would be read as finished work for ever after."
+    },
+    {
+      "title": "The case the unlink cannot cover",
+      "file": "epubconvert/convert.py",
+      "line": 449,
+      "pattern": "def sweep_partials\\(output_dir: Path\\) -> int:",
+      "description": "`SIGKILL` or a power cut gives the `except` clause no chance to run. The leftovers are invisible to everything afterwards, because every glob in this tool looks for `*.epub` — and they accumulate on the very volume `--min-free` exists to protect.\n\nSo each run sweeps `*.part` on the way in. Only safe while holding the output lock: a concurrent run's temporary looks exactly like an abandoned one."
+    },
+    {
+      "title": "One writer at a time",
+      "file": "epubconvert/convert.py",
+      "line": 335,
+      "pattern": "def output_lock\\(output_dir: Path\\) -> Iterator\\[None\\]:",
+      "description": "Rerun safety invites scheduling this from cron or launchd, and that is where two runs overlap. Both would read the output directory before either wrote to it, and both would export the same books. `os.replace` keeps that from corrupting anything; it still wastes the work and muddles the logs.\n\n`flock`, non-blocking. A second run raises `OutputLockedError` and `main` turns that into exit code `3`. No `fcntl` on Windows, where the whole thing is a no-op."
+    },
+    {
+      "title": "The PID is not a liveness check",
+      "file": "epubconvert/convert.py",
+      "line": 367,
+      "pattern": "# The PID is recorded for diagnostics only",
+      "description": "Worth reading closely, because the obvious \"improvement\" here is a bug.\n\n`flock` is released by the kernel when the holder dies, `SIGKILL` included, so a lock file left behind by a killed run is inert and needs no cleanup. Checking liveness by PID would add a PID-reuse race to solve a problem that does not exist.\n\nThe PID is written so a person reading the error message knows who to blame."
+    },
+    {
+      "title": "Plan once, inside the lock",
+      "file": "epubconvert/run.py",
+      "line": 145,
+      "pattern": "# Planned exactly once, and inside the lock",
+      "description": "Both the work list and the count of what is left come from this one plan, so they cannot describe different libraries.\n\nTwo separate failures are closed here. Planning twice let the two passes disagree. Planning outside the lock would let a concurrent run move the output directory underneath the decisions."
+    },
+    {
+      "title": "A count that can reach zero",
+      "file": "epubconvert/convert.py",
+      "line": 323,
+      "pattern": "def count_pending_decisions\\(decisions: Sequence\\[Decision\\]\\) -> int:",
+      "description": "\"N remaining; rerun to continue\" is only useful if N can actually reach zero.\n\nSo the number counts `pending` decisions from the same plan the run acted on. Books that can never be exported — DRM-protected, undownloaded, or holding a name another book claimed — are not pending, and get their own lines in the summary instead."
+    },
+    {
+      "title": "Reading the record back",
+      "file": "epubconvert/inspect_output.py",
+      "line": 106,
+      "pattern": "def verify_output\\(output_dir: Path, epubcheck: bool = False\\) -> tuple\\[int, int\\]:",
+      "description": "The output directory is the record of completed work, and nothing in a normal run ever re-reads it. A damaged export would stay invisible.\n\n`--verify` reads it back: every archive checked, damaged ones named, and the closing advice is to re-export them with `--force`."
+    },
+    {
+      "title": "Same bytes, every time",
+      "file": "epubconvert/archive.py",
+      "line": 22,
+      "pattern": "# Zip cannot represent a timestamp before 1980",
+      "description": "The last piece, and a quiet one. Zip members carry a modification time and permission bits, so the same book exported twice would otherwise differ byte for byte.\n\nBoth are pinned — the timestamp to zip's 1980 floor, the mode to `0o644`. Re-exports hash identically, which lets backups deduplicate, stops `rsync` re-copying unchanged books, and lets you compare two exports by checksum."
+    }
+  ]
+}

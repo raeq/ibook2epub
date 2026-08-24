@@ -1,0 +1,126 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "6. The Test Suite and the Toolchain",
+  "description": "Where each behaviour is tested, how the fake libraries are built, and what CI enforces. Read this before your first change.",
+  "steps": [
+    {
+      "title": "The package marker",
+      "file": "tests/__init__.py",
+      "line": 1,
+      "pattern": "\"\"\"Test suite for ibook2epub\\.\"\"\"",
+      "description": "One line. It exists so the test modules form a package, which keeps `tests.*` addressable in the mypy overrides at the end of `pyproject.toml`."
+    },
+    {
+      "title": "Which file covers what",
+      "file": "tests/conftest.py",
+      "line": 4,
+      "pattern": "Which file covers what\\. The split is by behaviour rather than one file per",
+      "description": "Read this table before hunting for a test. The split is by **behaviour**, not one file per module, so the obvious guess is often wrong — archive writing is tested in `test_export.py`, discovery and the export cap in `test_convert.py`.\n\nThe closing note is the other half: `app_logger`, `defaults` and `spec` are exercised through the modules that use them rather than directly."
+    },
+    {
+      "title": "What a synthetic package contains",
+      "file": "tests/conftest.py",
+      "line": 30,
+      "pattern": "# Files every synthetic package gets",
+      "description": "Six files, chosen so the exclusion rules have something to bite on: a bogus root `mimetype` that must be **replaced**, an `iTunesMetadata.plist` and a `bookmarks.plist` that must be **dropped**, and three members that must **survive** — listed separately as `EXPECTED_MEMBERS`.\n\nA test that asserts against that set catches both directions of the exclusion bug: keeping Apple's bookkeeping, and dropping real content."
+    },
+    {
+      "title": "The library fixture",
+      "file": "tests/conftest.py",
+      "line": 59,
+      "pattern": "@pytest\\.fixture\\(name=\"library\"\\)",
+      "description": "Three things, each earning its place: a top-level package, a package nested two directories deep, and a plain directory that must not be mistaken for either.\n\nThe nested one is there because `collect_package_dirs` once returned bare directory names and broke on anything that was not a direct child."
+    },
+    {
+      "title": "Discovery and exclusion",
+      "file": "tests/test_convert.py",
+      "line": 37,
+      "pattern": "class TestIsExcluded:",
+      "description": "The root-only rule, from both sides — and `TestCollectPackageDirs` below it covers the nested package and the not-a-book directory.\n\nFurther down this file: `TestZipPackage`, `TestExportPackages`, `TestCapExports`, `TestSweepPartials`, `TestFormatSummary`."
+    },
+    {
+      "title": "Byte-for-byte reproducibility",
+      "file": "tests/test_export.py",
+      "line": 26,
+      "pattern": "class TestDeterministicArchives:",
+      "description": "Exports the same book twice and compares hashes. This is the test that would fail the day someone lets a real timestamp back into a `ZipInfo`.\n\nThe file imports `hashlib` for exactly this."
+    },
+    {
+      "title": "Interrupts",
+      "file": "tests/test_export.py",
+      "line": 92,
+      "pattern": "class TestInterrupt:",
+      "description": "The hardest behaviour in the tool to test, and it is tested: a run stopped partway leaves no `.part` file, leaves finished books intact, and reports counts that match what is actually on disk.\n\n`TestDiskFloor` and `TestCovers` follow in the same file."
+    },
+    {
+      "title": "The check that catches the shipped bug",
+      "file": "tests/test_validate.py",
+      "line": 119,
+      "pattern": "class TestManifestChecks:",
+      "description": "A manifest item pointing at a member that is not in the archive. This is the failure that once shipped from this project, so it is the class to keep green.\n\n`TestReadPackage`, `TestValidateDuringExport` and `TestVerifyMode` cover the rest of `validate` and the `--verify` branch."
+    },
+    {
+      "title": "Collisions",
+      "file": "tests/test_planning.py",
+      "line": 31,
+      "pattern": "class TestCollisionSuffix:",
+      "description": "Two books wanting one name, under both `--on-collision` modes. `TestRefresh`, `TestListing` and `TestCountPending` follow.\n\n`TestCountPending` is the one to read if you touch the remaining-count arithmetic: the count must describe the run it accompanies, including under `--skip-incomplete`."
+    },
+    {
+      "title": "The filename edge cases",
+      "file": "tests/test_naming.py",
+      "line": 257,
+      "pattern": "class TestStripUnsafe:",
+      "description": "Reserved device names, control characters, trailing dots, multi-byte truncation, and the title made entirely of illegal characters that must still come out as `_.epub` rather than `epub`.\n\nIf you change anything in `strip_unsafe`, run this class and read the values it produces — not just its pass/fail."
+    },
+    {
+      "title": "Behaving without the extra",
+      "file": "tests/test_naming.py",
+      "line": 227,
+      "pattern": "class TestMissingExtra:",
+      "description": "`--portable-names=romanize` without `disarm` installed must fail with a message that names the fix, and exit `2`.\n\nThe portable tests skip themselves when the extra is absent, which is what lets the `test-minimal` CI job run the whole suite against a bare install."
+    },
+    {
+      "title": "Argument parsing and main()",
+      "file": "tests/test_cli.py",
+      "line": 17,
+      "pattern": "class TestParseArgs:",
+      "description": "Rejections (negative caps, zero workers, output inside source), `--epubcheck` implying `--validate`, and the source-discovery fallbacks.\n\n`TestLoggerConfiguration`, `TestMain`, `TestSourceDiscovery` and `TestLockDiagnostics` follow — the last of which is where the lock file's PID line is asserted to be readable."
+    },
+    {
+      "title": "Two runs at once",
+      "file": "tests/test_options.py",
+      "line": 234,
+      "pattern": "class TestOutputLock:",
+      "description": "A second run against a locked output directory exits `3` and writes nothing.\n\nThis file covers the individual flags — `--version`, `--match`, `--force`, `--workers` — plus the remaining-count arithmetic and the archive permission bits."
+    },
+    {
+      "title": "DRM and iCloud stubs",
+      "file": "tests/test_source.py",
+      "line": 39,
+      "pattern": "class TestDrmDetection:",
+      "description": "Font obfuscation must **not** register as DRM; FairPlay and unknown algorithms must. A truncated `encryption.xml` must fail closed.\n\n`TestIncompleteDetection` covers the `SF_DATALESS` walk, which needs the flag faked since a test cannot produce a genuine iCloud stub."
+    },
+    {
+      "title": "No runtime dependencies",
+      "file": "pyproject.toml",
+      "line": 27,
+      "pattern": "dependencies = \\[\\]",
+      "description": "An empty list, kept empty on purpose. `disarm` sits in the `portable` extra just below, so the default install stays pure standard library.\n\nAdding anything here changes what the tool is. The `test-minimal` CI job exists to make that impossible to do by accident."
+    },
+    {
+      "title": "Strict typing, with two documented exceptions",
+      "file": "pyproject.toml",
+      "line": 83,
+      "pattern": "\\[tool\\.mypy\\]",
+      "description": "`strict = true` and `warn_unreachable = true` over both `epubconvert` and `tests`.\n\nThe two overrides below each carry their reason in a comment: test bodies are assertions rather than typed API surface, and `disarm` is an optional extra so environments without it must still type-check.\n\nRuff and pylint settings sit above, with the same habit — every relaxation says why."
+    },
+    {
+      "title": "What CI actually enforces",
+      "file": ".github/workflows/ci.yml",
+      "line": 46,
+      "pattern": "  test-minimal:",
+      "description": "Three jobs. `lint` runs ruff, ruff format, mypy and pylint with a floor of 8.0. `test` runs pytest across Python 3.10 through 3.14 with the `portable` extra.\n\n`test-minimal` is the interesting one: it installs without extras, **asserts that importing `disarm` fails**, and runs the suite anyway. That is the guarantee in the README — no dependencies — turned into something that breaks the build.\n\nRun the same checks locally before pushing: `ruff check epubconvert tests`, `mypy`, `pytest`."
+    }
+  ]
+}

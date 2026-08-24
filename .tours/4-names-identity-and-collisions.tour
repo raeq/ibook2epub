@@ -1,0 +1,113 @@
+{
+  "$schema": "https://aka.ms/codetour-schema",
+  "title": "4. Names, Identity and Collisions",
+  "description": "Turning a book title into a filename that survives a Kindle, without breaking the identity round trip the rerun depends on.",
+  "nextTour": "5. Threads, Ctrl-C and the Log",
+  "steps": [
+    {
+      "title": "Two decisions per book",
+      "file": "epubconvert/naming.py",
+      "line": 4,
+      "pattern": "Two separate decisions are made about every exported book",
+      "description": "What to call the file, and how to decide whether that book has already been exported. A policy answers both.\n\nThree exist: `PassthroughNaming` (the default, no dependencies), `StripNaming` (standard library, keeps the script), and `PortableNaming` (uses `disarm`, transliterates). Only the first is guaranteed present."
+    },
+    {
+      "title": "An optional dependency, imported honestly",
+      "file": "epubconvert/naming.py",
+      "line": 32,
+      "pattern": "try:\n    import disarm",
+      "description": "`disarm` is an extra. The import is guarded, the module-level name becomes `None`, and `PortableNaming.__init__` raises `PortableNamesUnavailableError` with an actionable message (`PORTABLE_HINT`, line 45).\n\n`run.main` turns that into exit code `2` before any work starts. The CI has a whole job — `test-minimal` — asserting that `disarm` never leaks into the base install."
+    },
+    {
+      "title": "The trap: split before you clean",
+      "file": "epubconvert/naming.py",
+      "line": 83,
+      "pattern": "def _split_extension\\(name: str\\) -> tuple\\[str, str\\]:",
+      "description": "This function exists because of a real, silent, self-perpetuating bug. Read the docstring in full.\n\nCleaning the whole name and splitting afterwards lets the trailing-dot strip eat the dot separating the extension, whenever the stem cleans away to nothing. A book titled `?` gives `?.epub` → `.epub` → `epub`.\n\nThat name has no extension for the `*.epub` glob to match. So the output directory stops recognising the book as exported, and every rerun exports it again — for ever, with the whole test suite passing throughout.\n\nThe general lesson: name the component a cleanup targets, and apply it to that component alone."
+    },
+    {
+      "title": "The strip that caused it",
+      "file": "epubconvert/naming.py",
+      "line": 145,
+      "pattern": "# Windows silently drops a trailing dot or space",
+      "description": "The rule is right about its target and was wrong about its reach.\n\nWindows silently drops a trailing dot or space, so a name ending in one would not round-trip. Correct. But the strip now runs on the **stem** and, separately, inside the extension — never on the assembled name."
+    },
+    {
+      "title": "What actually breaks on other filesystems",
+      "file": "epubconvert/naming.py",
+      "line": 105,
+      "pattern": "def _replace_illegal\\(text: str, separator: str\\) -> str:",
+      "description": "Nine ASCII metacharacters and the control range. Whitespace is collapsed on the way out.\n\nNote what is **not** touched: non-Latin scripts. Every filesystem in play stores them correctly, so the portability problem is the metacharacters, the reserved device names (`CON`, `NUL`, `COM1`… at line 54) and the length — not the script. `StripNaming` is therefore nearly loss-free, which is why a bare `--portable-names` selects it."
+    },
+    {
+      "title": "Bytes, not characters",
+      "file": "epubconvert/naming.py",
+      "line": 68,
+      "pattern": "def truncate_bytes\\(text: str, limit: int\\) -> str:",
+      "description": "The 255 limit on ext4, exFAT and APFS is **bytes**, and a Japanese title hits it three times sooner than an English one.\n\n`errors=\"ignore\"` drops a character sliced through the middle rather than raising."
+    },
+    {
+      "title": "Budget arithmetic",
+      "file": "epubconvert/naming.py",
+      "line": 158,
+      "pattern": "    budget = max_bytes - len\\(extension\\.encode\\(\"utf-8\"\\)\\)",
+      "description": "The extension is reserved first, then the stem gets what is left, then a trailing dot or space exposed by the cut is stripped again — falling back to `_` rather than to nothing.\n\nThe `budget < 1` branch is the degenerate case: an extension that alone exceeds the limit leaves nothing worth preserving, so the whole name is clamped and the loss accepted."
+    },
+    {
+      "title": "The protocol",
+      "file": "epubconvert/naming.py",
+      "line": 171,
+      "pattern": "class NamingPolicy\\(Protocol\\):",
+      "description": "Structural typing — a policy needs `label`, `max_bytes`, `filename()` and `identity()`, and nothing needs to inherit anything.\n\nRead the comment on `max_bytes`. Passthrough deliberately declares **no** budget: its names come from the source directory and are already valid, and truncating one would break the round trip that rerun safety depends on."
+    },
+    {
+      "title": "Three policies, three notions of sameness",
+      "file": "epubconvert/naming.py",
+      "line": 190,
+      "pattern": "class PassthroughNaming:",
+      "description": "The three classes below differ mainly in how loose `identity()` is:\n\n- **Passthrough** — identity is the filename. Two books are the same book only if their names match exactly.\n- **Strip** (line 210) — `casefold()`, so `The Hobbit.epub` and `THE HOBBIT.epub` are one book. It does not fold accents, because doing that without transliterating is not something the standard library offers.\n- **Portable** (line 237) — `disarm.catalog_key`, case *and* accent insensitive, at the cost of turning `こころ.epub` into `kokoro.epub`.\n\nThe looser the identity, the more books collide — which is the next half of this tour."
+    },
+    {
+      "title": "Collision candidates",
+      "file": "epubconvert/planning.py",
+      "line": 70,
+      "pattern": "def _suffixed\\(filename: str, position: int, max_bytes: int\\) -> str:",
+      "description": "Position 1 is the name itself; 2 upward append ` (2)`, ` (3)` and so on, up to `MAX_SUFFIX`.\n\nThe suffix is applied **within** the policy's byte budget. Appending to a name already at the limit would push it over, and the export would fail at the closing rename with a filesystem error rather than a name collision — a confusing way to learn that two books share a title.\n\nA policy declaring no budget is left alone, for the reason in the previous step."
+    },
+    {
+      "title": "Deterministic assignment, and its limit",
+      "file": "epubconvert/planning.py",
+      "line": 102,
+      "pattern": "def _assign_names\\(",
+      "description": "Names are assigned walking the packages in **sorted** order rather than selection order, so the same set of packages always produces the same names regardless of shuffling.\n\nThe docstring is unusually frank about what that guarantee is not. Suffixes are positions within a colliding group, so adding a book that sorts earlier shifts every later member of that group, and `--max-export-files` selecting a different subset changes the group.\n\nThe real fix — identity keyed on the package document's `dc:identifier` — is named, along with why it is not here: it needs a record of which archive belongs to which package, and this tool keeps no state file. Until then, `--on-collision suffix` is best used with `-m 0 --no-shuffle`."
+    },
+    {
+      "title": "A losing collision is not an error",
+      "file": "epubconvert/planning.py",
+      "line": 143,
+      "pattern": "        else:\n            assigned\\.append\\(\\(package, \"\", policy\\.identity\\(wanted\\)\\)\\)",
+      "description": "An empty filename marks a package that lost. Under `--on-collision skip` that is anything after the first claimant; under `suffix` it takes 99 colliding books to get here.\n\n`_decide` turns it into a `collision` decision with a reason, which is reported and counted, never written."
+    },
+    {
+      "title": "The status vocabulary is a public contract",
+      "file": "epubconvert/planning.py",
+      "line": 27,
+      "pattern": "#: What the planner can decide about a package",
+      "description": "`pending`, `exported`, `collision`, `drm`, `incomplete`. `--list` names them all in its help text and `--list --json` emits them verbatim, so these strings are API, not internal detail.\n\nTyping them as a `Literal` keeps a mistyped comparison from passing the type checker."
+    },
+    {
+      "title": "One table instead of three branches",
+      "file": "epubconvert/planning.py",
+      "line": 275,
+      "pattern": "#: Everything the reporter needs to know about a status, in one place",
+      "description": "Each non-pending status maps to a counter name, a severity, a per-book line and a closing tally.\n\nThe comment records what this replaced: an if/elif chain over the statuses plus a second block of `if report.x` tallies below it. The same mapping stated twice, so a new status had to be added in three places — and two of the branches had drifted into being byte-identical.\n\nEvery entry uses the same two named fields, `name` and `reason`, so the caller never has to work out which arguments a particular message wants."
+    },
+    {
+      "title": "Two renderings of one plan",
+      "file": "epubconvert/planning.py",
+      "line": 333,
+      "pattern": "def render_listing\\(decisions: Sequence\\[Decision\\], as_json: bool\\) -> str:",
+      "description": "`--list` prints an aligned table with a count per status; `--list --json` emits the same decisions with source and target paths, `ensure_ascii=False` so titles stay readable.\n\nBoth come from `plan_exports`, which is the point: the listing cannot drift from what a run would do, because it *is* what a run would do."
+    }
+  ]
+}
