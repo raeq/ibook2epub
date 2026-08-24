@@ -27,6 +27,7 @@ recomputed by reading its filename back off disk, with no state file.
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Literal, Protocol, runtime_checkable
 
 try:
@@ -63,6 +64,30 @@ MAX_FILENAME_BYTES = 255
 
 class PortableNamesUnavailableError(RuntimeError):
     """Raised when portable naming is requested but ``disarm`` is not installed."""
+
+
+def filesystem_key(filename: str) -> str:
+    """
+    Return the key by which the *filesystem* will consider two names equal.
+
+    A naming policy decides whether two books are the same book. This decides
+    whether two names are the same *file*, which is a different question and
+    the one that governs whether a write destroys another write. macOS
+    formats APFS and HFS+ case-insensitively by default, so ``Book.epub`` and
+    ``BOOK.epub`` are one file there while :class:`PassthroughNaming` gives
+    them distinct identities. Two workers then replaced onto the same path: one
+    book was lost, the run reported both as exported, and no rerun ever
+    converged.
+
+    Normalization is applied as well as case folding, because a name that has
+    lived on HFS+ is stored decomposed while the same name typed fresh is
+    composed.
+
+    :param filename: The candidate output filename.
+
+    :return: A key equal for any two names the filesystem cannot tell apart.
+    """
+    return unicodedata.normalize("NFC", filename).casefold()
 
 
 def truncate_bytes(text: str, limit: int) -> str:
@@ -260,11 +285,28 @@ class PortableNaming:
         self.separator = separator
 
     def filename(self, package_name: str) -> str:
-        """Return a filename safe to copy to *platform*."""
+        """
+        Return a filename safe to copy to *platform*.
+
+        The extension is split off before sanitizing and reattached after, for
+        the same reason :func:`strip_unsafe` does it: ``disarm`` cleans the
+        whole string, so a title made entirely of illegal characters empties
+        the stem and takes the separating dot with it -- ``?.epub`` becomes
+        ``epub``. The output directory globs ``*.epub`` to decide what is
+        already exported, so that book is re-converted on every run for ever.
+        """
         assert disarm is not None  # noqa: S101 - guarded in __init__
-        return disarm.sanitize_filename(
-            package_name, separator=self.separator, platform=self.platform
+        stem, extension = _split_extension(package_name)
+        cleaned = disarm.sanitize_filename(
+            stem, separator=self.separator, platform=self.platform
         )
+        cleaned = cleaned.strip(" .") or "_"
+        if not extension:
+            return cleaned
+        budget = MAX_FILENAME_BYTES - len(extension.encode("utf-8"))
+        if len(cleaned.encode("utf-8")) > budget:
+            cleaned = truncate_bytes(cleaned, max(budget, 1)).rstrip(" .") or "_"
+        return f"{cleaned}{extension}"
 
     def identity(self, filename: str) -> str:
         """Return a case- and accent-insensitive key for *filename*."""

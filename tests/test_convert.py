@@ -15,6 +15,7 @@ import pytest
 
 from epubconvert import convert, planning, run
 from epubconvert.archive import (
+    PARTIAL_PREFIX,
     PARTIAL_SUFFIX,
     collect_package_dirs,
     is_excluded,
@@ -162,6 +163,10 @@ class TestZipPackage:
     def test_nested_ds_store_is_still_dropped(self, tmp_path, output_dir):
         package = tmp_path / "Book.epub"
         (package / "OEBPS").mkdir(parents=True)
+        (package / "META-INF").mkdir()
+        (package / "META-INF" / "container.xml").write_text(
+            "<container/>", encoding="utf-8"
+        )
         (package / "OEBPS" / ".DS_Store").write_bytes(b"junk")
         (package / "OEBPS" / "content.opf").write_text("<package/>", encoding="utf-8")
 
@@ -354,7 +359,7 @@ class TestSweepPartials:
     """Cleanup of temporaries left by a run that was killed outright."""
 
     def test_abandoned_temporaries_are_removed(self, output_dir):
-        stale = output_dir / f"tmpabcd1234{PARTIAL_SUFFIX}"
+        stale = output_dir / f"{PARTIAL_PREFIX}abcd1234{PARTIAL_SUFFIX}"
         stale.write_bytes(b"half an archive")
 
         assert convert.sweep_partials(output_dir) == 1
@@ -374,7 +379,7 @@ class TestSweepPartials:
         # exists to protect.
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        stale = output_dir / f"tmpdeadbeef{PARTIAL_SUFFIX}"
+        stale = output_dir / f"{PARTIAL_PREFIX}deadbeef{PARTIAL_SUFFIX}"
         stale.write_bytes(b"half an archive")
 
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])

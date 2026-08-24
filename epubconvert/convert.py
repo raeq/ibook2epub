@@ -27,7 +27,7 @@ from random import shuffle
 from typing import TextIO
 
 from .app_logger import logger
-from .archive import PARTIAL_SUFFIX, zip_package
+from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from .inspect_output import extract_cover, free_megabytes
 from .naming import NamingPolicy, PassthroughNaming
 from .planning import (
@@ -456,6 +456,11 @@ def sweep_partials(output_dir: Path) -> int:
     everything afterwards and accumulate on the very volume ``--min-free``
     exists to protect.
 
+    The glob is anchored on :data:`~epubconvert.archive.PARTIAL_PREFIX` as
+    well as the suffix. A bare ``*.part`` also matches a browser's in-progress
+    download or a user's own file, and the default output directory is
+    ``~/Books`` -- so the sweep deleted real user data.
+
     Only safe to call while holding the output lock: a concurrent run's
     temporary is indistinguishable from an abandoned one.
 
@@ -464,7 +469,7 @@ def sweep_partials(output_dir: Path) -> int:
     :return: The number of files removed.
     """
     removed = 0
-    for stale in output_dir.glob(f"*{PARTIAL_SUFFIX}"):
+    for stale in output_dir.glob(f"{PARTIAL_PREFIX}*{PARTIAL_SUFFIX}"):
         try:
             stale.unlink()
         except OSError as exc:  # pragma: no cover - racing removal

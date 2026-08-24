@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from .app_logger import logger
-from .naming import NamingPolicy, truncate_bytes
+from .naming import NamingPolicy, filesystem_key, truncate_bytes
 from .source import inspect_package
 from .spec import PACKAGE_SUFFIX
 
@@ -128,6 +128,11 @@ def _assign_names(
     """
     assigned: list[tuple[Path, str, str]] = []
     claimed: set[str] = set()
+    # Claimed under the filesystem's own notion of sameness, which is looser
+    # than any policy identity on a case-insensitive volume. Without this a
+    # name can be free by identity and taken by the filesystem, and the second
+    # write silently destroys the first.
+    claimed_paths: set[str] = set()
 
     for package in sorted(packages):
         wanted = policy.filename(package.name)
@@ -136,8 +141,10 @@ def _assign_names(
         for position in range(1, limit + 1):
             candidate = _suffixed(wanted, position, getattr(policy, "max_bytes", 0))
             key = policy.identity(candidate)
-            if key not in claimed:
+            path_key = filesystem_key(candidate)
+            if key not in claimed and path_key not in claimed_paths:
                 claimed.add(key)
+                claimed_paths.add(path_key)
                 assigned.append((package, candidate, key))
                 break
         else:

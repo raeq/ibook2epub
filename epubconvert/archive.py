@@ -16,13 +16,18 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from .app_logger import logger
-from .spec import MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
+from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
 from .validate import ArchiveInvalidError, ValidationOptions
 
 # Zip cannot represent a timestamp before 1980; using its floor keeps every
 # export byte-identical regardless of when it ran.
 ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
+#: Marks a half-written archive. The prefix matters as much as the suffix:
+#: the sweep in :func:`epubconvert.convert.sweep_partials` deletes what it
+#: matches, and a bare ``*.part`` glob also matches a browser's in-progress
+#: download or a user's own file sitting in the output directory.
+PARTIAL_PREFIX = ".ibook2epub-"
 PARTIAL_SUFFIX = ".part"
 COMPRESS_LEVEL = 9
 ARCHIVE_MODE = 0o644
@@ -90,8 +95,16 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
     for root, dirs, _files in os.walk(source_dir, onerror=on_error):
         descend = []
         for name in dirs:
+            entry = Path(root) / name
+            # A package is a directory the walk owns, never a redirection. A
+            # symlink named *.epub was accepted here and its whole target
+            # zipped into the shelf, which turned "convert my books" into
+            # "copy that directory somewhere shareable".
+            if entry.is_symlink():
+                logger.warning("Ignoring symlinked package %s", entry)
+                continue
             if name.endswith(PACKAGE_SUFFIX):
-                found.append(Path(root) / name)
+                found.append(entry)
             else:
                 descend.append(name)
         dirs[:] = descend
@@ -152,7 +165,7 @@ def zip_package(
     # ".part" is 260. Take a short unique name in the same directory instead,
     # which keeps the closing replace atomic and can never be too long.
     handle, partial_name = tempfile.mkstemp(
-        dir=target_archive.parent, suffix=PARTIAL_SUFFIX
+        dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
     )
     os.close(handle)
     partial = Path(partial_name)
@@ -168,9 +181,8 @@ def zip_package(
             # The mimetype entry must come first and must be stored, not deflated.
             archive.writestr(_entry(MIMETYPE_NAME, ZIP_STORED), MIMETYPE_CONTENT)
 
-            for path in sorted(source_dir.rglob("*")):
-                if not path.is_file():
-                    continue
+            stored: set[str] = set()
+            for path in _members(source_dir):
                 if is_excluded(path.name, at_root=path.parent == source_dir):
                     logger.trace("Excluded from archive: %s", path.name)
                     continue
@@ -178,7 +190,20 @@ def zip_package(
                 entry = _entry(arcname, ZIP_DEFLATED)
                 with path.open("rb") as source, archive.open(entry, "w") as target:
                     shutil.copyfileobj(source, target)
+                stored.add(arcname)
                 file_count += 1
+
+        # An archive holding only the mimetype we wrote ourselves is a valid
+        # zip and not a book. Without this the empty case -- a package that was
+        # never downloaded, or one deleted between planning and writing --
+        # lands in the output directory and is recorded as finished work that
+        # no rerun ever retries.
+        if not file_count:
+            raise ArchiveInvalidError(target_archive.name, ["package holds no files"])
+        if CONTAINER_PATH not in stored:
+            raise ArchiveInvalidError(
+                target_archive.name, [f"package has no {CONTAINER_PATH}"]
+            )
 
         if validation is not None:
             problems = validation.check(partial)
@@ -193,3 +218,47 @@ def zip_package(
         raise
 
     return file_count
+
+
+def _members(source_dir: Path) -> list[Path]:
+    """
+    List the files to store, in a fixed order, refusing to be misdirected.
+
+    Two departures from a plain ``rglob``, both of which cost a book its
+    integrity when left out:
+
+    ``os.walk`` is given an ``onerror`` that re-raises, so an unreadable
+    subdirectory fails the export instead of contributing nothing. ``rglob``
+    swallows that error, and the archive was written without the missing
+    content, reported as a success, and recorded as completed work -- so
+    repairing the permissions and rerunning skipped the book.
+
+    Symlinks are skipped. ``os.walk`` does not descend into a symlinked
+    directory, but it does list symlinked *files*, and opening one reads
+    whatever it points at. A book that ships a link to a file outside itself
+    would otherwise have that file's bytes copied into the archive under an
+    innocuous name, and travel wherever the shelf is copied.
+
+    :param source_dir: The package directory to enumerate.
+
+    :return: The files to store, sorted, symlinks excluded.
+
+    :raises OSError: If any directory under the package cannot be read.
+    """
+
+    def on_error(exc: OSError) -> None:
+        raise exc
+
+    found: list[Path] = []
+    for root, _dirs, files in os.walk(source_dir, onerror=on_error):
+        directory = Path(root)
+        for name in files:
+            path = directory / name
+            if path.is_symlink():
+                logger.warning("Skipped symlink %s in %s", name, source_dir.name)
+                continue
+            if path.is_file():
+                found.append(path)
+
+    found.sort()
+    return found
