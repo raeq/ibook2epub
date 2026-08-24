@@ -108,7 +108,44 @@ def suffixed(filename: str, position: int, max_bytes: int) -> str:
     return f"{stem_text}{marker}{extension}"
 
 
-def _assign_names(
+class _Claims:
+    """
+    Which output names are spoken for, and where each search left off.
+
+    Two sets rather than one. ``identity`` answers whether two books are the
+    same book; ``filesystem_key`` answers whether two names are the same
+    *file*, which on a case-insensitive volume is a looser question and the one
+    that decides whether a write destroys another write.
+
+    The resume positions exist because a colliding group that exhausted
+    ``MAX_SUFFIX`` made every later member retry all 99 candidates, recomputing
+    identity each time, before losing.
+    """
+
+    def __init__(self) -> None:
+        self.identities: set[str] = set()
+        self.paths: set[str] = set()
+        self.positions: dict[str, int] = {}
+
+    def resume(self, group: str) -> int:
+        """Return the first position worth trying for this group."""
+        return self.positions.get(group, 1)
+
+    def take(self, group: str, position: int, key: str, path_key: str) -> bool:
+        """Claim a candidate if both its identity and its path are free."""
+        if key in self.identities or path_key in self.paths:
+            return False
+        self.identities.add(key)
+        self.paths.add(path_key)
+        self.positions[group] = position + 1
+        return True
+
+    def exhaust(self, group: str, limit: int) -> None:
+        """Record that this group has no positions left to try."""
+        self.positions[group] = limit + 1
+
+
+def assign_names(
     packages: Sequence[Path], policy: NamingPolicy, on_collision: CollisionMode
 ) -> list[tuple[Path, str, str]]:
     """
@@ -136,28 +173,22 @@ def _assign_names(
         marks a package that lost a collision.
     """
     assigned: list[tuple[Path, str, str]] = []
-    claimed: set[str] = set()
-    # Claimed under the filesystem's own notion of sameness, which is looser
-    # than any policy identity on a case-insensitive volume. Without this a
-    # name can be free by identity and taken by the filesystem, and the second
-    # write silently destroys the first.
-    claimed_paths: set[str] = set()
+    claims = _Claims()
 
     for package in sorted(packages):
         wanted = policy.filename(package.name)
         limit = MAX_SUFFIX if on_collision == SUFFIX else 1
+        group = policy.identity(wanted)
 
-        for position in range(1, limit + 1):
+        for position in range(claims.resume(group), limit + 1):
             candidate = suffixed(wanted, position, getattr(policy, "max_bytes", 0))
             key = policy.identity(candidate)
-            path_key = filesystem_key(candidate)
-            if key not in claimed and path_key not in claimed_paths:
-                claimed.add(key)
-                claimed_paths.add(path_key)
+            if claims.take(group, position, key, filesystem_key(candidate)):
                 assigned.append((package, candidate, key))
                 break
         else:
-            assigned.append((package, "", policy.identity(wanted)))
+            claims.exhaust(group, limit)
+            assigned.append((package, "", group))
 
     return assigned
 
@@ -192,7 +223,7 @@ def plan_exports(
     }
     named = {
         package: (filename, key)
-        for package, filename, key in _assign_names(
+        for package, filename, key in assign_names(
             packages, policy, settings.on_collision
         )
     }

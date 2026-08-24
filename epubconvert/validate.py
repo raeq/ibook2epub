@@ -203,7 +203,7 @@ def escapes_archive(path: str) -> bool:
     return path.startswith("/") or path == ".." or path.startswith("../")
 
 
-def contained_file(package: Path, href: str) -> Path | None:
+def contained_file(package: Path, href: str, root: Path | None = None) -> Path | None:
     """
     Resolve a manifest href to a real file inside a package, or refuse it.
 
@@ -226,8 +226,19 @@ def contained_file(package: Path, href: str) -> Path | None:
         logger.debug("%r escapes the package %s", href, package.name)
         return None
 
+    # The caller may already hold the resolved root; it does not change across
+    # a package, and resolving it walks every path component each time.
+    resolved_root = root if root is not None else package.resolve()
     source = package / href
-    if not source.resolve().is_relative_to(package.resolve()):
+    try:
+        inside = source.resolve().is_relative_to(resolved_root)
+    except (OSError, ValueError):
+        # A NUL byte in the href, or a resolve on a broken mount. The
+        # documented contract is "None if there is nothing safe to read", and
+        # this function invites callers who will not expect a raise.
+        logger.debug("%r could not be resolved inside %s", href, package.name)
+        return None
+    if not inside:
         logger.debug("%r resolves outside the package %s", href, package.name)
         return None
 
@@ -402,7 +413,9 @@ def validate_archive(path: Path) -> list[str]:
 
     try:
         with ZipFile(path) as archive:
-            problems.extend(_check_mimetype(archive))
+            names = archive.namelist()
+            members = set(names)
+            problems.extend(_check_mimetype(archive, names))
 
             broken = archive.testzip()
             if broken is not None:
@@ -414,7 +427,7 @@ def validate_archive(path: Path) -> list[str]:
                 problems.append(str(exc))
                 return problems
 
-            problems.extend(_check_manifest(archive, package))
+            problems.extend(_check_manifest(members, package))
     except BadZipFile as exc:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
@@ -429,16 +442,16 @@ def validate_archive(path: Path) -> list[str]:
     return problems
 
 
-def _check_mimetype(archive: ZipFile) -> list[str]:
+def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
     """
     Check the ``mimetype`` entry the epub specification mandates.
 
     :param archive: The open archive.
+    :param names: Its member names, built once by the caller.
 
     :return: A list of problems.
     """
     problems: list[str] = []
-    names = archive.namelist()
 
     if not names:
         return ["archive is empty"]
@@ -462,17 +475,16 @@ def _check_mimetype(archive: ZipFile) -> list[str]:
     return problems
 
 
-def _check_manifest(archive: ZipFile, package: Package) -> list[str]:
+def _check_manifest(members: set[str], package: Package) -> list[str]:
     """
     Check that everything the package document promises is present.
 
-    :param archive: The open archive.
+    :param members: The archive's member names, built once by the caller.
     :param package: The parsed package document.
 
     :return: A list of problems.
     """
     problems: list[str] = []
-    members = set(archive.namelist())
 
     if not package.manifest:
         problems.append(f"{package.opf_path} declares no manifest items")

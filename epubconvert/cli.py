@@ -95,8 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N",
         help=(
-            "Number of compression threads. The work is I/O bound on a cloud "
-            "library, so a value above the CPU count often helps."
+            "Number of compression threads (default: 4x the CPU count, "
+            "capped at 64). The work blocks on iCloud rather than on the CPU, "
+            "so raising this well past the CPU count is what helps; 48-64 is "
+            "reasonable for a cloud library."
         ),
     )
     parser.add_argument(
