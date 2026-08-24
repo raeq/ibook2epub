@@ -4,6 +4,14 @@ on:
   release:
     types: [published]
 
+# Stated rather than inherited. The repository default is currently read-only,
+# but a job that runs `python -m build` executes the project's build backend,
+# so it should not silently gain write access if that default ever changes.
+# The publish job overrides this with id-token: write, which sets every other
+# scope to none.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -21,19 +29,32 @@ jobs:
         import os, tomllib
         with open("pyproject.toml", "rb") as f:
             version = tomllib.load(f)["project"]["version"]
-        tag = os.environ["TAG"].removeprefix("v")
+        raw = os.environ["TAG"]
+        tag = raw[1:] if raw[:1] in ("v", "V") else raw
         if tag != version:
-            raise SystemExit(f"release tag {tag!r} != pyproject version {version!r}")
+            raise SystemExit(
+                f"release tag {raw!r} does not match pyproject version {version!r}; "
+                f"expected tag v{version} or {version}"
+            )
         EOF
+    # A release can be cut from any tag, including one whose CI run failed or
+    # never finished. Publishing is irreversible on PyPI, so the suite runs
+    # here too rather than trusting that push CI covered this commit.
+    - name: Run tests
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[portable]" pytest
+        pytest
     - name: Build distributions
       run: |
-        python -m pip install --upgrade pip build
+        python -m pip install --upgrade build
         python -m build
     - name: Store distributions
       uses: actions/upload-artifact@v5
       with:
         name: dist
         path: dist/
+        if-no-files-found: error
 
   publish:
     needs: build
@@ -49,5 +70,8 @@ jobs:
       with:
         name: dist
         path: dist/
+    # Pinned to a commit rather than the mutable release/v1 branch: this is
+    # the only step holding id-token: write. dc37677 is what release/v1 pointed
+    # at when this was set, so the behaviour is unchanged.
     - name: Publish to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
