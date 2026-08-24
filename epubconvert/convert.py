@@ -1,59 +1,43 @@
 """
-Convert Apple iBooks epub packages to zipped epub files.
+Exporting a batch of packages: concurrency, bookkeeping and the output lock.
 
-Apple stores books as ``*.epub/`` directories rather than as epub archives.
-This module walks a source directory for those packages and writes a
-spec-valid epub file for each one: a zip archive whose first member is an
-uncompressed ``mimetype`` entry containing ``application/epub+zip``, followed
-by the deflated remainder of the package.
+:mod:`epubconvert.archive` writes one book and :mod:`epubconvert.planning`
+decides which books to write. This module runs the writes -- a thread pool, a
+shared :class:`Report` the workers update under a lock, an advisory lock over
+the output directory, and the arithmetic that turns the result into a summary
+line and an exit code.
 
-Archives are built to a temporary ``.part`` file and moved into place only on
-success, so an interrupted run never leaves a truncated ``.epub`` behind that
-a later run would mistake for finished work.
+Recording happens in the worker thread that did the work, not in the awaiting
+coroutine, so a Ctrl-C cannot leave the summary disagreeing with the directory.
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import fnmatch
 import os
-import shutil
 import socket
-import tempfile
 import threading
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
+from typing import TextIO
 
-from . import app_logger
 from .app_logger import logger
-from .cli import parse_args
-from .inspect_output import extract_cover, free_megabytes, verify_output
-from .naming import (
-    STRIP,
-    NamingPolicy,
-    PassthroughNaming,
-    PortableNamesUnavailableError,
-    build_policy,
-)
+from .archive import PARTIAL_SUFFIX, zip_package
+from .inspect_output import extract_cover, free_megabytes
+from .naming import NamingPolicy, PassthroughNaming
 from .planning import (
     PENDING,
     Decision,
     PlanOptions,
     plan_exports,
     record_decisions,
-    render_listing,
 )
-from .spec import MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
-from .validate import (
-    ArchiveInvalidError,
-    ValidationOptions,
-)
+from .validate import ValidationOptions
 
 try:
     import fcntl
@@ -62,27 +46,7 @@ try:
 except ImportError:  # pragma: no cover - Windows has no fcntl
     HAVE_FLOCK = False
 
-# Zip cannot represent a timestamp before 1980; using its floor keeps every
-# export byte-identical regardless of when it ran.
-ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
-
-PARTIAL_SUFFIX = ".part"
-COMPRESS_LEVEL = 9
-ARCHIVE_MODE = 0o644
 LOCK_NAME = ".ibook2epub.lock"
-
-# Filesystem junk, never book content, so excluded wherever it appears.
-EXCLUDED_ANYWHERE = frozenset({".DS_Store"})
-
-# Apple bookkeeping, which only ever sits at the package root. These patterns
-# must NOT be applied deeper: a chapter legitimately named ``bookmarks.xhtml``,
-# a ``.plist`` data asset, or a file called ``mimetype`` inside ``OEBPS/`` are
-# all real content, and dropping them corrupts the book. ``mimetype`` is listed
-# because the root copy is rewritten separately, uncompressed and first, as the
-# epub specification requires.
-EXCLUDED_ROOT_NAMES = frozenset({MIMETYPE_NAME})
-EXCLUDED_ROOT_SUFFIXES = frozenset({".plist"})
-EXCLUDED_ROOT_PREFIXES = ("bookmarks",)
 
 
 @dataclass(frozen=True)
@@ -113,160 +77,6 @@ class Report:
     incomplete: int = 0  # Packages skipped as not downloaded from iCloud.
     interrupted: bool = False  # The run was stopped with Ctrl-C.
     aborted: bool = False  # The run could not proceed, e.g. no disk space.
-
-
-def is_excluded(name: str, *, at_root: bool) -> bool:
-    """
-    Report whether a package member should be left out of the epub.
-
-    The Apple bookkeeping patterns apply only at the package root. Applying
-    them at every depth silently drops real content — a chapter file named
-    ``bookmarks.xhtml`` or a ``.plist`` asset under ``OEBPS/`` — which
-    produces an archive that readers reject for a missing spine item.
-
-    :param name: The bare file name (not a path) to test.
-    :param at_root: Whether the file sits directly in the package directory.
-
-    :return: True if the file must not be copied into the archive.
-    """
-    if name in EXCLUDED_ANYWHERE:
-        return True
-    if not at_root:
-        return False
-    return (
-        name in EXCLUDED_ROOT_NAMES
-        or Path(name).suffix in EXCLUDED_ROOT_SUFFIXES
-        or name.startswith(EXCLUDED_ROOT_PREFIXES)
-    )
-
-
-def collect_package_dirs(source_dir: Path) -> list[Path]:
-    """
-    Find every ``*.epub/`` package directory beneath the source directory.
-
-    The walk does not descend into a package once it has been found, so files
-    inside a package can never be mistaken for packages themselves. Results are
-    full paths, which keeps nested packages addressable; earlier versions
-    returned bare directory names and silently broke on anything that was not
-    a direct child of the source directory.
-
-    :param source_dir: The directory to search.
-
-    :return: Package directories, sorted by path.
-    """
-    found: list[Path] = []
-
-    def on_error(exc: OSError) -> None:
-        # os.walk swallows scandir failures unless onerror is supplied, so an
-        # unreadable directory would otherwise be skipped in total silence.
-        logger.warning("Could not scan %s: %s", exc.filename or source_dir, exc)
-
-    for root, dirs, _files in os.walk(source_dir, onerror=on_error):
-        descend = []
-        for name in dirs:
-            if name.endswith(PACKAGE_SUFFIX):
-                found.append(Path(root) / name)
-            else:
-                descend.append(name)
-        dirs[:] = descend
-
-    found.sort()
-    logger.debug("Found %d epub package(s) under %s", len(found), source_dir)
-    return found
-
-
-def _entry(arcname: str, compress_type: int) -> ZipInfo:
-    """
-    Build a zip entry with normalized metadata.
-
-    Zip members carry a modification time and permission bits, so exporting
-    the same book twice would otherwise produce different bytes every time.
-    Pinning both makes re-exports byte-identical, which lets backups dedup,
-    stops rsync re-copying unchanged books, and allows outputs to be compared
-    by hash.
-
-    :param arcname: Path of the member inside the archive.
-    :param compress_type: ``ZIP_STORED`` or ``ZIP_DEFLATED``.
-
-    :return: The prepared entry.
-    """
-    entry = ZipInfo(arcname, date_time=ARCHIVE_TIMESTAMP)
-    entry.compress_type = compress_type
-    entry.external_attr = ARCHIVE_MODE << 16
-    return entry
-
-
-def zip_package(
-    source_dir: Path,
-    target_archive: Path,
-    validation: ValidationOptions | None = None,
-) -> int:
-    """
-    Write a single package directory out as a spec-valid epub archive.
-
-    This is a blocking function, intended to be handed to a worker thread. The
-    archive is assembled under a temporary name and only moved to
-    ``target_archive`` once it is complete.
-
-    Validation, when asked for, runs against the temporary file *before* the
-    move. A book that fails therefore leaves nothing in the output directory
-    and will be attempted again on the next run, rather than being recorded as
-    finished work.
-
-    :param source_dir: The ``*.epub/`` package directory to compress.
-    :param target_archive: The path of the epub file to create.
-    :param validation: Checks to run before the archive is moved into place.
-
-    :return: The number of package files stored, excluding ``mimetype``.
-
-    :raises ArchiveInvalidError: If validation was requested and failed.
-    """
-    # Deriving the temporary name from the target overflows the filesystem's
-    # per-component limit when the target is already at it: 255 bytes plus
-    # ".part" is 260. Take a short unique name in the same directory instead,
-    # which keeps the closing replace atomic and can never be too long.
-    handle, partial_name = tempfile.mkstemp(
-        dir=target_archive.parent, suffix=PARTIAL_SUFFIX
-    )
-    os.close(handle)
-    partial = Path(partial_name)
-    # mkstemp creates 0600; exported books should be readable like any other
-    # file the user writes.
-    partial.chmod(ARCHIVE_MODE)
-    file_count = 0
-
-    try:
-        with ZipFile(
-            partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL
-        ) as archive:
-            # The mimetype entry must come first and must be stored, not deflated.
-            archive.writestr(_entry(MIMETYPE_NAME, ZIP_STORED), MIMETYPE_CONTENT)
-
-            for path in sorted(source_dir.rglob("*")):
-                if not path.is_file():
-                    continue
-                if is_excluded(path.name, at_root=path.parent == source_dir):
-                    logger.trace("Skipped object: <%s>", path.name)
-                    continue
-                arcname = path.relative_to(source_dir).as_posix()
-                entry = _entry(arcname, ZIP_DEFLATED)
-                with path.open("rb") as source, archive.open(entry, "w") as target:
-                    shutil.copyfileobj(source, target)
-                file_count += 1
-
-        if validation is not None:
-            problems = validation.check(partial)
-            if problems:
-                raise ArchiveInvalidError(target_archive.name, problems)
-
-        partial.replace(target_archive)
-    except BaseException:
-        # Leave no partial archive behind, so the "already exported" check
-        # stays a reliable record of completed work.
-        partial.unlink(missing_ok=True)
-        raise
-
-    return file_count
 
 
 #: Guards the shared Report and progress counter, which worker threads update.
@@ -365,12 +175,16 @@ async def export_packages(
     *,
     dry_run: bool = False,
     max_workers: int | None = None,
-    naming: NamingPolicy | None = None,
+    policy: NamingPolicy | None = None,
     report: Report | None = None,
     options: ExportOptions | None = None,
 ) -> Report:
     """
     Plan a batch of packages and export them concurrently.
+
+    Convenience wrapper for callers holding packages rather than a plan.
+    :func:`main` does not use it: it plans once itself, under the output lock,
+    and calls :func:`export_planned`.
 
     Whether a book has already been exported is decided by its *identity*
     under the naming policy, not by an exact filename match. Identities of
@@ -382,16 +196,16 @@ async def export_packages(
     :param output_dir: Directory to write the epub files into.
     :param dry_run: When True, report what would happen without writing.
     :param max_workers: Size of the compression thread pool.
-    :param naming: Naming policy; defaults to :class:`PassthroughNaming`.
+    :param policy: Naming policy; defaults to :class:`PassthroughNaming`.
     :param report: Report to accumulate into. Pass one to retain the partial
         counts if the run is interrupted.
     :param options: Everything else about the run.
 
     :return: A report of what was exported, skipped and failed.
     """
-    policy = naming if naming is not None else PassthroughNaming()
+    resolved = policy if policy is not None else PassthroughNaming()
     run = options if options is not None else ExportOptions()
-    decisions = plan_exports(packages, output_dir, policy, run.plan)
+    decisions = plan_exports(packages, output_dir, resolved, run.plan)
     return await export_planned(
         decisions,
         output_dir,
@@ -506,42 +320,6 @@ def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]
     return matched
 
 
-def count_pending(
-    packages: Sequence[Path],
-    output_dir: Path,
-    policy: NamingPolicy,
-    options: PlanOptions | None = None,
-) -> int:
-    """
-    Count books that still have an export ahead of them.
-
-    This asks the planner rather than repeating its name arithmetic, so the
-    figure matches what a run would actually do -- including the suffixes
-    ``--on-collision suffix`` assigns, which a plain filename comparison
-    collapses into one.
-
-    Books that can never be exported -- DRM-protected, undownloaded, or
-    holding a name another book has claimed -- are deliberately excluded. A
-    remaining count that can never reach zero is not progress; those are
-    reported on their own lines instead.
-
-    The caller's own options are used unchanged, including
-    ``check_incomplete``. Forcing it off here to save the stub walk made this
-    count disagree with the run it described: an undownloaded book plans as
-    pending when the check is off and as incomplete when it is on, so
-    ``--skip-incomplete`` reported books remaining that it would never export,
-    on that run and on every rerun after it.
-
-    :param packages: All packages under consideration.
-    :param output_dir: Directory the epub files are written into.
-    :param policy: Naming policy supplying filenames and identities.
-    :param options: Planning behaviour, so the count reflects the same flags.
-
-    :return: The number of books still to export.
-    """
-    return count_pending_decisions(plan_exports(packages, output_dir, policy, options))
-
-
 def count_pending_decisions(decisions: Sequence[Decision]) -> int:
     """
     Count the decisions that still have an export ahead of them.
@@ -603,7 +381,7 @@ def output_lock(output_dir: Path) -> Iterator[None]:
         handle.close()
 
 
-def _read_lock_holder(handle: object) -> str:
+def _read_lock_holder(handle: TextIO) -> str:
     """
     Describe whoever currently holds the lock, for the error message.
 
@@ -612,8 +390,8 @@ def _read_lock_holder(handle: object) -> str:
     :return: A short description, or a fallback when nothing is readable.
     """
     try:
-        handle.seek(0)  # type: ignore[attr-defined]
-        details = handle.read().strip()  # type: ignore[attr-defined]
+        handle.seek(0)
+        details = handle.read().strip()
     except OSError:  # pragma: no cover - unreadable lock file
         return "holder unknown"
     return details or "holder unknown"
@@ -786,185 +564,3 @@ def exit_code(report: Report) -> int:
     if report.interrupted:
         return 130  # Conventional exit code for termination by SIGINT.
     return 1 if report.failed or report.aborted else 0
-
-
-def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
-    """
-    Say what this run is about to do, before it does it.
-
-    :param args: Parsed command line arguments.
-    :param policy: The naming policy in force.
-    """
-    logger.debug("Naming policy: %s", policy.label)
-    if args.source_auto:
-        logger.info("Using discovered iBooks library: %s", args.source_dir)
-    else:
-        logger.info("Examining source: %s", args.source_dir)
-    logger.info("Writing output to: %s", args.output_dir)
-    if args.portable_names == STRIP:
-        logger.info("Portable naming: stripping characters other filesystems reject.")
-    elif args.portable_names:
-        logger.info(
-            "Portable naming: romanizing (non-Latin titles are transliterated)."
-        )
-    if args.dry_run:
-        logger.info(
-            "Running in dry-run mode. No file system modifications will be performed."
-        )
-
-
-def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
-    """
-    Render the plan without converting anything.
-
-    :param args: Parsed command line arguments.
-    :param policy: The naming policy in force.
-
-    :return: A process exit code.
-    """
-    packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
-    decisions = plan_exports(packages, args.output_dir, policy, _plan_options(args))
-    print(render_listing(decisions, args.as_json))
-    return 0
-
-
-def _run_verify(args: argparse.Namespace) -> int:
-    """
-    Check the archives already in the output directory.
-
-    :param args: Parsed command line arguments.
-
-    :return: A process exit code; non-zero if anything is damaged.
-    """
-    checked, damaged = verify_output(args.output_dir, epubcheck=args.epubcheck)
-    print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
-    if damaged:
-        print("Re-export the damaged books with --force.")
-    return 1 if damaged else 0
-
-
-def _plan_options(args: argparse.Namespace) -> PlanOptions:
-    """
-    Build planning options from parsed arguments.
-
-    :param args: Parsed command line arguments.
-
-    :return: The planner's settings.
-    """
-    return PlanOptions(
-        force=args.force,
-        refresh=args.refresh,
-        check_incomplete=args.skip_incomplete,
-        on_collision=args.on_collision,
-    )
-
-
-def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report, int]:
-    """
-    Collect, select and export, under the output directory lock.
-
-    :param args: Parsed command line arguments.
-    :param policy: The naming policy in force.
-
-    :return: The run's report, and the number of books still to convert.
-
-    :raises OutputLockedError: If another run holds the output lock.
-    """
-    packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
-    if not packages:
-        logger.warning("No matching *.epub packages found under %s", args.source_dir)
-
-    options = ExportOptions(
-        covers=args.covers,
-        min_free_mb=args.min_free,
-        validation=ValidationOptions(enabled=args.validate, epubcheck=args.epubcheck),
-        plan=_plan_options(args),
-    )
-
-    # Held here rather than inside the exporter so the partial counts survive
-    # a Ctrl-C.
-    report = Report()
-
-    # A dry run writes nothing, so it needs no lock and must not create one.
-    lock = nullcontext() if args.dry_run else output_lock(args.output_dir)
-    with lock:
-        if not args.dry_run:
-            sweep_partials(args.output_dir)
-
-        # Planned exactly once, and inside the lock. Both the work list and
-        # the count of what is left come from this one plan, so they cannot
-        # describe different libraries; planning outside the lock would let a
-        # concurrent run move the output directory underneath the decisions.
-        decisions = plan_exports(packages, args.output_dir, policy, options.plan)
-        pending_before = count_pending_decisions(decisions)
-        selected = cap_exports(
-            decisions, args.max_export_files, randomise=not args.no_shuffle
-        )
-
-        try:
-            asyncio.run(
-                export_planned(
-                    selected,
-                    args.output_dir,
-                    dry_run=args.dry_run,
-                    max_workers=args.workers,
-                    report=report,
-                    options=options,
-                )
-            )
-        except KeyboardInterrupt:
-            # Stopping is a normal way to end a long run: every finished book
-            # is already complete and atomically in place, so a rerun simply
-            # continues.
-            report.interrupted = True
-
-    return report, max(0, pending_before - report.exported)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """
-    Run the conversion from the command line.
-
-    :param argv: Argument list, defaulting to ``sys.argv[1:]``.
-
-    :return: A process exit code; non-zero if any export failed.
-    """
-    args = parse_args(argv)
-
-    verbosity = 0 if args.quiet else 1 + args.verbose
-    app_logger.configure(verbosity=verbosity, log_file=args.log_file)
-
-    try:
-        policy = build_policy(args.portable_names)
-    except PortableNamesUnavailableError as exc:
-        logger.critical("%s", exc)
-        return 2
-
-    _log_preamble(args, policy)
-
-    # --list and --verify only read. Creating the destination for them would
-    # turn a typo in -o into a stray directory instead of a report about the
-    # one that was meant.
-    if args.list_only:
-        return _run_listing(args, policy)
-
-    if args.verify:
-        return _run_verify(args)
-
-    if not args.dry_run:
-        try:
-            args.output_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            logger.critical("Could not create output directory: %s", exc)
-            return 1
-
-    try:
-        report, remaining = _run_export(args, policy)
-    except OutputLockedError as exc:
-        logger.critical("%s", exc)
-        return 3
-
-    print(format_summary(report, args.output_dir, args.dry_run, remaining))
-    logger.debug("Ending the convert application.")
-
-    return exit_code(report)

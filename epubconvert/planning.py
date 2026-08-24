@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .app_logger import logger
 from .naming import NamingPolicy, truncate_bytes
@@ -24,6 +24,28 @@ from .spec import PACKAGE_SUFFIX
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
 
+#: What the planner can decide about a package. These strings are a public
+#: contract, not an internal detail: ``--list`` names them all in its help text
+#: and ``--list --json`` emits them verbatim. Typing them keeps a mistyped
+#: comparison from passing the type checker.
+Status = Literal["pending", "exported", "collision", "drm", "incomplete"]
+
+#: Decision statuses. Each constant's value is what a user sees.
+PENDING: Status = "pending"
+EXPORTED: Status = "exported"
+COLLISION: Status = "collision"
+DRM: Status = "drm"
+INCOMPLETE: Status = "incomplete"
+
+#: How ``--on-collision`` may be set.
+CollisionMode = Literal["skip", "suffix"]
+SKIP: CollisionMode = "skip"
+SUFFIX: CollisionMode = "suffix"
+COLLISION_MODES = (SKIP, SUFFIX)
+
+#: Highest ``" (n)"`` suffix the planner will try before giving up on a name.
+MAX_SUFFIX = 99
+
 
 @dataclass(frozen=True)
 class PlanOptions:
@@ -32,7 +54,7 @@ class PlanOptions:
     force: bool = False
     refresh: bool = False
     check_incomplete: bool = False
-    on_collision: str = "skip"
+    on_collision: CollisionMode = SKIP
 
 
 @dataclass
@@ -40,23 +62,9 @@ class Decision:
     """What the planner decided about one package."""
 
     package: Path
-    status: str
+    status: Status
     target: Path | None = None
     reason: str | None = None
-
-
-#: Decision statuses.
-PENDING = "pending"
-ALREADY = "exported"
-COLLISION = "collision"
-DRM = "drm"
-INCOMPLETE = "incomplete"
-
-SKIP = "skip"
-SUFFIX = "suffix"
-COLLISION_MODES = (SKIP, SUFFIX)
-
-MAX_SUFFIX = 99
 
 
 def _suffixed(filename: str, position: int, max_bytes: int) -> str:
@@ -92,7 +100,7 @@ def _suffixed(filename: str, position: int, max_bytes: int) -> str:
 
 
 def _assign_names(
-    packages: Sequence[Path], policy: NamingPolicy, on_collision: str
+    packages: Sequence[Path], policy: NamingPolicy, on_collision: CollisionMode
 ) -> list[tuple[Path, str, str]]:
     """
     Give every package an output name, resolving collisions deterministically.
@@ -113,7 +121,7 @@ def _assign_names(
 
     :param packages: Packages to name.
     :param policy: Naming policy supplying filenames and identities.
-    :param on_collision: ``skip`` or ``suffix``.
+    :param on_collision: :data:`SKIP` or :data:`SUFFIX`.
 
     :return: Triples of package, filename and identity. A filename of ``""``
         marks a package that lost a collision.
@@ -210,7 +218,7 @@ def _decide(
     # pay for one on every book of the library on every rerun.
     if found is not None and not settings.force:
         if not (settings.refresh and _source_is_newer(package, found)):
-            return Decision(package, ALREADY, found)
+            return Decision(package, EXPORTED, found)
         refreshing = True
 
     status = inspect_package(package, check_incomplete=settings.check_incomplete)
@@ -248,42 +256,78 @@ def _source_is_newer(package: Path, exported: Path) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class _Outcome:
+    """How one non-pending status is counted and reported."""
+
+    #: Name of the :class:`~epubconvert.convert.Report` field to increment.
+    counter: str
+    #: Whether the per-book line is a warning rather than information.
+    warn: bool
+    #: Format string for the per-book line. Every entry uses the same two
+    #: named fields, ``name`` and ``reason``, so the caller never has to work
+    #: out which arguments a particular message wants.
+    line: str
+    #: Format string for the closing tally; takes the count.
+    tally: str
+
+
+#: Everything the reporter needs to know about a status, in one place. The
+#: alternative -- an if/elif chain over the statuses and a second block of ``if
+#: report.x`` tallies below it -- stated the same mapping twice, so a new status
+#: had to be added in three places and two of the branches drifted into being
+#: byte-identical.
+_OUTCOMES: dict[Status, _Outcome] = {
+    EXPORTED: _Outcome(
+        counter="skipped",
+        warn=False,
+        line="Already exported, skipping: %(name)s",
+        tally="Skipped %d already-exported file(s).",
+    ),
+    COLLISION: _Outcome(
+        counter="collisions",
+        warn=True,
+        line="Name collision, skipping: %(name)s (%(reason)s)",
+        tally="%d package(s) skipped because another book claims the same output name.",
+    ),
+    DRM: _Outcome(
+        counter="drm",
+        warn=True,
+        line="Skipped, %(reason)s: %(name)s",
+        tally="%d package(s) skipped as DRM-protected.",
+    ),
+    INCOMPLETE: _Outcome(
+        counter="incomplete",
+        warn=True,
+        line="Skipped, %(reason)s: %(name)s",
+        tally="%d package(s) skipped as not downloaded.",
+    ),
+}
+
+
 def record_decisions(decisions: Sequence[Decision], report: Report) -> None:
     """
     Fold planning decisions into the report and log them.
+
+    Pending decisions are left alone; the exporter counts those as it writes
+    them, so counting here too would double them.
 
     :param decisions: The planner's output.
     :param report: Report to accumulate counts into.
     """
     for decision in decisions:
-        if decision.status == ALREADY:
-            report.skipped += 1
-            logger.info("Already exported, skipping: %s", decision.package.name)
-        elif decision.status == COLLISION:
-            report.collisions += 1
-            logger.warning(
-                "Name collision, skipping: %s (%s)",
-                decision.package.name,
-                decision.reason,
-            )
-        elif decision.status == DRM:
-            report.drm += 1
-            logger.warning("Skipped, %s: %s", decision.reason, decision.package.name)
-        elif decision.status == INCOMPLETE:
-            report.incomplete += 1
-            logger.warning("Skipped, %s: %s", decision.reason, decision.package.name)
+        outcome = _OUTCOMES.get(decision.status)
+        if outcome is None:  # PENDING, which the exporter counts for itself.
+            continue
 
-    if report.skipped:
-        logger.info("Skipped %d already-exported file(s).", report.skipped)
-    if report.collisions:
-        logger.warning(
-            "%d package(s) skipped because another book claims the same output name.",
-            report.collisions,
-        )
-    if report.drm:
-        logger.warning("%d package(s) skipped as DRM-protected.", report.drm)
-    if report.incomplete:
-        logger.warning("%d package(s) skipped as not downloaded.", report.incomplete)
+        setattr(report, outcome.counter, getattr(report, outcome.counter) + 1)
+        log = logger.warning if outcome.warn else logger.info
+        log(outcome.line, {"name": decision.package.name, "reason": decision.reason})
+
+    for outcome in _OUTCOMES.values():
+        count = getattr(report, outcome.counter)
+        if count:
+            (logger.warning if outcome.warn else logger.info)(outcome.tally, count)
 
 
 def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:

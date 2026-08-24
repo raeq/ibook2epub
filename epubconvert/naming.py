@@ -80,7 +80,7 @@ def truncate_bytes(text: str, limit: int) -> str:
     return encoded[:limit].decode("utf-8", errors="ignore")
 
 
-def split_extension(name: str) -> tuple[str, str]:
+def _split_extension(name: str) -> tuple[str, str]:
     """
     Split a filename into its stem and its extension.
 
@@ -138,7 +138,7 @@ def strip_unsafe(
 
     :return: A filename safe to write on any of the target filesystems.
     """
-    stem, extension = split_extension(name)
+    stem, extension = _split_extension(name)
     stem = _replace_illegal(stem, separator)
     extension = _replace_illegal(extension, separator)
 
@@ -270,15 +270,6 @@ class PortableNaming:
         """Return a case- and accent-insensitive key for *filename*."""
         assert disarm is not None  # noqa: S101 - guarded in __init__
         return disarm.catalog_key(filename)
-
-
-def portable_available() -> bool:
-    """
-    Report whether the romanizing portable mode can be used.
-
-    :return: True if ``disarm`` is importable.
-    """
-    return disarm is not None
 
 
 def build_policy(portable: str | None) -> NamingPolicy:

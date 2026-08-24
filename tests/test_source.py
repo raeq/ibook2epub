@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import convert, source
+from epubconvert import run, source
 from tests.conftest import make_package
 
 FONT_ENCRYPTION = """<?xml version="1.0"?>
@@ -124,7 +124,7 @@ class TestDrmDetection:
         locked = make_package(library, "Locked.epub")
         add_meta(locked, "META-INF/sinf.xml", "<sinf/>")
 
-        code = convert.main(
+        code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
         )
 

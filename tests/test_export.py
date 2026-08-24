@@ -12,7 +12,8 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import convert, inspect_output
+from epubconvert import convert, inspect_output, run
+from epubconvert.archive import ARCHIVE_TIMESTAMP, zip_package
 from epubconvert.validate import ValidationError, read_package_dir
 from tests.conftest import make_package
 
@@ -28,24 +29,24 @@ class TestDeterministicArchives:
         first = output_dir / "first.epub"
         second = output_dir / "second.epub"
 
-        convert.zip_package(package, first)
-        convert.zip_package(package, second)
+        zip_package(package, first)
+        zip_package(package, second)
 
         assert digest(first) == digest(second)
 
     def test_timestamps_are_normalized(self, library, output_dir):
         target = output_dir / "Book One.epub"
 
-        convert.zip_package(library / "Book One.epub", target)
+        zip_package(library / "Book One.epub", target)
 
         with ZipFile(target) as archive:
             for info in archive.infolist():
-                assert info.date_time == convert.ARCHIVE_TIMESTAMP
+                assert info.date_time == ARCHIVE_TIMESTAMP
 
     def test_touching_the_source_does_not_change_the_bytes(self, library, output_dir):
         package = library / "Book One.epub"
         first = output_dir / "first.epub"
-        convert.zip_package(package, first)
+        zip_package(package, first)
         before = digest(first)
 
         for path in package.rglob("*"):
@@ -54,14 +55,14 @@ class TestDeterministicArchives:
                 os_utime = (os_stat.st_atime + 10_000, os_stat.st_mtime + 10_000)
                 os.utime(path, os_utime)
         second = output_dir / "second.epub"
-        convert.zip_package(package, second)
+        zip_package(package, second)
 
         assert digest(second) == before
 
     def test_archive_is_still_spec_valid(self, library, output_dir):
         target = output_dir / "Book One.epub"
 
-        convert.zip_package(library / "Book One.epub", target)
+        zip_package(library / "Book One.epub", target)
 
         with ZipFile(target) as archive:
             names = archive.namelist()
@@ -73,7 +74,7 @@ class TestDeterministicArchives:
     def test_content_still_round_trips(self, library, output_dir):
         target = output_dir / "Book One.epub"
 
-        convert.zip_package(library / "Book One.epub", target)
+        zip_package(library / "Book One.epub", target)
 
         with ZipFile(target) as archive:
             assert b"Chapter one" in archive.read("OEBPS/text/chapter1.xhtml")
@@ -81,7 +82,7 @@ class TestDeterministicArchives:
     def test_members_are_readable_not_owner_only(self, library, output_dir):
         target = output_dir / "Book One.epub"
 
-        convert.zip_package(library / "Book One.epub", target)
+        zip_package(library / "Book One.epub", target)
 
         with ZipFile(target) as archive:
             for info in archive.infolist():
@@ -90,7 +91,7 @@ class TestDeterministicArchives:
 
 class TestInterrupt:
     def test_partial_counts_survive(self, library, output_dir, monkeypatch, capsys):
-        real = convert.zip_package
+        real = zip_package
         calls = {"n": 0}
 
         def stop_after_one(source: Path, target: Path, *args) -> int:
@@ -101,7 +102,7 @@ class TestInterrupt:
 
         monkeypatch.setattr(convert, "zip_package", stop_after_one)
 
-        code = convert.main(
+        code = run.main(
             [
                 "-s",
                 str(library),
@@ -123,7 +124,7 @@ class TestInterrupt:
         assert "Exported 1" in out
 
     def test_finished_books_are_intact(self, library, output_dir, monkeypatch):
-        real = convert.zip_package
+        real = zip_package
         calls = {"n": 0}
 
         def stop_after_one(source: Path, target: Path, *args) -> int:
@@ -133,7 +134,7 @@ class TestInterrupt:
             return real(source, target, *args)
 
         monkeypatch.setattr(convert, "zip_package", stop_after_one)
-        convert.main(
+        run.main(
             [
                 "-s",
                 str(library),
@@ -155,7 +156,7 @@ class TestInterrupt:
         assert list(output_dir.glob("*.part")) == []
 
     def test_rerun_after_interrupt_continues(self, library, output_dir, monkeypatch):
-        real = convert.zip_package
+        real = zip_package
         calls = {"n": 0}
 
         def stop_after_one(source: Path, target: Path, *args) -> int:
@@ -177,10 +178,10 @@ class TestInterrupt:
             "1",
             "-q",
         ]
-        convert.main(argv)
+        run.main(argv)
         monkeypatch.setattr(convert, "zip_package", real)
 
-        assert convert.main(argv) == 0
+        assert run.main(argv) == 0
         assert len(list(output_dir.glob("*.epub"))) == 2
 
 
@@ -190,7 +191,7 @@ class TestDiskFloor:
         make_package(library, "Book.epub")
         monkeypatch.setattr(convert, "free_megabytes", lambda _p: 5)
 
-        code = convert.main(
+        code = run.main(
             [
                 "-s",
                 str(library),
@@ -214,7 +215,7 @@ class TestDiskFloor:
         make_package(library, "Book.epub")
         monkeypatch.setattr(convert, "free_megabytes", lambda _p: 0)
 
-        code = convert.main(
+        code = run.main(
             [
                 "-s",
                 str(library),
@@ -240,7 +241,7 @@ class TestCovers:
         library = tmp_path / "lib"
         _cover_package(library / "Book.epub")
 
-        convert.main(
+        run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
         )
 
@@ -251,7 +252,7 @@ class TestCovers:
         library = tmp_path / "lib"
         _cover_package(library / "Book.epub")
 
-        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert list(output_dir.glob("*.jpg")) == []
 
@@ -261,10 +262,10 @@ class TestCovers:
         library = tmp_path / "lib"
         _cover_package(library / "Book.epub")
         argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
-        convert.main(argv)
+        run.main(argv)
         capsys.readouterr()
 
-        convert.main(argv)
+        run.main(argv)
 
         # Identity globs *.epub, so the .jpg beside it must not affect reruns.
         assert "skipped 1" in capsys.readouterr().out
@@ -285,7 +286,7 @@ class TestCovers:
             encoding="utf-8",
         )
 
-        convert.main(
+        run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
         )
 
@@ -301,7 +302,7 @@ class TestCovers:
         guard = output_dir / "Book.jpg"
         guard.write_bytes(b"PRE-EXISTING")
 
-        convert.main(
+        run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
         )
 
@@ -311,7 +312,7 @@ class TestCovers:
         library = tmp_path / "lib"
         make_package(library, "Plain.epub")
 
-        code = convert.main(
+        code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
         )
 
@@ -336,7 +337,7 @@ class TestCovers:
             encoding="utf-8",
         )
 
-        code = convert.main(
+        code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
         )
 

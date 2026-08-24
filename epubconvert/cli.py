@@ -205,8 +205,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-shuffle",
         action="store_true",
         help=(
-            "Take the first N packages in sorted order instead of a random "
-            "selection when --max-export-files applies."
+            "Take the first N books still needing export, in sorted order, "
+            "instead of a random selection when --max-export-files applies."
         ),
     )
     parser.add_argument(

@@ -140,7 +140,8 @@ def find_opf_path(archive: ZipFile) -> str:
 
     :return: Archive path of the package document.
 
-    :raises ValidationError: If the container is missing or names no rootfile.
+    :raises ValidationError: If the container is missing, names no rootfile, or
+        names one outside the archive.
     """
     root = _read_xml(archive, CONTAINER_PATH)
     for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
@@ -170,7 +171,11 @@ def _checked_opf_path(full_path: str) -> str:
 
 def is_remote(href: str) -> bool:
     """
-    Report whether an href names a resource outside the archive.
+    Report whether an href is a URL rather than an archive member.
+
+    A remote resource is legitimate: the epub specification allows one in the
+    manifest. It simply is not expected to be inside the archive, so it must
+    not be looked for there.
 
     :param href: The manifest href to test.
 
@@ -181,7 +186,7 @@ def is_remote(href: str) -> bool:
 
 def escapes_archive(path: str) -> bool:
     """
-    Report whether a resolved archive path points outside the archive.
+    Report whether a path resolves above the archive root.
 
     :func:`_resolve` normalizes ``..`` segments, but an href carrying more of
     them than the package document has parent directories resolves to a path
@@ -196,6 +201,37 @@ def escapes_archive(path: str) -> bool:
     :return: True if the path leaves the archive.
     """
     return path.startswith("/") or path == ".." or path.startswith("../")
+
+
+def contained_file(package: Path, href: str) -> Path | None:
+    """
+    Resolve a manifest href to a real file inside a package, or refuse it.
+
+    Two checks, because neither covers the other: :func:`escapes_archive`
+    rejects the ``../`` and absolute paths :func:`_resolve` preserves, and the
+    resolved comparison catches a symlink that sits inside the package but
+    leads out of it.
+
+    This lives beside :func:`escapes_archive` rather than beside its caller so
+    that the whole containment rule is in one place. Any future reader that
+    turns a manifest entry into a path on disk -- fonts, thumbnails, metadata
+    sidecars -- should come through here rather than reinvent half of it.
+
+    :param package: The ``*.epub/`` package directory.
+    :param href: An archive path from the manifest.
+
+    :return: The file to read, or None if there is nothing safe to read.
+    """
+    if escapes_archive(href):
+        logger.debug("%r escapes the package %s", href, package.name)
+        return None
+
+    source = package / href
+    if not source.resolve().is_relative_to(package.resolve()):
+        logger.debug("%r resolves outside the package %s", href, package.name)
+        return None
+
+    return source if source.is_file() else None
 
 
 def _resolve(base: str, href: str) -> str:

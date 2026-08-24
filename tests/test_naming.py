@@ -12,7 +12,8 @@ from typing import Any
 
 import pytest
 
-from epubconvert import cli, convert, naming
+from epubconvert import cli, convert, naming, run
+from epubconvert.archive import collect_package_dirs
 from tests.conftest import make_package
 
 disarm = pytest.importorskip("disarm", reason="portable naming needs the disarm extra")
@@ -115,9 +116,9 @@ class TestPortableExport:
         make_package(source, "Sapiens: A Brief History.epub")
 
         export(
-            convert.collect_package_dirs(source),
+            collect_package_dirs(source),
             output_dir,
-            naming=naming.PortableNaming(),
+            policy=naming.PortableNaming(),
         )
 
         written = [p.name for p in output_dir.glob("*.epub")]
@@ -130,9 +131,9 @@ class TestPortableExport:
         make_package(source / "b", "THE HOBBIT.epub")
 
         report = export(
-            convert.collect_package_dirs(source),
+            collect_package_dirs(source),
             output_dir,
-            naming=naming.PortableNaming(),
+            policy=naming.PortableNaming(),
         )
 
         assert report.exported == 1
@@ -142,11 +143,11 @@ class TestPortableExport:
     def test_rerun_skips_via_recomputed_identity(self, tmp_path, output_dir):
         source = tmp_path / "lib"
         make_package(source, "Sapiens: A Brief History.epub")
-        packages = convert.collect_package_dirs(source)
+        packages = collect_package_dirs(source)
         policy = naming.PortableNaming()
-        export(packages, output_dir, naming=policy)
+        export(packages, output_dir, policy=policy)
 
-        report = export(packages, output_dir, naming=policy)
+        report = export(packages, output_dir, policy=policy)
 
         assert report.exported == 0
         assert report.skipped == 1
@@ -160,9 +161,9 @@ class TestPortableExport:
         make_package(source / "b", "Vol 1?2.epub")
 
         report = export(
-            convert.collect_package_dirs(source),
+            collect_package_dirs(source),
             output_dir,
-            naming=naming.PortableNaming(),
+            policy=naming.PortableNaming(),
         )
 
         assert report.collisions == 1
@@ -174,7 +175,7 @@ class TestPortableCli:
         source = tmp_path / "lib"
         make_package(source, "Sapiens: A Brief History.epub")
 
-        code = convert.main(
+        code = run.main(
             [
                 "-s",
                 str(source),
@@ -197,7 +198,7 @@ class TestPortableCli:
         source = tmp_path / "lib"
         make_package(source, "Sapiens: A Brief History.epub")
 
-        convert.main(["-s", str(source), "-o", str(output_dir), "-m", "0", "-q"])
+        run.main(["-s", str(source), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert [p.name for p in output_dir.glob("*.epub")] == [
             "Sapiens: A Brief History.epub"
@@ -243,7 +244,7 @@ class TestMissingExtra:
         make_package(source, "Dune.epub")
         monkeypatch.setattr(naming, "disarm", None)
         try:
-            code = convert.main(
+            code = run.main(
                 ["-s", str(source), "-o", str(output_dir), "-p", "romanize", "-q"]
             )
         finally:
@@ -330,10 +331,10 @@ class TestStripUnsafe:
         source = tmp_path / "lib"
         make_package(source, "?.epub")
         argv = ["-s", str(source), "-o", str(output_dir), "-m", "0", "-p", "strip"]
-        convert.main([*argv, "-q"])
+        run.main([*argv, "-q"])
         first = sorted(p.name for p in output_dir.glob("*.epub"))
 
-        convert.main([*argv, "-q"])
+        run.main([*argv, "-q"])
 
         assert first == sorted(p.name for p in output_dir.glob("*.epub"))
         assert len(first) == 1
@@ -367,7 +368,7 @@ class TestStripNaming:
         source = tmp_path / "lib"
         make_package(source, "こころ: Kokoro.epub")
 
-        convert.main(["-s", str(source), "-o", str(output_dir), "-m", "0", "-p", "-q"])
+        run.main(["-s", str(source), "-o", str(output_dir), "-m", "0", "-p", "-q"])
 
         names = [p.name for p in output_dir.glob("*.epub")]
         assert names == ["こころ Kokoro.epub"]

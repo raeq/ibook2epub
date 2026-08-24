@@ -43,7 +43,7 @@ Homepage = "https://github.com/raeq/ibook2epub"
 Issues = "https://github.com/raeq/ibook2epub/issues"
 
 [project.scripts]
-ibook2epub = "epubconvert.convert:main"
+ibook2epub = "epubconvert.run:main"
 
 [tool.setuptools]
 packages = ["epubconvert"]

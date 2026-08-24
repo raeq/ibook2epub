@@ -7,10 +7,25 @@
 
 import json
 import os
+from collections.abc import Sequence
+from pathlib import Path
 
-from epubconvert import convert, planning, source
-from epubconvert.naming import PassthroughNaming
+from epubconvert import convert, planning, run, source
+from epubconvert.archive import collect_package_dirs
+from epubconvert.naming import NamingPolicy, PassthroughNaming
 from tests.conftest import make_package
+
+
+def pending_count(
+    packages: Sequence[Path],
+    output_dir: Path,
+    policy: NamingPolicy,
+    options: planning.PlanOptions | None = None,
+) -> int:
+    """Count books still needing export, via the same path a run takes."""
+    return convert.count_pending_decisions(
+        planning.plan_exports(packages, output_dir, policy, options)
+    )
 
 
 class TestCollisionSuffix:
@@ -19,7 +34,7 @@ class TestCollisionSuffix:
         make_package(library / "a", "Same.epub")
         make_package(library / "b", "Same.epub")
 
-        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert len(list(output_dir.glob("*.epub"))) == 1
 
@@ -28,7 +43,7 @@ class TestCollisionSuffix:
         make_package(library / "a", "Same.epub")
         make_package(library / "b", "Same.epub")
 
-        convert.main(
+        run.main(
             [
                 "-s",
                 str(library),
@@ -62,10 +77,10 @@ class TestCollisionSuffix:
             "suffix",
             "-q",
         ]
-        convert.main(argv)
+        run.main(argv)
         first = {p.name: p.stat().st_mtime_ns for p in output_dir.glob("*.epub")}
 
-        convert.main(argv)
+        run.main(argv)
 
         second = {p.name: p.stat().st_mtime_ns for p in output_dir.glob("*.epub")}
         assert first == second  # nothing re-exported, nothing renamed
@@ -85,10 +100,10 @@ class TestCollisionSuffix:
             "suffix",
             "-q",
         ]
-        convert.main(argv)
+        run.main(argv)
         capsys.readouterr()
 
-        convert.main(argv)
+        run.main(argv)
 
         assert "Exported 0" in capsys.readouterr().out
 
@@ -98,14 +113,14 @@ class TestRefresh:
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
         argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
-        convert.main(argv)
+        run.main(argv)
         exported = output_dir / "Book.epub"
         before = exported.stat().st_mtime_ns
 
         # Make the source look newer than the export.
         future = exported.stat().st_mtime + 100
         os.utime(library / "Book.epub", (future, future))
-        convert.main([*argv, "--refresh"])
+        run.main([*argv, "--refresh"])
 
         assert exported.stat().st_mtime_ns != before
 
@@ -113,10 +128,10 @@ class TestRefresh:
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
         argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
-        convert.main(argv)
+        run.main(argv)
         before = (output_dir / "Book.epub").stat().st_mtime_ns
 
-        convert.main([*argv, "--refresh"])
+        run.main([*argv, "--refresh"])
 
         assert (output_dir / "Book.epub").stat().st_mtime_ns == before
 
@@ -129,7 +144,7 @@ class TestListing:
         (locked / "META-INF").mkdir(parents=True, exist_ok=True)
         (locked / "META-INF" / "sinf.xml").write_text("<sinf/>", encoding="utf-8")
 
-        code = convert.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
+        code = run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
 
         out = capsys.readouterr().out
         assert code == 0
@@ -141,7 +156,7 @@ class TestListing:
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
 
-        convert.main(
+        run.main(
             ["-s", str(library), "-o", str(output_dir), "--list", "--json", "-q"]
         )
 
@@ -153,10 +168,10 @@ class TestListing:
     def test_already_exported_books_are_marked(self, tmp_path, output_dir, capsys):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
         capsys.readouterr()
 
-        convert.main(
+        run.main(
             ["-s", str(library), "-o", str(output_dir), "--list", "--json", "-q"]
         )
 
@@ -167,7 +182,7 @@ class TestListing:
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
 
-        convert.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
 
         assert list(output_dir.glob("*.epub")) == []
 
@@ -176,9 +191,9 @@ class TestCountPending:
     def test_unexported_books_are_counted(self, tmp_path, output_dir):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        packages = convert.collect_package_dirs(library)
+        packages = collect_package_dirs(library)
 
-        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 1
+        assert pending_count(packages, output_dir, PassthroughNaming()) == 1
 
     def test_books_that_can_never_be_exported_are_excluded(self, tmp_path, output_dir):
         # A remaining count that can never reach zero is not progress. A
@@ -187,9 +202,9 @@ class TestCountPending:
         locked = make_package(library, "Locked.epub")
         (locked / "META-INF").mkdir(parents=True, exist_ok=True)
         (locked / "META-INF" / "sinf.xml").write_text("<sinf/>", encoding="utf-8")
-        packages = convert.collect_package_dirs(library)
+        packages = collect_package_dirs(library)
 
-        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 0
+        assert pending_count(packages, output_dir, PassthroughNaming()) == 0
 
     def test_suffixed_collisions_are_counted_separately(self, tmp_path, output_dir):
         # Both books need writing, under two different names. Comparing bare
@@ -197,9 +212,9 @@ class TestCountPending:
         library = tmp_path / "lib"
         make_package(library / "a", "Same.epub")
         make_package(library / "b", "Same.epub")
-        packages = convert.collect_package_dirs(library)
+        packages = collect_package_dirs(library)
 
-        count = convert.count_pending(
+        count = pending_count(
             packages,
             output_dir,
             PassthroughNaming(),
@@ -211,10 +226,10 @@ class TestCountPending:
     def test_exported_books_are_not_counted(self, tmp_path, output_dir):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
-        packages = convert.collect_package_dirs(library)
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        packages = collect_package_dirs(library)
 
-        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 0
+        assert pending_count(packages, output_dir, PassthroughNaming()) == 0
 
     def test_undownloaded_books_are_not_counted(
         self, tmp_path, output_dir, monkeypatch
@@ -227,7 +242,7 @@ class TestCountPending:
         library = tmp_path / "lib"
         make_package(library, "Stub.epub")
         monkeypatch.setattr(source, "has_dataless_files", lambda _package: True)
-        packages = convert.collect_package_dirs(library)
+        packages = collect_package_dirs(library)
         options = planning.PlanOptions(check_incomplete=True)
 
         decisions = planning.plan_exports(
@@ -236,6 +251,6 @@ class TestCountPending:
 
         assert [d.status for d in decisions] == [planning.INCOMPLETE]
         assert (
-            convert.count_pending(packages, output_dir, PassthroughNaming(), options)
+            pending_count(packages, output_dir, PassthroughNaming(), options)
             == 0
         )

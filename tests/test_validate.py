@@ -10,7 +10,8 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert import cli, convert, validate
+from epubconvert import cli, run, validate
+from epubconvert.archive import zip_package
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0"
@@ -252,7 +253,7 @@ class TestValidateDuringExport:
         # The real fixture library lacks an OPF, so build a faithful package.
         source = _package_from_members(output_dir.parent / "src" / "Book.epub")
 
-        count = convert.zip_package(
+        count = zip_package(
             source,
             output_dir / "Book.epub",
             validate.ValidationOptions(enabled=True),
@@ -268,7 +269,7 @@ class TestValidateDuringExport:
         target = output_dir / "Bad.epub"
 
         with pytest.raises(validate.ArchiveInvalidError):
-            convert.zip_package(
+            zip_package(
                 source, target, validate.ValidationOptions(enabled=True)
             )
 
@@ -280,7 +281,7 @@ class TestValidateDuringExport:
     def test_export_reports_the_failure(self, tmp_path, output_dir, capsys):
         _package_from_members(tmp_path / "lib" / "Bad.epub", drop="text/chapter1.xhtml")
 
-        code = convert.main(
+        code = run.main(
             [
                 "-s",
                 str(tmp_path / "lib"),
@@ -300,7 +301,7 @@ class TestValidateDuringExport:
     def test_without_the_flag_the_bad_book_is_written(self, tmp_path, output_dir):
         _package_from_members(tmp_path / "lib" / "Bad.epub", drop="text/chapter1.xhtml")
 
-        convert.main(
+        run.main(
             ["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-m", "0", "-q"]
         )
 
@@ -313,7 +314,7 @@ class TestVerifyMode:
         source = tmp_path / "lib"
         source.mkdir()
 
-        code = convert.main(
+        code = run.main(
             ["-s", str(source), "-o", str(output_dir), "--verify", "-q"]
         )
 
@@ -326,7 +327,7 @@ class TestVerifyMode:
         source = tmp_path / "lib"
         source.mkdir()
 
-        code = convert.main(
+        code = run.main(
             ["-s", str(source), "-o", str(output_dir), "--verify", "-q"]
         )
 
@@ -338,7 +339,7 @@ class TestVerifyMode:
     def test_verify_converts_nothing(self, tmp_path, output_dir):
         _package_from_members(tmp_path / "lib" / "Book.epub")
 
-        convert.main(
+        run.main(
             ["-s", str(tmp_path / "lib"), "-o", str(output_dir), "--verify", "-q"]
         )
 

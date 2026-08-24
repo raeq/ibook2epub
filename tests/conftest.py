@@ -1,4 +1,27 @@
-"""Shared fixtures: synthetic iBooks libraries on disk."""
+"""
+Shared fixtures: synthetic iBooks libraries on disk.
+
+Which file covers what. The split is by behaviour rather than one file per
+module, so this map saves a search:
+
+===========================  ==================================================
+``test_convert.py``          discovery and exclusion (``archive``), the export
+                             cap, the partial sweep, the summary line
+``test_export.py``           archive writing (``archive``), determinism,
+                             interrupts, the disk floor, covers
+                             (``inspect_output.extract_cover``)
+``test_validate.py``         ``validate``, and ``--verify``
+                             (``inspect_output.verify_output``)
+``test_planning.py``         ``planning``: collisions, refresh, the listings
+``test_naming.py``           ``naming``, and identity round trips
+``test_cli.py``              ``cli`` argument parsing and ``run.main``
+``test_options.py``          individual flags, the run lock, remaining counts
+``test_source.py``           ``source``: DRM and iCloud stub detection
+===========================  ==================================================
+
+``app_logger``, ``defaults`` and ``spec`` are exercised through the modules
+that use them rather than directly.
+"""
 
 from pathlib import Path
 

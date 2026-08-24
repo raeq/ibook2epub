@@ -13,7 +13,13 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import convert, planning
+from epubconvert import convert, planning, run
+from epubconvert.archive import (
+    PARTIAL_SUFFIX,
+    collect_package_dirs,
+    is_excluded,
+    zip_package,
+)
 from tests.conftest import EXPECTED_MEMBERS, make_package
 
 
@@ -36,14 +42,14 @@ class TestIsExcluded:
         ["mimetype", ".DS_Store", "iTunesMetadata.plist", "bookmarks.plist"],
     )
     def test_apple_bookkeeping_is_excluded_at_the_root(self, name):
-        assert convert.is_excluded(name, at_root=True)
+        assert is_excluded(name, at_root=True)
 
     @pytest.mark.parametrize(
         "name",
         ["content.opf", "chapter1.xhtml", "container.xml", "cover.jpg", "style.css"],
     )
     def test_content_is_kept(self, name):
-        assert not convert.is_excluded(name, at_root=True)
+        assert not is_excluded(name, at_root=True)
 
     @pytest.mark.parametrize(
         "name",
@@ -53,24 +59,24 @@ class TestIsExcluded:
         # Regression: these patterns used to match at every depth, so a real
         # chapter named bookmarks.xhtml or a .plist data asset was silently
         # dropped, corrupting the book.
-        assert not convert.is_excluded(name, at_root=False)
+        assert not is_excluded(name, at_root=False)
 
     def test_ds_store_is_excluded_at_every_depth(self):
-        assert convert.is_excluded(".DS_Store", at_root=True)
-        assert convert.is_excluded(".DS_Store", at_root=False)
+        assert is_excluded(".DS_Store", at_root=True)
+        assert is_excluded(".DS_Store", at_root=False)
 
 
 class TestCollectPackageDirs:
     """Discovery of ``*.epub/`` package directories."""
 
     def test_finds_top_level_and_nested_packages(self, library):
-        found = convert.collect_package_dirs(library)
+        found = collect_package_dirs(library)
 
         assert [path.name for path in found] == ["Book One.epub", "Book Two.epub"]
         assert found[1] == library / "Nested" / "Deep" / "Book Two.epub"
 
     def test_returns_full_paths_so_nested_packages_resolve(self, library):
-        for path in convert.collect_package_dirs(library):
+        for path in collect_package_dirs(library):
             assert path.is_dir()
 
     def test_does_not_descend_into_a_package(self, library):
@@ -78,17 +84,17 @@ class TestCollectPackageDirs:
         inner = library / "Book One.epub" / "Inner.epub"
         inner.mkdir()
 
-        found = convert.collect_package_dirs(library)
+        found = collect_package_dirs(library)
 
         assert inner not in found
 
     def test_ignores_plain_directories(self, library):
-        found = convert.collect_package_dirs(library)
+        found = collect_package_dirs(library)
 
         assert all(path.name.endswith(".epub") for path in found)
 
     def test_missing_source_yields_nothing(self, tmp_path):
-        assert convert.collect_package_dirs(tmp_path / "absent") == []
+        assert collect_package_dirs(tmp_path / "absent") == []
 
 
 class TestZipPackage:
@@ -97,7 +103,7 @@ class TestZipPackage:
     def test_mimetype_is_first_and_stored(self, library, output_dir):
         target = output_dir / "Book One.epub"
 
-        convert.zip_package(library / "Book One.epub", target)
+        zip_package(library / "Book One.epub", target)
 
         with ZipFile(target) as archive:
             names = archive.namelist()
@@ -110,7 +116,7 @@ class TestZipPackage:
     def test_archive_is_valid_and_holds_only_content(self, library, output_dir):
         target = output_dir / "Book One.epub"
 
-        file_count = convert.zip_package(library / "Book One.epub", target)
+        file_count = zip_package(library / "Book One.epub", target)
 
         with ZipFile(target) as archive:
             assert archive.testzip() is None
@@ -140,7 +146,7 @@ class TestZipPackage:
             path.write_text(content, encoding="utf-8")
 
         target = output_dir / "Book.epub"
-        convert.zip_package(package, target)
+        zip_package(package, target)
 
         with ZipFile(target) as archive:
             members = set(archive.namelist())
@@ -160,7 +166,7 @@ class TestZipPackage:
         (package / "OEBPS" / "content.opf").write_text("<package/>", encoding="utf-8")
 
         target = output_dir / "Book.epub"
-        convert.zip_package(package, target)
+        zip_package(package, target)
 
         with ZipFile(target) as archive:
             assert "OEBPS/.DS_Store" not in archive.namelist()
@@ -175,7 +181,7 @@ class TestZipPackage:
         package = make_package(tmp_path / "src", name)
         target = output_dir / name
 
-        convert.zip_package(package, target)
+        zip_package(package, target)
 
         assert target.exists()
         assert list(output_dir.glob("*.part")) == []
@@ -189,12 +195,12 @@ class TestZipPackage:
         package = make_package(tmp_path / "src", name)
         target = output_dir / name
 
-        convert.zip_package(package, target)
+        zip_package(package, target)
 
         assert target.exists()
 
     def test_leaves_no_partial_file_behind_on_success(self, library, output_dir):
-        convert.zip_package(library / "Book One.epub", output_dir / "Book One.epub")
+        zip_package(library / "Book One.epub", output_dir / "Book One.epub")
 
         assert list(output_dir.glob("*.part")) == []
 
@@ -206,10 +212,10 @@ class TestZipPackage:
         def boom(_name, **_kwargs):
             raise OSError("disk fell over")
 
-        monkeypatch.setattr(convert, "is_excluded", boom)
+        monkeypatch.setattr("epubconvert.archive.is_excluded", boom)
 
         with pytest.raises(OSError):
-            convert.zip_package(library / "Book One.epub", target)
+            zip_package(library / "Book One.epub", target)
 
         # The critical property: an interrupted run must not leave a truncated
         # archive that the "already exported" check would skip forever.
@@ -221,7 +227,7 @@ class TestExportPackages:
     """Batch export behaviour."""
 
     def test_exports_every_package(self, library, output_dir):
-        packages = convert.collect_package_dirs(library)
+        packages = collect_package_dirs(library)
 
         report = export(packages, output_dir)
 
@@ -234,7 +240,7 @@ class TestExportPackages:
         }
 
     def test_rerun_skips_completed_work(self, library, output_dir):
-        packages = convert.collect_package_dirs(library)
+        packages = collect_package_dirs(library)
         export(packages, output_dir)
 
         report = export(packages, output_dir)
@@ -243,7 +249,7 @@ class TestExportPackages:
         assert report.skipped == 2
 
     def test_dry_run_writes_nothing_and_reports_plans(self, library, output_dir):
-        packages = convert.collect_package_dirs(library)
+        packages = collect_package_dirs(library)
 
         report = export(packages, output_dir, dry_run=True)
 
@@ -271,8 +277,8 @@ class TestExportPackages:
         def boom(_name, **_kwargs):
             raise OSError("disk fell over")
 
-        monkeypatch.setattr(convert, "is_excluded", boom)
-        packages = convert.collect_package_dirs(library)
+        monkeypatch.setattr("epubconvert.archive.is_excluded", boom)
+        packages = collect_package_dirs(library)
 
         report = export(packages, output_dir)
 
@@ -321,7 +327,7 @@ class TestCapExports:
         # already-exported books against it stalls the run: every book the cap
         # admits is one it will not write.
         done = [
-            planning.Decision(Path(f"done{i}.epub"), planning.ALREADY)
+            planning.Decision(Path(f"done{i}.epub"), planning.EXPORTED)
             for i in range(5)
         ]
         decisions = [*done, *self.pending(4)]
@@ -334,21 +340,21 @@ class TestCapExports:
         # They carry the skipped, DRM and undownloaded counts for the summary,
         # which should describe the library rather than the capped slice.
         done = [
-            planning.Decision(Path(f"done{i}.epub"), planning.ALREADY)
+            planning.Decision(Path(f"done{i}.epub"), planning.EXPORTED)
             for i in range(5)
         ]
         decisions = [*done, *self.pending(4)]
 
         selected = convert.cap_exports(decisions, 1, randomise=False)
 
-        assert sum(1 for d in selected if d.status == planning.ALREADY) == 5
+        assert sum(1 for d in selected if d.status == planning.EXPORTED) == 5
 
 
 class TestSweepPartials:
     """Cleanup of temporaries left by a run that was killed outright."""
 
     def test_abandoned_temporaries_are_removed(self, output_dir):
-        stale = output_dir / f"tmpabcd1234{convert.PARTIAL_SUFFIX}"
+        stale = output_dir / f"tmpabcd1234{PARTIAL_SUFFIX}"
         stale.write_bytes(b"half an archive")
 
         assert convert.sweep_partials(output_dir) == 1
@@ -368,10 +374,10 @@ class TestSweepPartials:
         # exists to protect.
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        stale = output_dir / f"tmpdeadbeef{convert.PARTIAL_SUFFIX}"
+        stale = output_dir / f"tmpdeadbeef{PARTIAL_SUFFIX}"
         stale.write_bytes(b"half an archive")
 
-        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert not stale.exists()
         assert (output_dir / "Book.epub").exists()

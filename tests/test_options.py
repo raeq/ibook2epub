@@ -5,12 +5,14 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
-from epubconvert import __version__, cli, convert
-from epubconvert.naming import PassthroughNaming
+from epubconvert import __version__, cli, convert, planning, run
+from epubconvert.archive import collect_package_dirs
+from epubconvert.naming import NamingPolicy, PassthroughNaming
 from tests.conftest import make_package
 
 
@@ -21,6 +23,18 @@ def small_library_fixture(tmp_path: Path) -> Path:
     for title in ["The Hobbit.epub", "Dune.epub", "Hobbit Notes.epub"]:
         make_package(source, title)
     return source
+
+
+def pending_count(
+    packages: Sequence[Path],
+    output_dir: Path,
+    policy: NamingPolicy,
+    options: planning.PlanOptions | None = None,
+) -> int:
+    """Count books still needing export, via the same path a run takes."""
+    return convert.count_pending_decisions(
+        planning.plan_exports(packages, output_dir, policy, options)
+    )
 
 
 class TestVersion:
@@ -34,36 +48,36 @@ class TestVersion:
 
 class TestMatch:
     def test_bare_word_matches_anywhere(self, small_library):
-        packages = convert.collect_package_dirs(small_library)
+        packages = collect_package_dirs(small_library)
 
         matched = convert.filter_packages(packages, "hobbit")
 
         assert {p.name for p in matched} == {"The Hobbit.epub", "Hobbit Notes.epub"}
 
     def test_matching_is_case_insensitive(self, small_library):
-        packages = convert.collect_package_dirs(small_library)
+        packages = collect_package_dirs(small_library)
 
         assert len(convert.filter_packages(packages, "HOBBIT")) == 2
 
     def test_glob_is_anchored(self, small_library):
-        packages = convert.collect_package_dirs(small_library)
+        packages = collect_package_dirs(small_library)
 
         matched = convert.filter_packages(packages, "The*")
 
         assert {p.name for p in matched} == {"The Hobbit.epub"}
 
     def test_no_pattern_keeps_everything(self, small_library):
-        packages = convert.collect_package_dirs(small_library)
+        packages = collect_package_dirs(small_library)
 
         assert len(convert.filter_packages(packages, None)) == 3
 
     def test_no_match_yields_nothing(self, small_library):
-        packages = convert.collect_package_dirs(small_library)
+        packages = collect_package_dirs(small_library)
 
         assert convert.filter_packages(packages, "silmarillion") == []
 
     def test_end_to_end(self, small_library, output_dir):
-        convert.main(
+        run.main(
             [
                 "-s",
                 str(small_library),
@@ -83,20 +97,20 @@ class TestMatch:
 class TestForce:
     def test_existing_output_is_re_exported(self, small_library, output_dir):
         argv = ["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"]
-        convert.main(argv)
+        run.main(argv)
         stamp = (output_dir / "Dune.epub").stat().st_mtime_ns
 
-        convert.main([*argv, "--force"])
+        run.main([*argv, "--force"])
 
         assert (output_dir / "Dune.epub").stat().st_mtime_ns != stamp
         assert len(list(output_dir.glob("*.epub"))) == 3
 
     def test_without_force_nothing_is_rewritten(self, small_library, output_dir):
         argv = ["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"]
-        convert.main(argv)
+        run.main(argv)
         stamp = (output_dir / "Dune.epub").stat().st_mtime_ns
 
-        convert.main(argv)
+        run.main(argv)
 
         assert (output_dir / "Dune.epub").stat().st_mtime_ns == stamp
 
@@ -119,7 +133,7 @@ class TestWorkers:
     def test_a_high_count_still_produces_correct_output(
         self, small_library, output_dir
     ):
-        code = convert.main(
+        code = run.main(
             [
                 "-s",
                 str(small_library),
@@ -139,12 +153,12 @@ class TestWorkers:
 
 class TestRemainingCount:
     def test_counts_books_not_yet_exported(self, small_library, output_dir):
-        packages = convert.collect_package_dirs(small_library)
+        packages = collect_package_dirs(small_library)
 
-        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 3
+        assert pending_count(packages, output_dir, PassthroughNaming()) == 3
 
     def test_drops_as_books_are_exported(self, small_library, output_dir):
-        convert.main(
+        run.main(
             [
                 "-s",
                 str(small_library),
@@ -156,12 +170,12 @@ class TestRemainingCount:
                 "-q",
             ]
         )
-        packages = convert.collect_package_dirs(small_library)
+        packages = collect_package_dirs(small_library)
 
-        assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 2
+        assert pending_count(packages, output_dir, PassthroughNaming()) == 2
 
     def test_summary_reports_what_is_left(self, small_library, output_dir, capsys):
-        convert.main(
+        run.main(
             [
                 "-s",
                 str(small_library),
@@ -177,7 +191,7 @@ class TestRemainingCount:
         assert "2 remaining; rerun to continue." in capsys.readouterr().out
 
     def test_summary_omits_remaining_when_done(self, small_library, output_dir, capsys):
-        convert.main(["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"])
+        run.main(["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"])
 
         # Match the phrase, not the bare word: pytest names its tmp directory
         # after the test, so the output path itself contains "remaining".
@@ -197,7 +211,7 @@ class TestExportCapProgress:
 
         counts = []
         for _ in range(3):
-            convert.main([*argv, "-q"])
+            run.main([*argv, "-q"])
             counts.append(len(list(output_dir.glob("*.epub"))))
 
         assert counts == [3, 6, 9]
@@ -209,10 +223,10 @@ class TestExportCapProgress:
         for index in range(6):
             make_package(library, f"Book{index:02d}.epub")
         argv = ["-s", str(library), "-o", str(output_dir), "-m", "2", "--no-shuffle"]
-        convert.main([*argv, "-q"])
+        run.main([*argv, "-q"])
         capsys.readouterr()
 
-        convert.main([*argv, "-q"])
+        run.main([*argv, "-q"])
 
         assert "skipped 2" in capsys.readouterr().out
 
@@ -220,16 +234,16 @@ class TestExportCapProgress:
 class TestOutputLock:
     def test_lock_is_released_after_a_run(self, small_library, output_dir):
         argv = ["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"]
-        convert.main(argv)
+        run.main(argv)
 
         # A second sequential run must not be blocked by the first.
-        assert convert.main([*argv, "--force"]) == 0
+        assert run.main([*argv, "--force"]) == 0
 
     def test_a_held_lock_stops_a_concurrent_run(self, small_library, output_dir):
         pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
 
         with convert.output_lock(output_dir):
-            code = convert.main(
+            code = run.main(
                 ["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"]
             )
 
@@ -249,7 +263,7 @@ class TestOutputLock:
             pass
 
     def test_dry_run_takes_no_lock(self, small_library, output_dir):
-        convert.main(
+        run.main(
             ["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-d", "-q"]
         )
 
@@ -259,7 +273,7 @@ class TestOutputLock:
 class TestArchivePermissions:
     def test_exported_archives_are_world_readable(self, small_library, output_dir):
         # mkstemp creates 0600; exported books should not inherit that.
-        convert.main(["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"])
+        run.main(["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"])
 
         for archive in output_dir.glob("*.epub"):
             assert archive.stat().st_mode & 0o044

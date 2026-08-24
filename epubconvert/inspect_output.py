@@ -1,10 +1,14 @@
 """
-Reading the output directory back.
+Looking at the output directory rather than writing to it.
 
-Writing the output directory is not the same as trusting it. These are the
-operations that read it again: checking that exported archives are still
-sound, measuring the space left to write into, and lifting a cover image out
-beside a book.
+Writing the output directory is not the same as trusting it. Two of these
+operations read it back: checking that exported archives are still sound, and
+measuring the space left to write into.
+
+The third, :func:`extract_cover`, writes *into* it, and deliberately takes its
+bytes from the source package rather than from the archive just written. It
+lives here because it is about what ends up beside a book, not about how the
+book itself is built.
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ from .spec import PACKAGE_SUFFIX
 from .validate import (
     ValidationError,
     ValidationOptions,
-    escapes_archive,
+    contained_file,
     read_package_dir,
 )
 
@@ -34,31 +38,6 @@ def free_megabytes(path: Path) -> int:
         return shutil.disk_usage(path).free // (1024 * 1024)
     except OSError:  # pragma: no cover - unusual filesystem
         return 1 << 30
-
-
-def _contained_file(package: Path, href: str) -> Path | None:
-    """
-    Resolve a manifest href to a real file, refusing anything outside.
-
-    Two checks, because neither covers the other: the textual one rejects the
-    ``../`` and absolute paths the resolver preserves, and the resolved one
-    catches a symlink that sits inside the package but leads out of it.
-
-    :param package: The ``*.epub/`` package directory.
-    :param href: An archive path from the manifest.
-
-    :return: The file to read, or None if there is nothing safe to read.
-    """
-    if escapes_archive(href):
-        logger.debug("%r escapes %s", href, package.name)
-        return None
-
-    source = package / href
-    if not source.resolve().is_relative_to(package.resolve()):
-        logger.debug("%r resolves outside %s", href, package.name)
-        return None
-
-    return source if source.is_file() else None
 
 
 def extract_cover(package: Path, target_archive: Path) -> Path | None:
@@ -93,8 +72,13 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         href = described.manifest.get(described.cover_id)
         if not href:
             return None
-        source = _contained_file(package, href)
+        source = contained_file(package, href)
         if source is None:
+            logger.debug(
+                "No cover for %s: %r is not a readable file inside the package",
+                target_archive.name,
+                href,
+            )
             return None
 
         # with_suffix() *replaces* the extension, so a cover href ending in

@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from epubconvert import app_logger, cli, convert, defaults
+from epubconvert import app_logger, cli, convert, defaults, run
 from tests.conftest import make_package
 
 
@@ -161,7 +161,7 @@ class TestMain:
     def test_creates_a_missing_output_directory(self, library, tmp_path, capsys):
         output = tmp_path / "brand" / "new"
 
-        code = convert.main(
+        code = run.main(
             ["-s", str(library), "-o", str(output), "-m", "0", "--no-shuffle"]
         )
 
@@ -171,7 +171,7 @@ class TestMain:
         assert "Exported 2" in capsys.readouterr().out
 
     def test_dry_run_touches_nothing(self, library, output_dir, capsys):
-        code = convert.main(
+        code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-d"]
         )
 
@@ -186,21 +186,21 @@ class TestMain:
     def test_dry_run_does_not_create_the_output_directory(self, library, tmp_path):
         output = tmp_path / "never"
 
-        convert.main(["-s", str(library), "-o", str(output), "-d"])
+        run.main(["-s", str(library), "-o", str(output), "-d"])
 
         assert not output.exists()
 
     def test_cap_limits_the_export(self, library, output_dir):
-        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "1"])
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "1"])
 
         assert len(list(output_dir.glob("*.epub"))) == 1
 
     def test_rerunning_is_safe(self, library, output_dir, capsys):
         argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "--no-shuffle"]
-        convert.main(argv)
+        run.main(argv)
         capsys.readouterr()
 
-        code = convert.main(argv)
+        code = run.main(argv)
 
         assert code == 0
         assert "Exported 0" in capsys.readouterr().out
@@ -212,9 +212,9 @@ class TestMain:
         def boom(_name):
             raise OSError("disk fell over")
 
-        monkeypatch.setattr(convert, "is_excluded", boom)
+        monkeypatch.setattr("epubconvert.archive.is_excluded", boom)
 
-        code = convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0"])
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0"])
 
         assert code == 1
 
@@ -222,7 +222,7 @@ class TestMain:
         empty = tmp_path / "empty"
         empty.mkdir()
 
-        code = convert.main(["-s", str(empty), "-o", str(output_dir)])
+        code = run.main(["-s", str(empty), "-o", str(output_dir)])
 
         assert code == 0
         # The run lock is expected; no books should have been written.
