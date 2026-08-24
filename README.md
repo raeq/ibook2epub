@@ -190,10 +190,11 @@ ibook2epub -s "$HOME/iBooks/" -o "$HOME/Downloads/epubs/" -vv --log-file run.log
 
 ### Selecting which books to convert
 
-When `--max-export-files` applies, the capped subset is chosen at *random* by
-default, so repeated runs work through the library a batch at a time. Pass
-`--no-shuffle` to take books in sorted order instead, which makes a run
-reproducible.
+`--max-export-files` caps the books actually written, not the books looked at,
+so repeated runs work through the library a batch at a time whatever order they
+take. The capped subset is chosen at random by default. Pass `--no-shuffle` to
+take books in sorted order instead, which makes a run reproducible without
+stalling it.
 
 Each run reports how much is left, so the default batching reads as progress
 rather than a limit. The figure counts only books that can still be

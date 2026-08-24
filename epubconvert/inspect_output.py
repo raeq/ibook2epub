@@ -14,7 +14,12 @@ from pathlib import Path
 
 from .app_logger import logger
 from .spec import PACKAGE_SUFFIX
-from .validate import ValidationError, ValidationOptions, read_package_dir
+from .validate import (
+    ValidationError,
+    ValidationOptions,
+    escapes_archive,
+    read_package_dir,
+)
 
 
 def free_megabytes(path: Path) -> int:
@@ -31,6 +36,31 @@ def free_megabytes(path: Path) -> int:
         return 1 << 30
 
 
+def _contained_file(package: Path, href: str) -> Path | None:
+    """
+    Resolve a manifest href to a real file, refusing anything outside.
+
+    Two checks, because neither covers the other: the textual one rejects the
+    ``../`` and absolute paths the resolver preserves, and the resolved one
+    catches a symlink that sits inside the package but leads out of it.
+
+    :param package: The ``*.epub/`` package directory.
+    :param href: An archive path from the manifest.
+
+    :return: The file to read, or None if there is nothing safe to read.
+    """
+    if escapes_archive(href):
+        logger.debug("%r escapes %s", href, package.name)
+        return None
+
+    source = package / href
+    if not source.resolve().is_relative_to(package.resolve()):
+        logger.debug("%r resolves outside %s", href, package.name)
+        return None
+
+    return source if source.is_file() else None
+
+
 def extract_cover(package: Path, target_archive: Path) -> Path | None:
     """
     Write a book's cover image beside its exported archive.
@@ -45,6 +75,12 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
     from here would abort the run and lose the counts for books that had
     already succeeded.
 
+    The href is a value out of the book's own package document, so it is not
+    trusted to stay inside the package: a manifest declaring
+    ``href="../../../secret"`` as the cover image would otherwise have this
+    function read that file and write its bytes into the output directory,
+    where they travel on to whatever device the shelf is copied to.
+
     :param package: The source ``*.epub/`` package directory.
     :param target_archive: The exported epub file the cover sits beside.
 
@@ -57,8 +93,8 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         href = described.manifest.get(described.cover_id)
         if not href:
             return None
-        source = package / href
-        if not source.is_file():
+        source = _contained_file(package, href)
+        if source is None:
             return None
 
         # with_suffix() *replaces* the extension, so a cover href ending in

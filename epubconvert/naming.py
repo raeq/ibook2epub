@@ -80,6 +80,44 @@ def truncate_bytes(text: str, limit: int) -> str:
     return encoded[:limit].decode("utf-8", errors="ignore")
 
 
+def split_extension(name: str) -> tuple[str, str]:
+    """
+    Split a filename into its stem and its extension.
+
+    The split happens *before* any cleaning. Cleaning the whole name and
+    splitting afterwards lets the trailing-dot strip eat the dot that
+    separates the extension, whenever the stem cleans away to nothing: a book
+    titled ``?`` gives ``?.epub`` -> ``.epub`` -> ``epub``. That name has no
+    extension for ``*.epub`` to match, so the output directory stops
+    recognising the book as exported and every rerun exports it again.
+
+    :param name: The filename to split.
+
+    :return: The stem, and the extension including its leading dot. The
+        extension is empty when the name has none.
+    """
+    stem, dot, extension = name.rpartition(".")
+    if not dot or not extension:
+        return name, ""
+    return stem, f".{extension}"
+
+
+def _replace_illegal(text: str, separator: str) -> str:
+    """
+    Swap out the characters other filesystems reject and collapse whitespace.
+
+    :param text: The text to clean.
+    :param separator: Replacement for illegal characters.
+
+    :return: The cleaned text.
+    """
+    replaced = "".join(
+        separator if char in WINDOWS_ILLEGAL or ord(char) < 32 else char
+        for char in text
+    )
+    return " ".join(replaced.split())
+
+
 def strip_unsafe(
     name: str, *, separator: str = " ", max_bytes: int = MAX_FILENAME_BYTES
 ) -> str:
@@ -90,38 +128,43 @@ def strip_unsafe(
     correctly, so the portability problem is the ASCII metacharacters, the
     reserved device names, and the length — not the script.
 
+    The extension is carried through untouched by the stem's cleaning, so a
+    title made entirely of illegal characters yields ``_.epub`` rather than a
+    name the ``*.epub`` glob can no longer see.
+
     :param name: The candidate filename.
     :param separator: Replacement for illegal characters.
     :param max_bytes: Byte budget for the result.
 
     :return: A filename safe to write on any of the target filesystems.
     """
-    cleaned = "".join(
-        separator if char in WINDOWS_ILLEGAL or ord(char) < 32 else char
-        for char in name
-    )
-    cleaned = " ".join(cleaned.split())
+    stem, extension = split_extension(name)
+    stem = _replace_illegal(stem, separator)
+    extension = _replace_illegal(extension, separator)
+
     # Windows silently drops a trailing dot or space, so a name ending in one
-    # would not round-trip.
-    cleaned = cleaned.strip(" .")
+    # would not round-trip. Only the stem is stripped: stripping the assembled
+    # name would take the separating dot with it.
+    stem = stem.strip(" .")
+    if extension:
+        extension = f".{extension.strip(' .')}"
 
-    stem, dot, extension = cleaned.rpartition(".")
-    checked = stem if dot else cleaned
-    if checked.upper() in RESERVED_STEMS:
-        cleaned = f"_{cleaned}"
+    if stem.upper() in RESERVED_STEMS:
+        stem = f"_{stem}"
 
-    if not cleaned:
-        return "_"
+    if not stem:
+        stem = "_"
 
-    if len(cleaned.encode("utf-8")) <= max_bytes:
-        return cleaned
+    budget = max_bytes - len(extension.encode("utf-8"))
+    if budget < 1:
+        # An extension that alone exceeds the budget leaves nothing worth
+        # preserving; clamp the whole name and accept the loss.
+        return truncate_bytes(f"{stem}{extension}", max_bytes)
 
-    stem, dot, extension = cleaned.rpartition(".")
-    tail = f".{extension}" if dot else ""
-    if dot and len(tail.encode("utf-8")) < max_bytes:
-        budget = max_bytes - len(tail.encode("utf-8"))
-        return truncate_bytes(stem, budget).rstrip(" .") + tail
-    return truncate_bytes(cleaned, max_bytes)
+    if len(stem.encode("utf-8")) > budget:
+        stem = truncate_bytes(stem, budget).rstrip(" .") or "_"
+
+    return f"{stem}{extension}"
 
 
 @runtime_checkable

@@ -8,7 +8,7 @@
 import json
 import os
 
-from epubconvert import convert, planning
+from epubconvert import convert, planning, source
 from epubconvert.naming import PassthroughNaming
 from tests.conftest import make_package
 
@@ -215,3 +215,27 @@ class TestCountPending:
         packages = convert.collect_package_dirs(library)
 
         assert convert.count_pending(packages, output_dir, PassthroughNaming()) == 0
+
+    def test_undownloaded_books_are_not_counted(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # Regression: the count forced check_incomplete off to save the stub
+        # walk, so an undownloaded book planned as pending here and as
+        # incomplete in the run that followed. --skip-incomplete then reported
+        # books remaining that it would never export, on that run and on every
+        # rerun after it.
+        library = tmp_path / "lib"
+        make_package(library, "Stub.epub")
+        monkeypatch.setattr(source, "has_dataless_files", lambda _package: True)
+        packages = convert.collect_package_dirs(library)
+        options = planning.PlanOptions(check_incomplete=True)
+
+        decisions = planning.plan_exports(
+            packages, output_dir, PassthroughNaming(), options
+        )
+
+        assert [d.status for d in decisions] == [planning.INCOMPLETE]
+        assert (
+            convert.count_pending(packages, output_dir, PassthroughNaming(), options)
+            == 0
+        )

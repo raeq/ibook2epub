@@ -43,6 +43,7 @@ from .naming import (
 )
 from .planning import (
     PENDING,
+    Decision,
     PlanOptions,
     plan_exports,
     record_decisions,
@@ -369,7 +370,7 @@ async def export_packages(
     options: ExportOptions | None = None,
 ) -> Report:
     """
-    Export a batch of packages concurrently.
+    Plan a batch of packages and export them concurrently.
 
     Whether a book has already been exported is decided by its *identity*
     under the naming policy, not by an exact filename match. Identities of
@@ -389,10 +390,49 @@ async def export_packages(
     :return: A report of what was exported, skipped and failed.
     """
     policy = naming if naming is not None else PassthroughNaming()
+    run = options if options is not None else ExportOptions()
+    decisions = plan_exports(packages, output_dir, policy, run.plan)
+    return await export_planned(
+        decisions,
+        output_dir,
+        dry_run=dry_run,
+        max_workers=max_workers,
+        report=report,
+        options=run,
+    )
+
+
+async def export_planned(
+    decisions: Sequence[Decision],
+    output_dir: Path,
+    *,
+    dry_run: bool = False,
+    max_workers: int | None = None,
+    report: Report | None = None,
+    options: ExportOptions | None = None,
+) -> Report:
+    """
+    Act on decisions the planner has already made.
+
+    Kept separate from :func:`export_packages` so a caller that needs the plan
+    for something else — the count of work remaining, or the export cap — can
+    plan once and hand the result straight here. Planning twice let the two
+    passes disagree about the same library.
+
+    :param decisions: The planner's output. Only the pending ones are written;
+        the rest are folded into the report and logged.
+    :param output_dir: Directory to write the epub files into.
+    :param dry_run: When True, report what would happen without writing.
+    :param max_workers: Size of the compression thread pool.
+    :param report: Report to accumulate into. Pass one to retain the partial
+        counts if the run is interrupted.
+    :param options: Everything else about the run.
+
+    :return: A report of what was exported, skipped and failed.
+    """
     report = report if report is not None else Report()
     run = options if options is not None else ExportOptions()
 
-    decisions = plan_exports(packages, output_dir, policy, run.plan)
     record_decisions(decisions, report)
 
     pending = [
@@ -485,6 +525,13 @@ def count_pending(
     remaining count that can never reach zero is not progress; those are
     reported on their own lines instead.
 
+    The caller's own options are used unchanged, including
+    ``check_incomplete``. Forcing it off here to save the stub walk made this
+    count disagree with the run it described: an undownloaded book plans as
+    pending when the check is off and as incomplete when it is on, so
+    ``--skip-incomplete`` reported books remaining that it would never export,
+    on that run and on every rerun after it.
+
     :param packages: All packages under consideration.
     :param output_dir: Directory the epub files are written into.
     :param policy: Naming policy supplying filenames and identities.
@@ -492,17 +539,17 @@ def count_pending(
 
     :return: The number of books still to export.
     """
-    # The stub walk is the expensive check and cannot change the count here:
-    # an undownloaded book is excluded either way, as incomplete rather than
-    # as pending.
-    settings = options or PlanOptions()
-    cheap = PlanOptions(
-        force=settings.force,
-        refresh=settings.refresh,
-        check_incomplete=False,
-        on_collision=settings.on_collision,
-    )
-    decisions = plan_exports(packages, output_dir, policy, cheap)
+    return count_pending_decisions(plan_exports(packages, output_dir, policy, options))
+
+
+def count_pending_decisions(decisions: Sequence[Decision]) -> int:
+    """
+    Count the decisions that still have an export ahead of them.
+
+    :param decisions: The planner's output.
+
+    :return: The number of books still to export.
+    """
     return sum(1 for decision in decisions if decision.status == PENDING)
 
 
@@ -572,37 +619,84 @@ def _read_lock_holder(handle: object) -> str:
     return details or "holder unknown"
 
 
-def select_packages(
-    packages: Sequence[Path], max_export_files: int, randomise: bool = True
-) -> list[Path]:
+def cap_exports(
+    decisions: Sequence[Decision], max_export_files: int, randomise: bool = True
+) -> list[Decision]:
     """
-    Apply the export cap to the discovered packages.
+    Apply the export cap to the books that still need writing.
 
-    :param packages: All discovered package directories.
+    ``--max-export-files`` is documented as a cap on files exported, so it is
+    applied to the pending decisions rather than to the whole library. Capping
+    the library instead let the cap land on books already exported: ``-m 3
+    --no-shuffle`` on a shelf whose first three books were done exported
+    nothing, reported work remaining, and did exactly the same on every rerun.
+    Shuffling hid the stall behind random progress rather than fixing it.
+
+    Decisions that are not pending are all kept, so the summary counts the
+    whole library's skipped, DRM-protected and undownloaded books rather than
+    whatever slice the cap happened to admit.
+
+    :param decisions: The planner's output.
     :param max_export_files: The cap, where 0 means no limit.
     :param randomise: Choose the capped subset at random.
 
-    :return: The packages to export.
+    :return: The decisions to act on this run.
     """
-    selected = list(packages)
+    pending = [
+        position
+        for position, decision in enumerate(decisions)
+        if decision.status == PENDING
+    ]
 
-    if not max_export_files:
-        logger.info("All %d epub package(s) will be processed.", len(selected))
-        return selected
+    if not max_export_files or len(pending) <= max_export_files:
+        logger.info("All %d pending epub package(s) will be processed.", len(pending))
+        return list(decisions)
 
-    if len(selected) <= max_export_files:
-        logger.info("All %d epub package(s) will be processed.", len(selected))
-        return selected
-
+    chosen = list(pending)
     if randomise:
-        shuffle(selected)
-    selected = selected[:max_export_files]
+        shuffle(chosen)
+    keep = set(chosen[:max_export_files])
     logger.info(
-        "Limiting activity to %d of %d epub package(s).",
+        "Limiting activity to %d of %d pending epub package(s).",
         max_export_files,
-        len(packages),
+        len(pending),
     )
-    return selected
+    return [
+        decision
+        for position, decision in enumerate(decisions)
+        if decision.status != PENDING or position in keep
+    ]
+
+
+def sweep_partials(output_dir: Path) -> int:
+    """
+    Remove temporary archives left by a run that was killed outright.
+
+    :func:`zip_package` unlinks its own temporary on any ordinary failure,
+    Ctrl-C included. A SIGKILL or a power loss gives it no chance, and every
+    glob in this tool looks for ``*.epub``, so the leftovers are invisible to
+    everything afterwards and accumulate on the very volume ``--min-free``
+    exists to protect.
+
+    Only safe to call while holding the output lock: a concurrent run's
+    temporary is indistinguishable from an abandoned one.
+
+    :param output_dir: Directory to sweep.
+
+    :return: The number of files removed.
+    """
+    removed = 0
+    for stale in output_dir.glob(f"*{PARTIAL_SUFFIX}"):
+        try:
+            stale.unlink()
+        except OSError as exc:  # pragma: no cover - racing removal
+            logger.debug("Could not remove %s: %s", stale.name, exc)
+            continue
+        removed += 1
+
+    if removed:
+        logger.info("Removed %d abandoned temporary file(s).", removed)
+    return removed
 
 
 def format_summary(
@@ -780,13 +874,6 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
     if not packages:
         logger.warning("No matching *.epub packages found under %s", args.source_dir)
 
-    pending_before = count_pending(
-        packages, args.output_dir, policy, _plan_options(args)
-    )
-    selected = select_packages(
-        packages, args.max_export_files, randomise=not args.no_shuffle
-    )
-
     options = ExportOptions(
         covers=args.covers,
         min_free_mb=args.min_free,
@@ -794,21 +881,33 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         plan=_plan_options(args),
     )
 
-    # Held here rather than inside export_packages so the partial counts
-    # survive a Ctrl-C.
+    # Held here rather than inside the exporter so the partial counts survive
+    # a Ctrl-C.
     report = Report()
 
     # A dry run writes nothing, so it needs no lock and must not create one.
     lock = nullcontext() if args.dry_run else output_lock(args.output_dir)
     with lock:
+        if not args.dry_run:
+            sweep_partials(args.output_dir)
+
+        # Planned exactly once, and inside the lock. Both the work list and
+        # the count of what is left come from this one plan, so they cannot
+        # describe different libraries; planning outside the lock would let a
+        # concurrent run move the output directory underneath the decisions.
+        decisions = plan_exports(packages, args.output_dir, policy, options.plan)
+        pending_before = count_pending_decisions(decisions)
+        selected = cap_exports(
+            decisions, args.max_export_files, randomise=not args.no_shuffle
+        )
+
         try:
             asyncio.run(
-                export_packages(
+                export_planned(
                     selected,
                     args.output_dir,
                     dry_run=args.dry_run,
                     max_workers=args.workers,
-                    naming=policy,
                     report=report,
                     options=options,
                 )

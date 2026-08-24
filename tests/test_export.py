@@ -10,7 +10,10 @@ import os
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile
 
+import pytest
+
 from epubconvert import convert, inspect_output
+from epubconvert.validate import ValidationError, read_package_dir
 from tests.conftest import make_package
 
 
@@ -314,6 +317,48 @@ class TestCovers:
 
         assert code == 0
         assert list(output_dir.glob("*.jpg")) == []
+
+    def test_a_cover_href_cannot_reach_outside_the_package(self, tmp_path, output_dir):
+        # Regression: the href was joined onto the package directory without a
+        # containment check, and _resolve keeps leading "../" segments. A book
+        # could name any file the user could read and have its bytes copied
+        # into the output directory, to travel on to whatever device the shelf
+        # was copied to.
+        library = tmp_path / "lib"
+        package = _cover_package(library / "Book.epub")
+        secret = tmp_path / "secret.txt"
+        secret.write_bytes(b"PRIVATE-KEY")
+        opf = package / "OEBPS" / "content.opf"
+        opf.write_text(
+            opf.read_text(encoding="utf-8").replace(
+                "images/cover.jpg", "../../../secret.txt"
+            ),
+            encoding="utf-8",
+        )
+
+        code = convert.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
+        )
+
+        assert code == 0
+        written = [p.read_bytes() for p in output_dir.iterdir() if p.is_file()]
+        assert b"PRIVATE-KEY" not in written
+
+    def test_a_rootfile_cannot_reach_outside_the_package(self, tmp_path):
+        # The same escape one level up: container.xml's full-path is joined
+        # onto the package directory too, and an absolute path replaces it
+        # outright.
+        library = tmp_path / "lib"
+        package = _cover_package(library / "Book.epub")
+        (package / "META-INF" / "container.xml").write_text(
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="../../../elsewhere.opf"/></rootfiles>'
+            "</container>",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValidationError, match="outside the package"):
+            read_package_dir(package)
 
 
 def _cover_package(package: Path) -> Path:

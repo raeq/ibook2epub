@@ -13,7 +13,7 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import convert
+from epubconvert import convert, planning
 from tests.conftest import EXPECTED_MEMBERS, make_package
 
 
@@ -285,33 +285,96 @@ class TestExportPackages:
         assert report == convert.Report()
 
 
-class TestSelectPackages:
+class TestCapExports:
     """Application of the export cap."""
 
-    def test_zero_means_no_limit(self):
-        packages = [Path(f"{i}.epub") for i in range(10)]
+    @staticmethod
+    def pending(count: int) -> list[planning.Decision]:
+        return [
+            planning.Decision(Path(f"{i}.epub"), planning.PENDING, Path(f"{i}.epub"))
+            for i in range(count)
+        ]
 
-        assert len(convert.select_packages(packages, 0)) == 10
+    def test_zero_means_no_limit(self):
+        assert len(convert.cap_exports(self.pending(10), 0)) == 10
 
     def test_cap_is_applied(self):
-        packages = [Path(f"{i}.epub") for i in range(10)]
-
-        assert len(convert.select_packages(packages, 3)) == 3
+        assert len(convert.cap_exports(self.pending(10), 3)) == 3
 
     def test_no_shuffle_takes_them_in_order(self):
-        packages = [Path(f"{i}.epub") for i in range(10)]
+        decisions = self.pending(10)
 
-        selected = convert.select_packages(packages, 3, randomise=False)
+        selected = convert.cap_exports(decisions, 3, randomise=False)
 
-        assert selected == packages[:3]
+        assert selected == decisions[:3]
 
     def test_selection_does_not_mutate_the_input(self):
-        packages = [Path(f"{i}.epub") for i in range(10)]
-        original = list(packages)
+        decisions = self.pending(10)
+        original = list(decisions)
 
-        convert.select_packages(packages, 3)
+        convert.cap_exports(decisions, 3)
 
-        assert packages == original
+        assert decisions == original
+
+    def test_the_cap_counts_only_pending_books(self):
+        # The cap is documented as a limit on files exported. Counting
+        # already-exported books against it stalls the run: every book the cap
+        # admits is one it will not write.
+        done = [
+            planning.Decision(Path(f"done{i}.epub"), planning.ALREADY)
+            for i in range(5)
+        ]
+        decisions = [*done, *self.pending(4)]
+
+        selected = convert.cap_exports(decisions, 2, randomise=False)
+
+        assert sum(1 for d in selected if d.status == planning.PENDING) == 2
+
+    def test_books_that_will_not_be_written_are_all_kept(self):
+        # They carry the skipped, DRM and undownloaded counts for the summary,
+        # which should describe the library rather than the capped slice.
+        done = [
+            planning.Decision(Path(f"done{i}.epub"), planning.ALREADY)
+            for i in range(5)
+        ]
+        decisions = [*done, *self.pending(4)]
+
+        selected = convert.cap_exports(decisions, 1, randomise=False)
+
+        assert sum(1 for d in selected if d.status == planning.ALREADY) == 5
+
+
+class TestSweepPartials:
+    """Cleanup of temporaries left by a run that was killed outright."""
+
+    def test_abandoned_temporaries_are_removed(self, output_dir):
+        stale = output_dir / f"tmpabcd1234{convert.PARTIAL_SUFFIX}"
+        stale.write_bytes(b"half an archive")
+
+        assert convert.sweep_partials(output_dir) == 1
+        assert not stale.exists()
+
+    def test_real_exports_are_left_alone(self, output_dir):
+        book = output_dir / "Book.epub"
+        book.write_bytes(b"a whole archive")
+
+        convert.sweep_partials(output_dir)
+
+        assert book.exists()
+
+    def test_a_run_clears_what_an_earlier_one_abandoned(self, tmp_path, output_dir):
+        # Every glob in the tool looks for *.epub, so nothing else would ever
+        # see these again and they would accumulate on the volume --min-free
+        # exists to protect.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        stale = output_dir / f"tmpdeadbeef{convert.PARTIAL_SUFFIX}"
+        stale.write_bytes(b"half an archive")
+
+        convert.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        assert not stale.exists()
+        assert (output_dir / "Book.epub").exists()
 
 
 class TestFormatSummary:

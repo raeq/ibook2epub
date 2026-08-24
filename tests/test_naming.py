@@ -311,6 +311,33 @@ class TestStripUnsafe:
             once = naming.strip_unsafe(name)
             assert naming.strip_unsafe(once) == once
 
+    @pytest.mark.parametrize("title", ["?", "*", ":", '"', "<>", "|"])
+    def test_an_all_illegal_title_keeps_its_extension(self, title):
+        # Regression: cleaning ran over the whole name and then stripped
+        # trailing dots, so a stem that cleaned away to nothing left the
+        # separating dot exposed and it went too: "?.epub" -> ".epub" ->
+        # "epub". The output directory globs *.epub to decide what is already
+        # exported, so that book was re-converted on every single run.
+        result = naming.strip_unsafe(f"{title}.epub")
+
+        assert result.endswith(".epub")
+        assert result != "epub"
+
+    def test_a_name_that_is_only_an_extension_keeps_it(self):
+        assert naming.strip_unsafe(".epub").endswith(".epub")
+
+    def test_rerun_recognises_an_all_illegal_title(self, tmp_path, output_dir):
+        source = tmp_path / "lib"
+        make_package(source, "?.epub")
+        argv = ["-s", str(source), "-o", str(output_dir), "-m", "0", "-p", "strip"]
+        convert.main([*argv, "-q"])
+        first = sorted(p.name for p in output_dir.glob("*.epub"))
+
+        convert.main([*argv, "-q"])
+
+        assert first == sorted(p.name for p in output_dir.glob("*.epub"))
+        assert len(first) == 1
+
 
 class TestStripNaming:
     def test_identity_folds_case(self):

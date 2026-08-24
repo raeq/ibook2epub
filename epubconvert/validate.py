@@ -146,8 +146,26 @@ def find_opf_path(archive: ZipFile) -> str:
     for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
         full_path = rootfile.get("full-path")
         if full_path:
-            return full_path
+            return _checked_opf_path(full_path)
     raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+
+
+def _checked_opf_path(full_path: str) -> str:
+    """
+    Normalize a declared rootfile path and refuse one that leaves the archive.
+
+    :param full_path: The ``full-path`` attribute from ``container.xml``.
+
+    :return: The normalized archive path.
+
+    :raises ValidationError: If the path points outside the archive.
+    """
+    normalized = posixpath.normpath(full_path)
+    if escapes_archive(normalized):
+        raise ValidationError(
+            f"{CONTAINER_PATH} names a rootfile outside the package: {full_path}"
+        )
+    return normalized
 
 
 def is_remote(href: str) -> bool:
@@ -159,6 +177,25 @@ def is_remote(href: str) -> bool:
     :return: True if the href is a remote or inline URL.
     """
     return href.lower().startswith(REMOTE_PREFIXES)
+
+
+def escapes_archive(path: str) -> bool:
+    """
+    Report whether a resolved archive path points outside the archive.
+
+    :func:`_resolve` normalizes ``..`` segments, but an href carrying more of
+    them than the package document has parent directories resolves to a path
+    above the archive root, and an absolute path never was inside it. No
+    archive member can match either. What makes them worth rejecting rather
+    than ignoring is the source side: the cover extractor and the package
+    reader join these onto the ``*.epub/`` directory on disk, where they reach
+    real files that are no part of the book.
+
+    :param path: An archive path, already normalized.
+
+    :return: True if the path leaves the archive.
+    """
+    return path.startswith("/") or path == ".." or path.startswith("../")
 
 
 def _resolve(base: str, href: str) -> str:
@@ -278,6 +315,10 @@ def read_package_dir(package: Path) -> Package:
             break
     if not opf_path:
         raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+    # Unlike the archive reader, this one joins the result onto a real
+    # directory, so a rootfile of "/etc/passwd" or "../../.." would be opened
+    # rather than merely missed.
+    opf_path = _checked_opf_path(opf_path)
 
     try:
         opf_root = ElementTree.fromstring((package / opf_path).read_bytes())

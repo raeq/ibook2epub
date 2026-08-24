@@ -184,6 +184,39 @@ class TestRemainingCount:
         assert "rerun to continue" not in capsys.readouterr().out
 
 
+class TestExportCapProgress:
+    def test_reruns_under_a_cap_keep_making_progress(self, tmp_path, output_dir):
+        # Regression: the cap was applied to every discovered package, so on a
+        # rerun it landed on books already exported. Ten books at -m 3
+        # --no-shuffle exported three, then nothing, for ever -- while still
+        # printing "7 remaining; rerun to continue" on each run.
+        library = tmp_path / "lib"
+        for index in range(10):
+            make_package(library, f"Book{index:02d}.epub")
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "3", "--no-shuffle"]
+
+        counts = []
+        for _ in range(3):
+            convert.main([*argv, "-q"])
+            counts.append(len(list(output_dir.glob("*.epub"))))
+
+        assert counts == [3, 6, 9]
+
+    def test_the_summary_counts_the_whole_library(self, tmp_path, output_dir, capsys):
+        # The skipped figure should describe the shelf, not the slice the cap
+        # happened to admit.
+        library = tmp_path / "lib"
+        for index in range(6):
+            make_package(library, f"Book{index:02d}.epub")
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "2", "--no-shuffle"]
+        convert.main([*argv, "-q"])
+        capsys.readouterr()
+
+        convert.main([*argv, "-q"])
+
+        assert "skipped 2" in capsys.readouterr().out
+
+
 class TestOutputLock:
     def test_lock_is_released_after_a_run(self, small_library, output_dir):
         argv = ["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"]
