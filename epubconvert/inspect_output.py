@@ -36,7 +36,15 @@ def free_megabytes(path: Path) -> int:
     """
     try:
         return shutil.disk_usage(path).free // (1024 * 1024)
-    except OSError:  # pragma: no cover - unusual filesystem
+    except OSError as exc:
+        # Permissive, so a volume we cannot measure never blocks work -- but
+        # said once, because this silently turns --min-free into a no-op on
+        # exactly the removable and network volumes it exists for.
+        logger.warning(
+            "Cannot measure free space on %s (%s); --min-free is not enforced.",
+            path,
+            exc,
+        )
         return 1 << 30
 
 

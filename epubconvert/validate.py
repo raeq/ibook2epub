@@ -338,7 +338,7 @@ def read_package_dir(package: Path) -> Package:
     """
     container = package / CONTAINER_PATH
     try:
-        root = ElementTree.fromstring(container.read_bytes())
+        root = ElementTree.fromstring(_read_capped(container))
     except OSError as exc:
         raise ValidationError(f"missing {CONTAINER_PATH}") from exc
     except ElementTree.ParseError as exc:
@@ -357,13 +357,37 @@ def read_package_dir(package: Path) -> Package:
     opf_path = _checked_opf_path(opf_path)
 
     try:
-        opf_root = ElementTree.fromstring((package / opf_path).read_bytes())
+        opf_root = ElementTree.fromstring(_read_capped(package / opf_path))
     except OSError as exc:
         raise ValidationError(f"missing {opf_path}") from exc
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{opf_path} is not valid XML: {exc}") from exc
 
     return _package_from_root(opf_root, opf_path)
+
+
+def _read_capped(path: Path) -> bytes:
+    """
+    Read an XML document off disk, refusing an implausible one.
+
+    The archive reader has enforced :data:`MAX_XML_BYTES` since it was written;
+    this side had no cap at all, and it is the untrusted one -- these bytes come
+    straight out of the ``*.epub/`` directory. Measured, a 105 MB container
+    document parsed happily at 338 MB resident.
+
+    :param path: The document to read.
+
+    :return: Its bytes.
+
+    :raises ValidationError: If it is missing or implausibly large.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise ValidationError(f"missing {path.name}") from exc
+    if size > MAX_XML_BYTES:
+        raise ValidationError(f"{path.name} is implausibly large ({size} bytes)")
+    return path.read_bytes()
 
 
 def validate_archive(path: Path) -> list[str]:
@@ -426,7 +450,13 @@ def _check_mimetype(archive: ZipFile) -> list[str]:
     info = archive.getinfo(MIMETYPE_NAME)
     if info.compress_type != ZIP_STORED:
         problems.append("mimetype is compressed; it must be stored")
-    if archive.read(MIMETYPE_NAME) != MIMETYPE_CONTENT:
+    # The specification fixes this member's length exactly, so a declared size
+    # that differs settles it without reading anything. --verify runs over
+    # files this tool may not have written, and a member declaring 512 MiB was
+    # otherwise materialised in full to be compared against 20 bytes.
+    if info.file_size != len(MIMETYPE_CONTENT) or (
+        archive.read(MIMETYPE_NAME) != MIMETYPE_CONTENT
+    ):
         problems.append("mimetype does not contain 'application/epub+zip'")
 
     return problems

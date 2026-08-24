@@ -170,8 +170,11 @@ def zip_package(
     os.close(handle)
     partial = Path(partial_name)
     # mkstemp creates 0600; exported books should be readable like any other
-    # file the user writes.
-    partial.chmod(ARCHIVE_MODE)
+    # file the user writes -- which means like the umask says, not 0644
+    # regardless. A user running with `umask 077` still got world-readable
+    # books. ARCHIVE_MODE stays as the zip entry's recorded mode, which is
+    # metadata and rightly fixed for byte-identical re-exports.
+    partial.chmod(_file_mode())
     file_count = 0
 
     try:
@@ -218,6 +221,17 @@ def zip_package(
         raise
 
     return file_count
+
+
+def _file_mode() -> int:
+    """
+    Return the mode an exported file should carry, per the user's umask.
+
+    :return: 0o666 with the umask applied.
+    """
+    mask = os.umask(0)
+    os.umask(mask)
+    return 0o666 & ~mask
 
 
 def _members(source_dir: Path) -> list[Path]:

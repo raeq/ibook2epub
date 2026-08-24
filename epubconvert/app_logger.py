@@ -82,13 +82,21 @@ def configure(verbosity: int = 1, log_file: Path | None = None) -> TraceLogger:
     logger.addHandler(console_handler)
 
     if log_file is not None:
+        # The console handler is already attached, so a failure here can be
+        # reported rather than crashing the process. This runs before anything
+        # else in main, so an unwritable --log-file used to exit with a raw
+        # traceback before any logging existed to explain it.
         log_path = Path(log_file)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_path, encoding="utf-8")
-        file_handler.setLevel(level)
-        file_handler.setFormatter(
-            logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT)
-        )
-        logger.addHandler(file_handler)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Not logging to %s: %s", log_path, exc)
+        else:
+            file_handler.setLevel(level)
+            file_handler.setFormatter(
+                logging.Formatter(_FILE_FORMAT, datefmt=_FILE_DATEFMT)
+            )
+            logger.addHandler(file_handler)
 
     return logger

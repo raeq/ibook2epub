@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -41,6 +42,10 @@ FONT_OBFUSCATION_ALGORITHMS = frozenset(
 #: ``CanonicalizationMethod``) carry an ``Algorithm`` attribute too, and
 #: reading those would report a readable book as DRM-protected.
 ENCRYPTION_METHOD = "EncryptionMethod"
+
+#: The element that declares something is encrypted at all. Counted separately
+#: because a block carrying no ``EncryptionMethod`` still means protection.
+ENCRYPTED_DATA = "EncryptedData"
 
 #: macOS marks a file whose contents live only in the cloud.
 SF_DATALESS = 0x40000000
@@ -102,12 +107,26 @@ def encryption_algorithms(package: Path) -> set[str]:
         raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not valid XML") from exc
 
     algorithms: set[str] = set()
+    blocks = 0
     for element in root.iter():
-        if element.tag.rpartition("}")[2] != ENCRYPTION_METHOD:
+        local = element.tag.rpartition("}")[2]
+        if local == ENCRYPTED_DATA:
+            blocks += 1
+        if local != ENCRYPTION_METHOD:
             continue
         algorithm = element.get("Algorithm")
         if algorithm:
             algorithms.add(algorithm)
+
+    # A block that names no algorithm is still a declaration that something is
+    # encrypted; XML Encryption allows the algorithm to travel out of band.
+    # Returning an empty set read as "no protection", so the book exported as
+    # an unopenable archive and was recorded as finished work. Every other
+    # unreadable state here fails closed; this one failed open.
+    if blocks and not algorithms:
+        raise UnreadableEncryptionError(
+            f"{ENCRYPTION_PATH} declares encryption but names no algorithm"
+        )
     return algorithms
 
 
@@ -141,6 +160,21 @@ def has_drm(package: Path) -> tuple[bool, str | None]:
     return False, None
 
 
+@lru_cache(maxsize=1)
+def dataless_detection_available() -> bool:
+    """
+    Report whether this platform can tell a cloud stub from a real file.
+
+    ``st_flags`` exists only on BSD-derived systems. Everywhere else the
+    ``SF_DATALESS`` test degrades to ``0 & flag``, so ``--skip-incomplete``
+    found nothing while the help text promised the check and the user paid a
+    full walk of every package for it.
+
+    :return: True if ``os.stat_result`` carries ``st_flags``.
+    """
+    return hasattr(os.stat_result, "st_flags")
+
+
 def has_dataless_files(package: Path) -> bool:
     """
     Report whether any file in the package is an undownloaded iCloud stub.
@@ -154,6 +188,13 @@ def has_dataless_files(package: Path) -> bool:
 
     :return: True if at least one file has no local contents.
     """
+
+    if not dataless_detection_available():
+        logger.warning(
+            "Cannot detect undownloaded files on this platform; "
+            "--skip-incomplete has no effect."
+        )
+        return False
 
     def on_error(exc: OSError) -> None:
         logger.debug("Could not inspect %s: %s", exc.filename or package, exc)

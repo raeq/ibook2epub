@@ -17,7 +17,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from .app_logger import logger
-from .naming import NamingPolicy, filesystem_key, split_extension, truncate_bytes
+from .display import printable
+from .naming import (
+    NamingPolicy,
+    filesystem_key,
+    split_extension,
+    truncate_bytes,
+)
 from .source import inspect_package
 from .spec import PACKAGE_SUFFIX
 
@@ -358,7 +364,10 @@ def record_decisions(decisions: Sequence[Decision], report: Report) -> None:
 
         setattr(report, outcome.counter, getattr(report, outcome.counter) + 1)
         log = logger.warning if outcome.warn else logger.info
-        log(outcome.line, {"name": decision.package.name, "reason": decision.reason})
+        log(
+            outcome.line,
+            {"name": printable(decision.package.name), "reason": decision.reason},
+        )
 
     for outcome in _OUTCOMES.values():
         count = getattr(report, outcome.counter)
@@ -396,7 +405,7 @@ def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:
 
     width = max(len(decision.status) for decision in decisions)
     lines = [
-        f"{decision.status:<{width}}  {decision.package.name}"
+        f"{decision.status:<{width}}  {printable(decision.package.name)}"
         + (f"  ({decision.reason})" if decision.reason else "")
         for decision in decisions
     ]

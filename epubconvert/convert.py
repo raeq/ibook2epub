@@ -14,6 +14,7 @@ coroutine, so a Ctrl-C cannot leave the summary disagreeing with the directory.
 from __future__ import annotations
 
 import asyncio
+import errno
 import fnmatch
 import os
 import socket
@@ -28,6 +29,7 @@ from typing import TextIO
 
 from .app_logger import logger
 from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
+from .display import printable
 from .inspect_output import extract_cover, free_megabytes
 from .naming import NamingPolicy, PassthroughNaming
 from .planning import (
@@ -47,6 +49,10 @@ except ImportError:  # pragma: no cover - Windows has no fcntl
     HAVE_FLOCK = False
 
 LOCK_NAME = ".ibook2epub.lock"
+
+#: The errnos that mean another process holds the lock. Anything else means
+#: the filesystem does not do advisory locking at all.
+_CONTENDED = frozenset({errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK})
 
 
 @dataclass(frozen=True)
@@ -122,7 +128,9 @@ def _zip_and_record(
         with _REPORT_LOCK:
             report.failed += 1
             marker = progress.tick()
-        logger.error("%s Skipped %s: not enough free space", marker, package.name)
+        logger.error(
+            "%s Skipped %s: not enough free space", marker, printable(package.name)
+        )
         return
 
     try:
@@ -131,17 +139,24 @@ def _zip_and_record(
         with _REPORT_LOCK:
             report.failed += 1
             marker = progress.tick()
-        logger.error("%s Failed to export %s: %s", marker, package.name, exc)
+        logger.error("%s Failed to export %s: %s", marker, printable(package.name), exc)
         return
 
     if run.covers:
-        extract_cover(package, target)
+        # Inside the guard, and catching broadly on purpose. A cover is a
+        # convenience; the book is already complete and atomically in place by
+        # now. Letting anything escape here loses the bookkeeping for a book
+        # that is on disk, and takes the whole run and its summary with it.
+        try:
+            extract_cover(package, target)
+        except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
+            logger.warning("No cover for %s: %s", printable(target.name), exc)
 
     with _REPORT_LOCK:
         report.exported += 1
         report.files_written += file_count
         marker = progress.tick()
-    logger.info("%s Exported %s (%d files)", marker, target.name, file_count)
+    logger.info("%s Exported %s (%d files)", marker, printable(target.name), file_count)
 
 
 async def _export_one(
@@ -280,7 +295,11 @@ async def export_planned(
                     pool, package, target, report=report, progress=progress, run=run
                 )
                 for package, target in pending
-            )
+            ),
+            # The worker catches Exception, but not every call site inside it
+            # is covered. A surprise should cost one book, not the run and the
+            # summary of everything already written.
+            return_exceptions=True,
         )
     finally:
         # cancel_futures drops books that have not started, so an interrupt
@@ -354,11 +373,31 @@ def output_lock(output_dir: Path) -> Iterator[None]:
     path = output_dir / LOCK_NAME
     # Opened "r+" where possible so a failed lock can still read the holder's
     # details; "w" would truncate them before we got to report them.
-    handle = path.open("r+") if path.exists() else path.open("w")
+    try:
+        handle = path.open("r+") if path.exists() else path.open("w")
+    except OSError as exc:
+        # A read-only output directory got past main's mkdir(exist_ok=True) and
+        # died here with a raw traceback. main already turns this into a clean
+        # exit 3.
+        raise OutputLockedError(f"cannot lock {output_dir}: {exc}") from exc
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
+            # Only these errnos mean somebody else holds it. A share without
+            # advisory locking answers ENOTSUP/ENOLCK, which was reported as
+            # "another run is already using ..." -- quoting a pid from a run
+            # that had long since exited, because the lock file is not
+            # truncated on release.
+            if exc.errno not in _CONTENDED:
+                logger.warning(
+                    "Locking is not supported on %s (%s); continuing unlocked.",
+                    output_dir,
+                    exc,
+                )
+                handle.close()
+                yield
+                return
             raise OutputLockedError(
                 f"another ibook2epub run is already using {output_dir} "
                 f"({_read_lock_holder(handle)})"

@@ -90,6 +90,22 @@ def filesystem_key(filename: str) -> str:
     return unicodedata.normalize("NFC", filename).casefold()
 
 
+def _encode(text: str) -> bytes:
+    """
+    Encode a filename for length measurement, surrogates included.
+
+    ``os.walk`` hands back undecodable filenames with surrogate escapes, and a
+    plain ``str.encode("utf-8")`` raises on those. It happened during planning,
+    outside any handler, so one badly named directory on a network share aborted
+    the whole run with a traceback.
+
+    :param text: The filename to measure.
+
+    :return: Its UTF-8 bytes.
+    """
+    return text.encode("utf-8", errors="surrogatepass")
+
+
 def truncate_bytes(text: str, limit: int) -> str:
     """
     Trim text to at most *limit* UTF-8 bytes without splitting a character.
@@ -99,7 +115,7 @@ def truncate_bytes(text: str, limit: int) -> str:
 
     :return: The trimmed string.
     """
-    encoded = text.encode("utf-8")
+    encoded = _encode(text)
     if len(encoded) <= limit:
         return text
     return encoded[:limit].decode("utf-8", errors="ignore")
@@ -180,13 +196,13 @@ def strip_unsafe(
     if not stem:
         stem = "_"
 
-    budget = max_bytes - len(extension.encode("utf-8"))
+    budget = max_bytes - len(_encode(extension))
     if budget < 1:
         # An extension that alone exceeds the budget leaves nothing worth
         # preserving; clamp the whole name and accept the loss.
         return truncate_bytes(f"{stem}{extension}", max_bytes)
 
-    if len(stem.encode("utf-8")) > budget:
+    if len(_encode(stem)) > budget:
         stem = truncate_bytes(stem, budget).rstrip(" .") or "_"
 
     return f"{stem}{extension}"
@@ -303,8 +319,8 @@ class PortableNaming:
         cleaned = cleaned.strip(" .") or "_"
         if not extension:
             return cleaned
-        budget = MAX_FILENAME_BYTES - len(extension.encode("utf-8"))
-        if len(cleaned.encode("utf-8")) > budget:
+        budget = MAX_FILENAME_BYTES - len(_encode(extension))
+        if len(_encode(cleaned)) > budget:
             cleaned = truncate_bytes(cleaned, max(budget, 1)).rstrip(" .") or "_"
         return f"{cleaned}{extension}"
 
