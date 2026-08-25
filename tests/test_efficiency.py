@@ -152,7 +152,7 @@ class TestVerifyChecksEveryArchive:
             with ZipFile(output_dir / f"Book{index}.epub", "w") as opened:
                 opened.writestr("mimetype", "application/epub+zip")
 
-        checked, damaged = inspect_output.verify_output(output_dir)
+        checked, damaged, _broken = inspect_output.verify_output(output_dir)
 
         assert checked == 5
         assert damaged == 5

@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shlex
 from collections.abc import Sequence
 from contextlib import nullcontext
+from pathlib import Path
 
 from . import app_logger
 from .app_logger import logger
-from .archive import collect_package_dirs
+from .archive import collect_package_dirs, count_ignored
 from .cli import parse_args
 from .convert import (
     ExportOptions,
@@ -83,9 +85,13 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
 
     :return: A process exit code.
     """
-    packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
+    discovered = collect_package_dirs(args.source_dir)
+    packages = filter_packages(discovered, args.match)
     decisions = plan_exports(packages, args.output_dir, policy, _plan_options(args))
     print(render_listing(decisions, args.as_json))
+    ignored = count_ignored(args.source_dir, discovered)
+    if ignored and not args.as_json:
+        print(f"{ignored} ignored (not *.epub/ packages)")
     return 0
 
 
@@ -104,13 +110,21 @@ def _run_verify(args: argparse.Namespace) -> int:
         logger.critical("Output directory does not exist: %s", args.output_dir)
         return 2
 
-    checked, damaged = verify_output(args.output_dir, epubcheck=args.epubcheck)
+    checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
     if not checked:
         print(f"No archives found in {args.output_dir}.")
         return 0
     print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
     if damaged:
-        print("Re-export the damaged books with --force.")
+        # Naming them matters: --force alone re-exports the whole library, and
+        # the default cap then picks its subset at random, so following that
+        # advice literally could leave every damaged book untouched and still
+        # report success.
+        print("Re-export each damaged book, for example:")
+        for name in broken[:3]:
+            print(f"  ibook2epub --match {shlex.quote(Path(name).stem)} --force")
+        if len(broken) > 3:
+            print(f"  ...and {len(broken) - 3} more")
     return 1 if damaged else 0
 
 
@@ -142,9 +156,23 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
     :raises OutputLockedError: If another run holds the output lock, or the
         lock file could not be opened.
     """
-    packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
+    discovered = collect_package_dirs(args.source_dir)
+    packages = filter_packages(discovered, args.match)
     if not packages:
         logger.warning("No matching *.epub packages found under %s", args.source_dir)
+
+    # Held here rather than inside the exporter so the partial counts survive
+    # a Ctrl-C.
+    report = Report()
+    report.ignored = count_ignored(args.source_dir, discovered)
+
+    if args.force and args.max_export_files and len(packages) > args.max_export_files:
+        logger.warning(
+            "--force selected %d book(s) but -m limits this run to %d; "
+            "pass -m 0, or --match to name the books you mean.",
+            len(packages),
+            args.max_export_files,
+        )
 
     options = ExportOptions(
         covers=args.covers,
@@ -152,10 +180,6 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         validation=ValidationOptions(enabled=args.validate, epubcheck=args.epubcheck),
         plan=_plan_options(args),
     )
-
-    # Held here rather than inside the exporter so the partial counts survive
-    # a Ctrl-C.
-    report = Report()
 
     # A dry run writes nothing, so it needs no lock and must not create one.
     lock = nullcontext(False) if args.dry_run else output_lock(args.output_dir)
@@ -251,9 +275,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     print(summary)
-    # Also logged, so a --log-file transcript of an interrupted run is not
-    # indistinguishable from a complete one.
-    logger.info("%s", summary)
+    # Recorded in the log file only: the console already has it from the
+    # print above, and logging it plainly printed every run's summary twice.
+    app_logger.file_only(summary)
     logger.debug("Run finished: %d exported, %d failed", report.exported, report.failed)
 
     return exit_code(report)

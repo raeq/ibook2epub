@@ -475,7 +475,7 @@ class TestRuleValidateReportsRatherThanDies:
             opened.writestr("mimetype", "application/epub+zip")
         (output_dir / "Bad.epub").write_bytes(b"not a zip at all")
 
-        checked, damaged = inspect_output.verify_output(output_dir)
+        checked, damaged, _broken = inspect_output.verify_output(output_dir)
 
         assert checked == 2
         assert damaged == 2

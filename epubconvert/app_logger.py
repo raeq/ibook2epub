@@ -39,7 +39,11 @@ logger.propagate = False
 # verbosity 0 = -q, 1 = default, 2 = -v, 3 = -vv (and above)
 _LEVELS = (logging.WARNING, logging.INFO, logging.DEBUG, TRACE)
 
-_CONSOLE_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+#: A terminal is not a transcript. At default verbosity the message is the
+#: whole point, and a timestamp on every line of an interactive run is noise
+#: the file format already carries for the runs that need it.
+_CONSOLE_PLAIN = "%(message)s"
+_CONSOLE_VERBOSE = "%(asctime)s - %(levelname)s - %(message)s"
 _FILE_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 # ISO 8601 with UTC offset: sorts lexicographically and is unambiguous across
 # timezones, unlike a 12-hour local clock.
@@ -55,6 +59,26 @@ def level_for_verbosity(verbosity: int) -> int:
     :return: The corresponding logging level.
     """
     return _LEVELS[max(0, min(verbosity, len(_LEVELS) - 1))]
+
+
+def file_only(message: str) -> None:
+    """
+    Record a line in the log file without repeating it on the console.
+
+    The run summary is printed to stdout for the person watching, and also
+    logged so a ``--log-file`` transcript of an interrupted run is not
+    indistinguishable from a complete one. Logging it plainly put it on the
+    terminal twice.
+
+    :param message: The line to record.
+    """
+    for handler in logger.handlers:
+        if isinstance(handler, logging.FileHandler):
+            handler.handle(
+                logger.makeRecord(
+                    logger.name, logging.INFO, __file__, 0, "%s", (message,), None
+                )
+            )
 
 
 def configure(verbosity: int = 1, log_file: Path | None = None) -> TraceLogger:
@@ -78,7 +102,9 @@ def configure(verbosity: int = 1, log_file: Path | None = None) -> TraceLogger:
 
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
-    console_handler.setFormatter(logging.Formatter(_CONSOLE_FORMAT))
+    console_handler.setFormatter(
+        logging.Formatter(_CONSOLE_VERBOSE if verbosity > 1 else _CONSOLE_PLAIN)
+    )
     logger.addHandler(console_handler)
 
     if log_file is not None:

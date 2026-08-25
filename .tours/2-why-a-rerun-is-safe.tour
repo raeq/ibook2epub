@@ -36,7 +36,7 @@
       "title": "Refresh writes over the old file",
       "file": "epubconvert/planning.py",
       "line": 230,
-      "pattern": "if refreshing and found is not None:",
+      "pattern": "if found is not None and \\(forced or refreshing\\):",
       "description": "When a book is being refreshed, the target is the archive already on disk (`found`), not the freshly computed name.\n\nUnder a policy whose identity is looser than its filename — `StripNaming` folds case, `PortableNaming` folds accents too — those two differ. Target the new name and the stale file stays behind, still satisfying the identity check, for ever."
     },
     {
@@ -106,7 +106,7 @@
       "title": "Reading the record back",
       "file": "epubconvert/inspect_output.py",
       "line": 106,
-      "pattern": "def verify_output\\(output_dir: Path, epubcheck: bool = False\\) -> tuple\\[int, int\\]:",
+      "pattern": "def verify_output\\(",
       "description": "The output directory is the record of completed work, and nothing in a normal run ever re-reads it. A damaged export would stay invisible.\n\n`--verify` reads it back: every archive checked, damaged ones named, and the closing advice is to re-export them with `--force`."
     },
     {

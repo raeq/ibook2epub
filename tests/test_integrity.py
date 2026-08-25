@@ -269,7 +269,7 @@ class TestVerifySurvivesAnUnreadableArchive:
         bad = output_dir / "Bad.epub"
         bad.write_bytes(_archive_with_bad_method())
 
-        checked, damaged = inspect_output.verify_output(output_dir)
+        checked, damaged, _broken = inspect_output.verify_output(output_dir)
 
         assert checked == 2
         assert damaged == 1

@@ -122,7 +122,9 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
     return cover
 
 
-def verify_output(output_dir: Path, epubcheck: bool = False) -> tuple[int, int]:
+def verify_output(
+    output_dir: Path, epubcheck: bool = False
+) -> tuple[int, int, list[str]]:
     """
     Check the archives already sitting in the output directory.
 
@@ -133,11 +135,13 @@ def verify_output(output_dir: Path, epubcheck: bool = False) -> tuple[int, int]:
     :param output_dir: Directory holding exported epub files.
     :param epubcheck: Also run the external epubcheck tool.
 
-    :return: The number of archives checked, and the number found damaged.
+    :return: How many archives were checked, how many were damaged, and the
+        names of the damaged ones so a caller can name them in its advice.
     """
     options = ValidationOptions(enabled=True, epubcheck=epubcheck)
     archives = sorted(output_dir.glob(f"*{PACKAGE_SUFFIX}"))
     damaged = 0
+    broken: list[str] = []
 
     # Pooled, unlike the sequential loop this replaced: measured 2.06x on 100
     # archives at four threads. Capped at eight because the namelist and
@@ -153,6 +157,7 @@ def verify_output(output_dir: Path, epubcheck: bool = False) -> tuple[int, int]:
     ):
         if problems:
             damaged += 1
+            broken.append(archive.name)
             logger.error(
                 "[%d/%d] %s is damaged: %s",
                 position,
@@ -165,4 +170,4 @@ def verify_output(output_dir: Path, epubcheck: bool = False) -> tuple[int, int]:
                 "[%d/%d] %s is sound", position, len(archives), printable(archive.name)
             )
 
-    return len(archives), damaged
+    return len(archives), damaged, broken

@@ -65,7 +65,10 @@ max-line-length = 100
 # Keyword-only options do not carry the readability cost this check targets;
 # the positional limit stays at the default. Package is a data holder.
 max-args = 8
-max-attributes = 10
+# Report and Package are counter bags and parsed-document holders: attributes
+# with no interactions between them, which is not the state this check exists
+# to bound.
+max-attributes = 12
 
 [tool.ruff]
 target-version = "py310"

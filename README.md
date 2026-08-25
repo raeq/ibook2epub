@@ -125,30 +125,37 @@ Convert Apple iBooks epub packages to zipped epub files.
 
 options:
   -h, --help            show this help message and exit
-  -m, --max-export-files N
-                        Maximum number of epub files to export, default=5,
-                        0=no limit.
-  -o, --output-dir OUTPUT_DIR
-                        Path of the output directory; created if it does not
-                        exist.
-  -s, --source-dir SOURCE_DIR
-                        Path of the source directory containing *.epub/
-                        packages. Defaults to whichever known iBooks location
-                        holds books.
-  -d, --dry-run         Report what would be exported without writing
-                        anything.
   --version             show program's version number and exit
-  -f, --force           Re-export books even if they are already in the
-                        output directory.
-  --match PATTERN       Only convert books whose name matches PATTERN. A
-                        pattern without wildcards matches anywhere in the
-                        name, so --match hobbit finds 'The Hobbit.epub';
-                        otherwise it is a glob. Case-insensitive.
   -w, --workers N       Number of compression threads (default: 4x the CPU
                         count, capped at 64). The work blocks on iCloud
                         rather than on the CPU, so raising this well past the
                         CPU count is what helps; 48-64 is reasonable for a
                         cloud library.
+
+Choosing books:
+  Which books this run considers.
+
+  -m, --max-export-files N
+                        Maximum number of epub files to export, default=5,
+                        0=no limit.
+  -s, --source-dir SOURCE_DIR
+                        Path of the source directory containing *.epub/
+                        packages. Defaults to whichever known iBooks location
+                        holds books.
+  --match PATTERN       Only convert books whose name matches PATTERN. A
+                        pattern without wildcards matches anywhere in the
+                        name, so --match hobbit finds 'The Hobbit.epub';
+                        otherwise it is a glob. Case-insensitive.
+  --no-shuffle          Take the first N books still needing export, in
+                        sorted order, instead of a random selection when
+                        --max-export-files applies.
+
+Naming and output:
+  Where books go and what they are called.
+
+  -o, --output-dir OUTPUT_DIR
+                        Path of the output directory; created if it does not
+                        exist.
   -p, --portable-names [MODE]
                         Rewrite output names so they survive a copy to
                         Windows, exFAT or a Kindle. 'strip' (the default when
@@ -158,9 +165,24 @@ options:
                         folds accents when deciding whether a book is already
                         exported, and needs the 'disarm' extra. Either mode
                         renames books an earlier run already exported.
-  --list                List every book with its status (pending, exported,
-                        collision, drm, incomplete) and exit without
-                        converting anything.
+  --on-collision {skip,suffix}
+                        What to do when two books want the same output name:
+                        'skip' exports only the first, 'suffix' keeps both by
+                        appending ' (2)'.
+  --covers              Also write each book's cover image beside its epub
+                        file.
+
+Deciding what to do:
+  What the run does, or reports without doing.
+
+  -d, --dry-run         Report what would be exported without writing
+                        anything.
+  -f, --force           Re-export books even if they are already in the
+                        output directory.
+  --list                List every *.epub/ package with its status (pending,
+                        exported, collision, drm, incomplete) and exit
+                        without converting anything. Anything in the source
+                        that is not a package is counted, not listed.
   --json                With --list, emit machine-readable JSON instead of a
                         table.
   --refresh             Re-export a book when its source directory is newer
@@ -171,15 +193,13 @@ options:
                         otherwise export as empty files. Requires walking
                         every package, which is slow on a cloud library, so
                         it is off by default.
-  --on-collision {skip,suffix}
-                        What to do when two books want the same output name:
-                        'skip' exports only the first, 'suffix' keeps both by
-                        appending ' (2)'.
+
+Checking the result:
+  Verifying archives and protecting the volume.
+
   --min-free MB         Stop before the output volume drops below this many
                         megabytes, default=128. 0 disables the check. Useful
                         when writing to an SD card or a Kindle.
-  --covers              Also write each book's cover image beside its epub
-                        file.
   --validate            Check each archive before it is moved into place: zip
                         integrity, the mimetype entry, and that every file
                         the package document lists is really present. A book
@@ -191,9 +211,10 @@ options:
   --verify              Check the archives already in the output directory
                         and report any that are damaged, then exit without
                         converting anything.
-  --no-shuffle          Take the first N books still needing export, in
-                        sorted order, instead of a random selection when
-                        --max-export-files applies.
+
+Output and logging:
+  How much the run says, and where.
+
   -v, --verbose         Increase log verbosity; -v for debug, -vv for trace.
   -q, --quiet           Only log warnings and errors.
   --log-file PATH       Also write log records to this file.
@@ -347,9 +368,18 @@ output directory back off disk.
 |------|---------|
 | `0`  | Success. Books skipped as already-exported, or skipped for a name collision, still count as success. |
 | `1`  | At least one book failed to convert, the output directory could not be created, or `--verify` found a damaged archive. |
-| `2`  | `--portable-names` was requested but the `portable` extra is not installed, or `--verify` was given an output directory that does not exist. |
+| `2`  | **Several causes** — see below. |
 | `3`  | Another `ibook2epub` run already holds the output directory lock, or the lock file itself could not be opened. |
 | `130` | Interrupted with Ctrl-C. Finished books are intact; rerun to continue. |
+
+`2` is not specific, and a script cannot tell its causes apart from the code
+alone. It covers a usage error from `argparse` (an unknown or malformed flag,
+contradictory flags), a source directory that does not exist, `--portable-names
+romanize` without the `portable` extra, `--epubcheck` without `epubcheck` on
+PATH, and `--verify` pointed at an output directory that is not there. All of
+them are "this run was asked for something it cannot do", and all of them print
+the reason on stderr. If a script needs to distinguish them, match the message
+rather than the code.
 
 `1` also covers a run that could not proceed at all — for example when the
 output volume is below `--min-free`. Nothing is counted as *failed* in that

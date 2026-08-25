@@ -16,6 +16,7 @@ from .defaults import (
     DEFAULT_MAX_EXPORT_FILES,
     DEFAULT_MIN_FREE_MB,
     DEFAULT_OUTPUT,
+    SOURCE_CANDIDATES,
     discover_source,
 )
 from .naming import PORTABLE_MODES, STRIP
@@ -33,7 +34,24 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ibook2epub",
         description="Convert Apple iBooks epub packages to zipped epub files.",
     )
-    parser.add_argument(
+    # Grouped because twenty-three flags in one flat list is a wall. The help
+    # text itself was already good; only its container was the problem.
+    selection = parser.add_argument_group(
+        "Choosing books", "Which books this run considers."
+    )
+    output = parser.add_argument_group(
+        "Naming and output", "Where books go and what they are called."
+    )
+    planning = parser.add_argument_group(
+        "Deciding what to do", "What the run does, or reports without doing."
+    )
+    integrity = parser.add_argument_group(
+        "Checking the result", "Verifying archives and protecting the volume."
+    )
+    logging = parser.add_argument_group(
+        "Output and logging", "How much the run says, and where."
+    )
+    selection.add_argument(
         "-m",
         "--max-export-files",
         type=int,
@@ -44,14 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
             f"default={DEFAULT_MAX_EXPORT_FILES}, 0=no limit."
         ),
     )
-    parser.add_argument(
+    output.add_argument(
         "-o",
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT,
         help="Path of the output directory; created if it does not exist.",
     )
-    parser.add_argument(
+    selection.add_argument(
         "-s",
         "--source-dir",
         type=Path,
@@ -61,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to whichever known iBooks location holds books."
         ),
     )
-    parser.add_argument(
+    planning.add_argument(
         "-d",
         "--dry-run",
         action="store_true",
@@ -72,13 +90,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    parser.add_argument(
+    planning.add_argument(
         "-f",
         "--force",
         action="store_true",
         help="Re-export books even if they are already in the output directory.",
     )
-    parser.add_argument(
+    selection.add_argument(
         "--match",
         default=None,
         metavar="PATTERN",
@@ -101,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
             "reasonable for a cloud library."
         ),
     )
-    parser.add_argument(
+    output.add_argument(
         "-p",
         "--portable-names",
         nargs="?",
@@ -119,22 +137,24 @@ def build_parser() -> argparse.ArgumentParser:
             "earlier run already exported."
         ),
     )
-    parser.add_argument(
+    planning.add_argument(
         "--list",
         action="store_true",
         dest="list_only",
         help=(
-            f"List every book with its status ({', '.join(STATUSES)}) and "
-            "exit without converting anything."
+            f"List every *.epub/ package with its status "
+            f"({', '.join(STATUSES)}) and exit without converting anything. "
+            f"Anything in the source that is not a package is counted, not "
+            f"listed."
         ),
     )
-    parser.add_argument(
+    planning.add_argument(
         "--json",
         action="store_true",
         dest="as_json",
         help="With --list, emit machine-readable JSON instead of a table.",
     )
-    parser.add_argument(
+    planning.add_argument(
         "--refresh",
         action="store_true",
         help=(
@@ -143,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
             "re-downloaded in place may not be noticed; use --force for that."
         ),
     )
-    parser.add_argument(
+    planning.add_argument(
         "--skip-incomplete",
         action="store_true",
         help=(
@@ -152,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
             "slow on a cloud library, so it is off by default."
         ),
     )
-    parser.add_argument(
+    output.add_argument(
         "--on-collision",
         choices=COLLISION_MODES,
         default=SKIP,
@@ -161,7 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
             "exports only the first, 'suffix' keeps both by appending ' (2)'."
         ),
     )
-    parser.add_argument(
+    integrity.add_argument(
         "--min-free",
         type=int,
         default=DEFAULT_MIN_FREE_MB,
@@ -172,12 +192,12 @@ def build_parser() -> argparse.ArgumentParser:
             "when writing to an SD card or a Kindle."
         ),
     )
-    parser.add_argument(
+    output.add_argument(
         "--covers",
         action="store_true",
         help="Also write each book's cover image beside its epub file.",
     )
-    parser.add_argument(
+    integrity.add_argument(
         "--validate",
         action="store_true",
         help=(
@@ -187,7 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
             "is retried on the next run."
         ),
     )
-    parser.add_argument(
+    integrity.add_argument(
         "--epubcheck",
         action="store_true",
         help=(
@@ -195,7 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--validate and requires epubcheck on PATH."
         ),
     )
-    parser.add_argument(
+    integrity.add_argument(
         "--verify",
         action="store_true",
         help=(
@@ -203,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
             "any that are damaged, then exit without converting anything."
         ),
     )
-    parser.add_argument(
+    selection.add_argument(
         "--no-shuffle",
         action="store_true",
         help=(
@@ -211,20 +231,20 @@ def build_parser() -> argparse.ArgumentParser:
             "instead of a random selection when --max-export-files applies."
         ),
     )
-    parser.add_argument(
+    logging.add_argument(
         "-v",
         "--verbose",
         action="count",
         default=0,
         help="Increase log verbosity; -v for debug, -vv for trace.",
     )
-    parser.add_argument(
+    logging.add_argument(
         "-q",
         "--quiet",
         action="store_true",
         help="Only log warnings and errors.",
     )
-    parser.add_argument(
+    logging.add_argument(
         "--log-file",
         type=Path,
         default=None,
@@ -253,6 +273,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     # Silently ignoring a flag the user typed is worse than refusing it: the
     # run does something other than what was asked and says nothing.
+    if args.quiet and args.verbose:
+        parser.error("--quiet and --verbose contradict each other")
+
     if args.as_json and not args.list_only:
         parser.error("--json only applies with --list")
 
@@ -262,7 +285,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.epubcheck:
         args.validate = True
         if not epubcheck_available():
-            parser.error("--epubcheck needs the 'epubcheck' tool on PATH")
+            parser.error(
+                "--epubcheck needs the 'epubcheck' tool on PATH "
+                "(brew install epubcheck, or see w3c.github.io/epubcheck)"
+            )
 
     args.source_auto = args.source_dir is None
     if args.source_auto:
@@ -272,6 +298,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     # for it would stop anyone checking a shelf of exported books on a machine
     # that never had one.
     if not args.verify and not args.source_dir.is_dir():
+        if args.source_auto:
+            # Both known homes were probed and neither held books. Naming only
+            # the fallback reads as "this one path is wrong" rather than "we
+            # looked in these places, and here is what to do about it".
+            probed = "\n  ".join(str(path) for path in SOURCE_CANDIDATES)
+            parser.error(
+                f"No Apple Books library found. Looked in:\n  {probed}\n"
+                "If your books are somewhere else, pass -s DIR."
+            )
         parser.error(f"source directory does not exist: {args.source_dir}")
 
     # Writing into the tree being scanned pollutes the next run: temporary

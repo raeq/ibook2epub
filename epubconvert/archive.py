@@ -13,6 +13,7 @@ import errno
 import os
 import shutil
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
@@ -108,6 +109,39 @@ def is_excluded(name: str, *, at_root: bool) -> bool:
         or Path(name).suffix in EXCLUDED_ROOT_SUFFIXES
         or name.startswith(EXCLUDED_ROOT_PREFIXES)
     )
+
+
+def count_ignored(source_dir: Path, packages: Sequence[Path]) -> int:
+    """
+    Count things in the source that were not converted and never mentioned.
+
+    A real library holds both forms -- Apple's ``*.epub/`` package directories
+    and books that were sideloaded already zipped -- plus whatever else lives
+    beside them. Anything that is not a package was passed over in silence:
+    not skipped, not counted, not listed, so a partial export read as a
+    complete one.
+
+    Counted, not converted. Copying an already-valid archive through is a
+    feature with its own decisions to make, not something to do by surprise.
+
+    :param source_dir: The directory that was searched.
+    :param packages: The packages that were found, which are not ignored.
+
+    :return: How many entries were passed over.
+    """
+    found = {package.resolve() for package in packages}
+    ignored = 0
+
+    def on_error(exc: OSError) -> None:
+        logger.debug("Could not count entries in %s: %s", source_dir, exc)
+
+    for root, dirs, files in os.walk(source_dir, onerror=on_error):
+        directory = Path(root)
+        # Not descended into: a package's own contents are not "ignored".
+        dirs[:] = [name for name in dirs if (directory / name).resolve() not in found]
+        ignored += len(files)
+
+    return ignored
 
 
 def collect_package_dirs(source_dir: Path) -> list[Path]:

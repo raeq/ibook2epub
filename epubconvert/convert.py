@@ -89,6 +89,7 @@ class Report:
     incomplete: int = 0  # Packages skipped as not downloaded from iCloud.
     interrupted: bool = False  # The run was stopped with Ctrl-C.
     aborted: bool = False  # The run could not proceed, e.g. no disk space.
+    ignored: int = 0  # Things in the source that were not *.epub/ packages.
 
 
 #: Guards the shared Report and progress counter, which worker threads update.
@@ -612,7 +613,10 @@ def format_summary(
     if report.aborted:
         summary = f"Aborted: not enough free space on {output_dir}. {summary}"
     if remaining:
-        summary += f" {remaining} remaining; rerun to continue."
+        summary += (
+            f" {remaining} remaining; rerun to continue, "
+            f"or pass -m 0 to convert everything."
+        )
     return summary
 
 
@@ -634,6 +638,7 @@ def _clauses(report: Report, *, failures: bool) -> str:
         (report.collisions, "{} name collision(s)"),
         (report.drm, "{} DRM-protected"),
         (report.incomplete, "{} not downloaded"),
+        (report.ignored, "{} ignored"),
     ]
     if failures:
         parts.append((report.failed, "failed {}"))
