@@ -27,7 +27,9 @@ from epubconvert.validate import Package, usable_identifier
 from tests.conftest import make_metadata_package, remove_tree
 
 
-def names_for(library: Path, mode: str = planning.SUFFIX) -> list[str]:
+def names_for(
+    library: Path, mode: planning.CollisionMode = planning.SUFFIX
+) -> list[str]:
     """Plan the library and return the assigned output names, sorted."""
     assigned = planning.assign_names(
         list(archive.collect_package_dirs(library)), MetadataNaming(), mode
