@@ -27,6 +27,7 @@ from .naming import (
 )
 from .source import inspect_package
 from .spec import PACKAGE_SUFFIX
+from .validate import Package, ValidationError, read_package_dir
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
@@ -174,6 +175,26 @@ class _Claims:
         self.positions[group] = limit + 1
 
 
+def _metadata_of(package: Path, wanted: bool) -> Package | None:
+    """
+    Read a package document, but only for a policy that asked for it.
+
+    :param package: The package directory.
+    :param wanted: Whether the naming policy needs the metadata at all.
+
+    :return: The parsed package document, or None if it was not wanted or
+        could not be read.
+    """
+    if not wanted:
+        return None
+    try:
+        return read_package_dir(package)
+    except (ValidationError, OSError):
+        # One package in a surveyed 2,805-book library has no container.xml.
+        # A book that cannot describe itself still deserves a name.
+        return None
+
+
 def assign_names(
     packages: Sequence[Path], policy: NamingPolicy, on_collision: CollisionMode
 ) -> list[tuple[Path, str, str]]:
@@ -194,6 +215,12 @@ def assign_names(
     suffix`` is best used with ``-m 0 --no-shuffle`` on a library that is not
     changing underneath it.
 
+    Policies that name a book after its own metadata need the package document
+    read first. That read is skipped entirely for the policies that do not ask
+    for it, which is what keeps a no-op rerun over thousands of books free of
+    any source-side open. A package that cannot be parsed yields no metadata
+    rather than an error, and the policy falls back to the directory name.
+
     :param packages: Packages to name.
     :param policy: Naming policy supplying filenames and identities.
     :param on_collision: :data:`SKIP` or :data:`SUFFIX`.
@@ -204,8 +231,10 @@ def assign_names(
     assigned: list[tuple[Path, str, str]] = []
     claims = _Claims()
 
+    wants_metadata = getattr(policy, "needs_metadata", False)
+
     for package in sorted(packages):
-        wanted = policy.filename(package.name)
+        wanted = policy.filename(package.name, _metadata_of(package, wants_metadata))
         limit = MAX_SUFFIX if on_collision == SUFFIX else 1
         group = policy.identity(wanted)
 

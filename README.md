@@ -117,6 +117,7 @@ killed run is inert and needs no cleanup.
 usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
                   [--version] [-f] [--match PATTERN] [-w N] [-p [MODE]]
                   [--list] [--json] [--refresh] [--skip-incomplete]
+                  [--name-by {passthrough,author-title}]
                   [--on-collision {skip,suffix}] [--min-free MB]
                   [--no-copy-through] [--covers] [--validate] [--epubcheck]
                   [--verify] [--no-shuffle] [-v] [-q] [--log-file PATH]
@@ -165,6 +166,13 @@ Naming and output:
                         folds accents when deciding whether a book is already
                         exported, and needs the 'disarm' extra. Either mode
                         renames books an earlier run already exported.
+  --name-by {passthrough,author-title}
+                        Where an output name comes from: 'passthrough' uses
+                        the package folder name, 'author-title' uses the
+                        book's own dc:title and dc:creator to write 'Author -
+                        Title.epub'. Composes with --portable-names. Adopting
+                        it renames every book already exported; the old files
+                        are reported as orphans, not deleted.
   --on-collision {skip,suffix}
                         What to do when two books want the same output name:
                         'skip' exports only the first, 'suffix' keeps both by
@@ -355,6 +363,54 @@ them would be gratuitous churn. Two things to know before turning either on:
   and skipped rather than silently overwritten.
 
 Without `-p`, names are used exactly as they appear in the source directory.
+
+### Naming books after their author
+
+Apple names a package directory after the title, so an exported shelf sorts by
+title. A Kobo, a Kindle and a file manager all show what the filename says, and
+nothing but renaming every file by hand will make that shelf sort by author.
+
+`--name-by author-title` builds the name from the book's own `dc:title` and
+`dc:creator` instead:
+
+```bash
+ibook2epub -o ~/Books --name-by author-title
+```
+
+```text
+A Wizard of Earthsea.epub  ->  Le Guin, Ursula K. - A Wizard of Earthsea.epub
+Clock Dance.epub           ->  Anne Tyler - Clock Dance.epub
+```
+
+Those two lines show the one thing to understand before turning it on. **The
+shelf will mix two conventions.** Publishers may supply a sort name through the
+`opf:file-as` attribute, and 38% of books in a real 2,805-book library do not.
+There is no safe way to invent one: the raw `dc:creator` text is sometimes
+already inverted, so a rule that flips `Anne Tyler` into `Tyler, Anne` would
+also flip `Patterson, James` into `James, Patterson`. The publisher's sort name
+is used when it exists and the creator is used verbatim otherwise.
+
+The rest of the behaviour, measured on that same library:
+
+- 2,713 of 2,729 books get an author prefix. The other 16 declare no creator
+  and are named by title alone.
+- A book whose package document cannot be read keeps its directory name.
+- Names are sanitised and clamped to 255 bytes, so a sixteen-author anthology
+  that would produce a 422-byte name is trimmed rather than rejected.
+- Reading every package document to build the names costs about three seconds
+  over the whole library. Without `--name-by author-title` no package document
+  is read at all, so a plain rerun stays free.
+
+It composes with `-p`, which decides how a name is cleaned rather than where it
+comes from.
+
+**Adopting it renames every book already exported.** The old files stay where
+they are — this tool never deletes anything — and each is reported as an
+orphan so you can see the full list before deciding:
+
+```bash
+ibook2epub -o ~/Books --name-by author-title --list
+```
 
 ### Tracking what's been converted
 

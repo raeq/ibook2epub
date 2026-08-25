@@ -371,7 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return unusable
 
     try:
-        policy = build_policy(args.portable_names)
+        policy = build_policy(args.portable_names, args.name_by)
     except PortableNamesUnavailableError as exc:
         logger.critical("%s", exc)
         return exits.MISSING_TOOL

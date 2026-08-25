@@ -28,7 +28,12 @@ recomputed by reading its filename back off disk, with no state file.
 from __future__ import annotations
 
 import unicodedata
-from typing import Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+
+from .spec import PACKAGE_SUFFIX
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime dependency
+    from .validate import Package
 
 try:
     import disarm
@@ -45,6 +50,12 @@ PortableMode = Literal["strip", "romanize"]
 STRIP: PortableMode = "strip"
 ROMANIZE: PortableMode = "romanize"
 PORTABLE_MODES = (STRIP, ROMANIZE)
+
+#: Values accepted by ``--name-by``.
+NameSource = Literal["passthrough", "author-title"]
+NAME_PASSTHROUGH: NameSource = "passthrough"
+NAME_AUTHOR_TITLE: NameSource = "author-title"
+NAME_SOURCES = (NAME_PASSTHROUGH, NAME_AUTHOR_TITLE)
 
 PORTABLE_HINT = (
     f"--portable-names={ROMANIZE} needs the 'disarm' package: "
@@ -224,7 +235,12 @@ class NamingPolicy(Protocol):
     #: rerun safety depends on.
     max_bytes: int
 
-    def filename(self, package_name: str) -> str:
+    #: Whether :meth:`filename` needs the parsed package document. The planner
+    #: skips the per-package read for policies that do not, which is what keeps
+    #: a default rerun over thousands of books free of any source-side open.
+    needs_metadata: bool
+
+    def filename(self, package_name: str, metadata: Package | None = None) -> str:
         """Return the name to write this package under."""
 
     def identity(self, filename: str) -> str:
@@ -241,9 +257,11 @@ class PassthroughNaming:
 
     label = "passthrough"
     max_bytes = 0
+    needs_metadata = False
 
-    def filename(self, package_name: str) -> str:
+    def filename(self, package_name: str, metadata: Package | None = None) -> str:
         """Return *package_name* unchanged."""
+        del metadata
         return package_name
 
     def identity(self, filename: str) -> str:
@@ -265,12 +283,14 @@ class StripNaming:
 
     label = "portable(strip)"
     max_bytes = MAX_FILENAME_BYTES
+    needs_metadata = False
 
     def __init__(self, separator: str = " ") -> None:
         self.separator = separator
 
-    def filename(self, package_name: str) -> str:
+    def filename(self, package_name: str, metadata: Package | None = None) -> str:
         """Return a filename safe to copy to any common filesystem."""
+        del metadata
         return strip_unsafe(package_name, separator=self.separator)
 
     def identity(self, filename: str) -> str:
@@ -296,6 +316,7 @@ class PortableNaming:
 
     label = "portable(romanize)"
     max_bytes = MAX_FILENAME_BYTES
+    needs_metadata = False
 
     def __init__(self, platform: Platform = "universal", separator: str = " ") -> None:
         if disarm is None:
@@ -303,7 +324,7 @@ class PortableNaming:
         self.platform: Platform = platform
         self.separator = separator
 
-    def filename(self, package_name: str) -> str:
+    def filename(self, package_name: str, metadata: Package | None = None) -> str:
         """
         Return a filename safe to copy to *platform*.
 
@@ -314,6 +335,7 @@ class PortableNaming:
         ``epub``. The output directory globs ``*.epub`` to decide what is
         already exported, so that book is re-converted on every run for ever.
         """
+        del metadata
         assert disarm is not None  # noqa: S101 - guarded in __init__
         stem, extension = split_extension(package_name)
         cleaned = disarm.sanitize_filename(
@@ -335,12 +357,95 @@ class PortableNaming:
         return disarm.catalog_key(filename)
 
 
-def build_policy(portable: PortableMode | None) -> NamingPolicy:
+class MetadataNaming:
+    """
+    Name a book after what the book says about itself.
+
+    Every other policy derives the name from the package directory, which is
+    already a valid filename and already unique on disk. This one derives it
+    from ``dc:title`` and ``dc:creator``, which are neither, so the composed
+    name is always sanitized and clamped even when the wrapped policy would
+    not bother.
+
+    The author is ``creator_sort`` when the publisher supplied ``opf:file-as``
+    and ``creator`` **verbatim** otherwise. It is never rearranged: in a
+    surveyed 2,805-book library 38% of books carry no ``file-as``, and among
+    those the raw ``dc:creator`` text is sometimes already inverted
+    (``Patterson, James``), so a split-on-last-space rule would turn it into
+    ``James, Patterson``. A shelf therefore mixes both conventions. That is
+    visible and correct, where guessing would be invisible and wrong.
+
+    Books with no creator are named by title alone rather than falling back to
+    the directory name, because in the same library 77% of directory names are
+    already the title.
+
+    :param inner: Policy supplying the sanitizing and the identity. Defaults to
+        the standard-library :class:`StripNaming`, which is what makes a
+        generated name safe to write.
+    """
+
+    label = "author-title"
+    max_bytes = MAX_FILENAME_BYTES
+    needs_metadata = True
+
+    def __init__(self, inner: NamingPolicy | None = None) -> None:
+        self.inner: NamingPolicy = StripNaming() if inner is None else inner
+
+    def filename(self, package_name: str, metadata: Package | None = None) -> str:
+        """
+        Return ``Author - Title.epub``, falling back as the metadata allows.
+
+        :param package_name: The package directory name, used when the book
+            declares no title or could not be parsed at all.
+        :param metadata: The parsed package document, or None if it could not
+            be read.
+
+        :return: The name to write this book under.
+        """
+        composed = compose_metadata_name(package_name, metadata)
+        return self.inner.filename(composed)
+
+    def identity(self, filename: str) -> str:
+        """Return the wrapped policy's key for *filename*."""
+        return self.inner.identity(filename)
+
+
+def compose_metadata_name(package_name: str, metadata: Package | None) -> str:
+    """
+    Build the raw ``Author - Title`` name, before any sanitizing.
+
+    Kept separate from the policy so the composition rules can be tested and
+    reasoned about without a filesystem in the way.
+
+    :param package_name: Fallback when the book declares no title.
+    :param metadata: The parsed package document, or None.
+
+    :return: A candidate filename, extension included. Not yet safe to write.
+    """
+    if metadata is None or not metadata.title:
+        return package_name
+
+    _, extension = split_extension(package_name)
+    title = metadata.title.strip()
+    author = (metadata.creator_sort or metadata.creator or "").strip()
+    stem = f"{author} - {title}" if author else title
+    return f"{stem}{extension or PACKAGE_SUFFIX}"
+
+
+def build_policy(
+    portable: PortableMode | None, name_by: NameSource = NAME_PASSTHROUGH
+) -> NamingPolicy:
     """
     Select a naming policy.
 
+    The two settings are orthogonal and compose. ``--name-by`` decides where
+    the name comes from; ``--portable-names`` decides how it is cleaned. Asking
+    for author-title names on a Kindle-bound shelf wants both.
+
     :param portable: ``None`` for passthrough, ``"strip"`` for the standard
         library policy, or ``"romanize"`` for the ``disarm`` one.
+    :param name_by: ``"passthrough"`` to name after the package directory, or
+        ``"author-title"`` to name after the package document.
 
     :return: The policy to hand to the exporter.
 
@@ -348,7 +453,15 @@ def build_policy(portable: PortableMode | None) -> NamingPolicy:
         ``disarm`` is not installed.
     """
     if portable is None:
-        return PassthroughNaming()
-    if portable == STRIP:
-        return StripNaming()
-    return PortableNaming()
+        inner: NamingPolicy = PassthroughNaming()
+    elif portable == STRIP:
+        inner = StripNaming()
+    else:
+        inner = PortableNaming()
+
+    if name_by == NAME_AUTHOR_TITLE:
+        # Passthrough imposes no cleaning and no byte budget, because its names
+        # come from the filesystem and are already valid. A composed name is
+        # not, so it always gets the standard-library cleaning at minimum.
+        return MetadataNaming(None if portable is None else inner)
+    return inner

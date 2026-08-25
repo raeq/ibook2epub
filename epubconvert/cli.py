@@ -18,7 +18,7 @@ from .defaults import (
     DEFAULT_OUTPUT,
     discover_source,
 )
-from .naming import PORTABLE_MODES, STRIP
+from .naming import NAME_PASSTHROUGH, NAME_SOURCES, PORTABLE_MODES, STRIP
 from .planning import COLLISION_MODES, SKIP, STATUSES
 
 
@@ -168,6 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Skip books iCloud has not downloaded, which would otherwise "
             "export as empty files. Requires walking every package, which is "
             "slow on a cloud library, so it is off by default."
+        ),
+    )
+    output.add_argument(
+        "--name-by",
+        choices=NAME_SOURCES,
+        default=NAME_PASSTHROUGH,
+        help=(
+            "Where an output name comes from: 'passthrough' uses the package "
+            "folder name, 'author-title' uses the book's own dc:title and "
+            "dc:creator to write 'Author - Title.epub'. Composes with "
+            "--portable-names. Adopting it renames every book already "
+            "exported; the old files are reported as orphans, not deleted."
         ),
     )
     output.add_argument(
