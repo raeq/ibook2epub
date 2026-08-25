@@ -73,6 +73,14 @@ class PlanOptions:
     on_collision: CollisionMode = SKIP
 
 
+@dataclass(frozen=True)
+class _Existing:
+    """An archive already in the output directory, and whose book it is."""
+
+    path: Path
+    identity: str
+
+
 @dataclass
 class Decision:
     """What the planner decided about one package."""
@@ -234,7 +242,9 @@ def plan_exports(
     # not the other meant a book already exported under a different case was
     # never recognised, and was re-exported on every run for ever.
     existing = {
-        filesystem_key(policy.identity(found.name)): found
+        filesystem_key(policy.identity(found.name)): _Existing(
+            path=found, identity=policy.identity(found.name)
+        )
         for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
         if found.is_file()
     }
@@ -254,7 +264,7 @@ def plan_exports(
 def _decide(
     package: Path,
     assignment: tuple[str, str],
-    existing: dict[str, Path],
+    existing: dict[str, _Existing],
     output_dir: Path,
     settings: PlanOptions,
 ) -> Decision:
@@ -275,7 +285,11 @@ def _decide(
             package, COLLISION, reason="another book already claims this name"
         )
 
-    found = existing.get(filesystem_key(key))
+    clash = existing.get(filesystem_key(key))
+    taken = _decide_against_clash(package, clash, key)
+    if taken is not None:
+        return taken
+    found = clash.path if clash is not None else None
     # --force still has to pass inspection. Settling it here, before the walk
     # below, let a DRM-protected or half-downloaded source overwrite a good
     # archive -- the one path a user reaches for when something already looks
@@ -306,6 +320,31 @@ def _decide(
         return Decision(package, PENDING, found, reason="source is newer")
 
     return Decision(package, PENDING, output_dir / filename)
+
+
+def _decide_against_clash(
+    package: Path, clash: _Existing | None, key: str
+) -> Decision | None:
+    """
+    Decide what an archive holding this filename settles, if anything.
+
+    The filesystem key answers a looser question than identity: two different
+    books can share it. When they do, the archive on disk is not this book, and
+    neither available answer is "write it" -- that would replace another book's
+    archive, and calling it exported would silently drop this one.
+
+    :param package: The package directory.
+    :param clash: The archive occupying this filename, if any.
+    :param key: This package's identity.
+
+    :return: A collision decision, or None when the name is this book's own or
+        free.
+    """
+    if clash is None or clash.identity == key:
+        return None
+    return Decision(
+        package, COLLISION, reason=f"{clash.path.name} already holds this name"
+    )
 
 
 def _decide_against_existing(

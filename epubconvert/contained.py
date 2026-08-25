@@ -28,9 +28,11 @@ easier to be sure of than "a link that happens to land somewhere acceptable".
 
 from __future__ import annotations
 
+import os
 import posixpath
 import stat
 from pathlib import Path
+from typing import BinaryIO
 
 #: Prefixes that name a resource outside the archive rather than a member of
 #: it. The epub specification allows a remote manifest item, and resolving one
@@ -110,6 +112,32 @@ def resolve(
         return None
 
     return candidate
+
+
+def open_contained(path: Path) -> BinaryIO:
+    """
+    Open a package member for reading, refusing to follow a link.
+
+    :func:`resolve` and :func:`contains` answer at check time, and the caller
+    opens the file afterwards -- two syscalls with a window between them. A
+    member swapped for a symlink in that window was dereferenced, which is the
+    exfiltration this module exists to stop, reopened as a race rather than a
+    missing check. ``O_NOFOLLOW`` closes it by making the kernel refuse at
+    open, with nothing in between to lose.
+
+    The lexical and containment checks are still needed: this covers the final
+    component only, and says nothing about where the path pointed.
+
+    :param path: The member to open, already cleared by :func:`resolve` or
+        :func:`contains`.
+
+    :return: A binary file object.
+
+    :raises OSError: If the final component is a symlink (``ELOOP``), or the
+        open fails for any ordinary reason.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    return os.fdopen(descriptor, "rb")
 
 
 def is_free(target: Path) -> bool:

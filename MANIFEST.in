@@ -1,0 +1,15 @@
+# setuptools auto-includes test*.py by a legacy rule, which picks up
+# tests/test_*.py and silently leaves out conftest.py and __init__.py. Every
+# fixture lives in conftest, so a packager running the suite from the sdist
+# got collection errors rather than tests.
+recursive-include tests *.py
+
+include CONTRIBUTING.md
+
+# Review artefacts and editor tooling are working files, not part of the
+# distribution. Named explicitly so a new one does not start shipping.
+exclude hai-sdlc-review-*.md
+exclude uv.lock
+prune .tours
+prune .claude
+prune .github

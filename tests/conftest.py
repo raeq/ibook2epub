@@ -26,14 +26,23 @@ module, so this map saves a search:
 ``test_efficiency.py``       work done per book, and work declined
 ``test_containment.py``      the one path-trust rule (``contained``)
 ``test_rules.py``            one class per rule, one test per call site
+``test_packaging.py``        what ships, and the version it reports
 ===========================  ==================================================
 
 ``spec`` is exercised through the modules that use it rather than directly.
 """
 
+import os
 from pathlib import Path
 
 import pytest
+
+#: Root ignores permission bits, so a test that revokes them asserts nothing.
+#: hasattr guards Windows, which has no geteuid at all.
+needs_permissions = pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="root ignores permission bits, so this test cannot fail",
+)
 
 # Files every synthetic package gets. The bogus ``mimetype`` and the Apple
 # bookkeeping files are the ones the converter is expected to drop.
@@ -87,3 +96,13 @@ def output_dir_fixture(tmp_path: Path) -> Path:
     out = tmp_path / "out"
     out.mkdir()
     return out
+
+
+def remove_tree(path: Path) -> None:
+    """Delete a directory and everything under it, deepest entries first."""
+    for child in sorted(path.rglob("*"), reverse=True):
+        if child.is_file() or child.is_symlink():
+            child.unlink()
+        else:
+            child.rmdir()
+    path.rmdir()

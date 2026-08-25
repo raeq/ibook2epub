@@ -17,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from .app_logger import logger
-from .contained import contains
+from .contained import contains, open_contained
 from .display import printable
 from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
 from .validate import ArchiveInvalidError, ValidationOptions
@@ -140,7 +140,15 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
             # zipped into the shelf. The rule lives in one place; see
             # :mod:`epubconvert.contained` for why it is not restated here.
             if not contains(Path(root), candidate):
-                logger.warning("Ignoring symlinked package %s", candidate)
+                # Only a *.epub link is a skipped book; anything else is a
+                # linked directory the walk simply does not follow, and
+                # warning about it on a library of symlinked shelves is noise.
+                if name.endswith(PACKAGE_SUFFIX):
+                    logger.warning(
+                        "Ignoring symlinked package %s", printable(str(candidate))
+                    )
+                else:
+                    logger.debug("Not following symlinked directory %s", candidate)
                 continue
             if name.endswith(PACKAGE_SUFFIX):
                 found.append(candidate)
@@ -278,7 +286,10 @@ def zip_package(
                     continue
                 arcname = path.relative_to(source_dir).as_posix()
                 member = entry(arcname, compression_for(arcname))
-                with path.open("rb") as source, archive.open(member, "w") as target:
+                with (
+                    open_contained(path) as source,
+                    archive.open(member, "w") as target,
+                ):
                     shutil.copyfileobj(source, target)
                 stored.add(arcname)
                 file_count += 1

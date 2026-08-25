@@ -20,7 +20,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from .app_logger import logger
-from .contained import contains, resolve
+from .contained import contains, open_contained, resolve
 from .display import printable
 
 ENCRYPTION_PATH = "META-INF/encryption.xml"
@@ -103,7 +103,8 @@ def encryption_algorithms(package: Path) -> set[str]:
     try:
         if path.stat().st_size > MAX_ENCRYPTION_BYTES:
             raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is implausibly large")
-        data = path.read_bytes()
+        with open_contained(path) as handle:
+            data = handle.read()
     except OSError as exc:
         raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
 

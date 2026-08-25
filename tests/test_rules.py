@@ -38,7 +38,7 @@ from epubconvert import (
     validate,
 )
 from epubconvert.naming import PassthroughNaming, StripNaming
-from tests.conftest import make_package
+from tests.conftest import make_package, needs_permissions, remove_tree
 from tests.test_export import _cover_package
 
 SURROGATE = "Bad\udce9Name.epub"
@@ -118,12 +118,7 @@ class TestRuleNothingIsSilentlySkipped:
         content.mkdir(parents=True, exist_ok=True)
         (content / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
         target = package / "OEBPS"
-        for child in sorted(target.rglob("*"), reverse=True):
-            if child.is_file():
-                child.unlink()
-            else:
-                child.rmdir()
-        target.rmdir()
+        remove_tree(target)
         target.symlink_to(content)
         return package
 
@@ -161,6 +156,7 @@ class TestRuleNothingIsSilentlySkipped:
 
         assert source.has_dataless_files(package) is True
 
+    @needs_permissions
     def test_the_stub_walk_fails_closed_on_an_unreadable_directory(self, tmp_path):
         package = make_package(tmp_path / "lib", "Book.epub")
         locked = package / "OEBPS" / "locked"
@@ -231,21 +227,32 @@ class TestRuleTheFilesystemKeyDecidesSameness:
             planning.PENDING,
         ]
 
-    def test_an_existing_file_is_recognised_across_case(self, tmp_path, output_dir):
+    def test_a_case_folding_policy_recognises_its_own_export(
+        self, tmp_path, output_dir
+    ):
         # The half-applied fix: the fold went into assign_names but not into
         # the existing map, so a book already exported under another case was
-        # re-exported on every run for ever.
+        # re-exported on every run for ever. Under a policy whose identity
+        # folds case, the two names are the same book and this converges.
         library = tmp_path / "lib"
         make_package(library, "The Hobbit.epub")
-        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
-        (output_dir / "The Hobbit.epub").rename(output_dir / "THE HOBBIT.epub")
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-p", "strip"]
+        run.main([*argv, "-q"])
+        written = next(output_dir.glob("*.epub"))
+        # Stem only: uppercasing the extension too would put the file outside
+        # the *.epub glob, which is a different bug entirely.
+        written.rename(output_dir / (written.stem.upper() + written.suffix))
         packages = archive.collect_package_dirs(library)
 
-        decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
+        decisions = planning.plan_exports(packages, output_dir, StripNaming())
 
         assert [d.status for d in decisions] == [planning.EXPORTED]
 
-    def test_a_rerun_converges(self, tmp_path, output_dir, capsys):
+    def test_a_rerun_never_writes_a_second_file_for_one_name(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Whatever the policy decides the status is, the invariant is that the
+        # filesystem never ends up with two files where it can hold one.
         library = tmp_path / "lib"
         make_package(library, "The Hobbit.epub")
         argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
@@ -513,3 +520,65 @@ class TestRuleTheFloorIsCheckedOftenEnough:
         # constructor clamps, so this holds on any machine.
         for pool in (1, 4, 8, 40, 64):
             assert convert.progress_for(100, pool).interval <= pool
+
+
+class TestRuleAFilesystemClashIsNotACompletedBook:
+    """Colliding on the filesystem is not the same as being that book.
+
+    Sites: the ``existing`` map, and the decision made from it. The map is
+    keyed by filesystem key so a book exported under another case is
+    recognised -- but two *different* books can share that key too, and only
+    the identity says which case this is.
+    """
+
+    def test_an_exact_identity_policy_refuses_rather_than_guesses(
+        self, tmp_path, output_dir
+    ):
+        # Under PassthroughNaming identity *is* the filename, so a renamed
+        # export and a genuinely different book are indistinguishable.
+        # Refusing costs a rerun; guessing costs whichever book loses. The
+        # reason names the file that holds it.
+        library = tmp_path / "lib"
+        make_package(library, "The Hobbit.epub")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        (output_dir / "The Hobbit.epub").rename(output_dir / "THE HOBBIT.epub")
+        packages = archive.collect_package_dirs(library)
+
+        decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
+
+        assert [d.status for d in decisions] == [planning.COLLISION]
+        assert "THE HOBBIT.epub" in (decisions[0].reason or "")
+
+    def test_a_different_book_that_clashes_is_a_collision(self, tmp_path, output_dir):
+        # The output directory holds one book; a genuinely different package
+        # arrives whose name differs only in case. Under PassthroughNaming
+        # these are two books, but on a case-insensitive volume they are one
+        # file -- so writing the second destroys the first. Reporting it as
+        # already exported is the other wrong answer: the book is silently
+        # never converted and permanently recorded as done.
+        library = tmp_path / "lib"
+        make_package(library, "The Hobbit.epub")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        remove_tree(library / "The Hobbit.epub")
+        make_package(library, "THE HOBBIT.epub")
+        packages = archive.collect_package_dirs(library)
+
+        decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
+
+        assert [d.status for d in decisions] == [planning.COLLISION]
+
+    def test_a_normalisation_variant_clashes_too(self, tmp_path, output_dir):
+        # The HFS+ migration case filesystem_key's own docstring cites: the
+        # same name stored decomposed and typed composed.
+        library = tmp_path / "lib"
+        composed = "Café.epub"
+        decomposed = "Café.epub"
+        make_package(library, decomposed)
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        remove_tree(library / decomposed)
+        make_package(library, composed)
+        packages = archive.collect_package_dirs(library)
+
+        decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
+
+        assert decisions[0].status in {planning.EXPORTED, planning.COLLISION}

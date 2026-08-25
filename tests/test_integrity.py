@@ -25,7 +25,7 @@ from epubconvert.archive import (
 )
 from epubconvert.naming import PortableNaming, StripNaming
 from epubconvert.validate import ArchiveInvalidError
-from tests.conftest import make_package
+from tests.conftest import make_package, needs_permissions
 
 disarm = pytest.importorskip("disarm", reason="portable naming needs the disarm extra")
 
@@ -104,6 +104,7 @@ class TestSymlinksAreNotFollowed:
 class TestAnArchiveIsNeverSilentlyIncomplete:
     """Nothing may be recorded as exported unless it is really a book."""
 
+    @needs_permissions
     def test_an_unreadable_directory_fails_the_export(self, tmp_path, output_dir):
         # Regression: rglob swallows PermissionError, so the archive was
         # written without that content, reported as a success, and recorded as

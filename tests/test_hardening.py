@@ -21,7 +21,7 @@ from epubconvert import archive, convert, inspect_output, run, source, validate
 from epubconvert.app_logger import logger
 from epubconvert.display import printable
 from epubconvert.naming import StripNaming
-from tests.conftest import make_package
+from tests.conftest import make_package, needs_permissions
 
 
 @pytest.fixture(name="records")
@@ -196,6 +196,7 @@ class TestUnwritablePathsAreReported:
         assert len(list(output_dir.glob("*.epub"))) == 1
         del capsys
 
+    @needs_permissions
     def test_an_unwritable_output_directory_is_reported(self, tmp_path, capsys):
         # Regression (R2): output_lock opened the lock file unguarded, so a
         # read-only output directory died with a raw PermissionError.

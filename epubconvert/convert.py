@@ -418,10 +418,17 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
         return
 
     path = output_dir / LOCK_NAME
-    # Opened "r+" where possible so a failed lock can still read the holder's
-    # details; "w" would truncate them before we got to report them.
+    # Opened "r+" always, creating it only if absent. The old
+    # exists()-then-open("w") had a window where a concurrent run created the
+    # file between the two calls and this one truncated the holder details it
+    # was about to report. flock semantics were never affected; the message
+    # was.
     try:
-        handle = path.open("r+") if path.exists() else path.open("w")
+        try:
+            handle = path.open("r+")
+        except FileNotFoundError:
+            handle = path.open("a+")
+            handle.seek(0)
     except OSError as exc:
         # A read-only output directory got past main's mkdir(exist_ok=True) and
         # died here with a raw traceback. main already turns this into a clean

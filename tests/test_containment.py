@@ -151,3 +151,44 @@ class TestNoSecondImplementation:
         for name in readers:
             text = (Path("epubconvert") / name).read_text(encoding="utf-8")
             assert "from .contained import" in text, name
+
+
+class TestOpeningRefusesToFollow:
+    """The kernel enforces the rule at open time, not just at check time."""
+
+    def test_opening_a_symlink_is_refused(self, tmp_path):
+        # resolve() clears a path and the caller opens it later. A member
+        # swapped for a symlink in between was dereferenced -- the check and
+        # the open are separate syscalls. O_NOFOLLOW closes that window
+        # because the kernel refuses at open, with nothing in between.
+        outside = tmp_path / "secret.txt"
+        outside.write_text("SECRET", encoding="utf-8")
+        package = tmp_path / "Book.epub"
+        package.mkdir()
+        (package / "member.xhtml").symlink_to(outside)
+
+        with (
+            pytest.raises(OSError),
+            contained.open_contained(package / "member.xhtml"),
+        ):
+            pass
+
+    def test_opening_an_ordinary_file_works(self, tmp_path):
+        package = tmp_path / "Book.epub"
+        package.mkdir()
+        (package / "member.xhtml").write_text("<html/>", encoding="utf-8")
+
+        with contained.open_contained(package / "member.xhtml") as handle:
+            assert handle.read() == b"<html/>"
+
+    def test_read_capped_refuses_a_swapped_symlink(self, tmp_path):
+        # The same window on the document-reading path.
+        outside = tmp_path / "outside.xml"
+        outside.write_text("<container/>", encoding="utf-8")
+        package = make_package(tmp_path / "lib", "Book.epub")
+        container = package / "META-INF" / "container.xml"
+        container.unlink()
+        container.symlink_to(outside)
+
+        with pytest.raises(validate.ValidationError):
+            validate.read_package_dir(package)

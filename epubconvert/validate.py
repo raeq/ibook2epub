@@ -29,7 +29,7 @@ from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
 from .app_logger import logger
 from .contained import escapes as escapes_archive
-from .contained import is_remote, resolve
+from .contained import is_remote, open_contained, resolve
 from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
@@ -333,7 +333,11 @@ def _read_capped(path: Path) -> bytes:
         raise ValidationError(f"missing {path.name}") from exc
     if size > MAX_XML_BYTES:
         raise ValidationError(f"{path.name} is implausibly large ({size} bytes)")
-    return path.read_bytes()
+    try:
+        with open_contained(path) as handle:
+            return handle.read()
+    except OSError as exc:
+        raise ValidationError(f"could not read {path.name}: {exc}") from exc
 
 
 def validate_archive(path: Path) -> list[str]:
