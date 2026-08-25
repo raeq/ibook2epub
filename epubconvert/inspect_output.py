@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .app_logger import logger
 from .contained import resolve
+from .display import printable
 from .spec import PACKAGE_SUFFIX
 from .validate import ValidationError, ValidationOptions, read_package_dir
 
@@ -106,7 +107,7 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         # 320 MB transient this does not need. On APFS this may also clone.
         shutil.copyfile(source, cover)
     except (OSError, ValueError, ValidationError) as exc:
-        logger.debug("No cover for %s: %s", target_archive.name, exc)
+        logger.debug("No cover for %s: %s", printable(target_archive.name), exc)
         return None
 
     return cover
@@ -151,6 +152,8 @@ def verify_output(output_dir: Path, epubcheck: bool = False) -> tuple[int, int]:
                 "; ".join(problems[:3]),
             )
         else:
-            logger.debug("[%d/%d] %s is sound", position, len(archives), archive.name)
+            logger.debug(
+                "[%d/%d] %s is sound", position, len(archives), printable(archive.name)
+            )
 
     return len(archives), damaged

@@ -157,9 +157,12 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
     report = Report()
 
     # A dry run writes nothing, so it needs no lock and must not create one.
-    lock = nullcontext() if args.dry_run else output_lock(args.output_dir)
-    with lock:
-        if not args.dry_run:
+    lock = nullcontext(False) if args.dry_run else output_lock(args.output_dir)
+    with lock as locked:
+        # Only with real exclusivity. Unlocked, another run's in-flight
+        # temporary looks exactly like an abandoned one, and deleting it makes
+        # that run's closing replace fail.
+        if locked and not args.dry_run:
             sweep_partials(args.output_dir)
 
         # Planned exactly once, and inside the lock. Both the work list and

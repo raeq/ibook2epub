@@ -20,7 +20,8 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from .app_logger import logger
-from .contained import resolve
+from .contained import contains, resolve
+from .display import printable
 
 ENCRYPTION_PATH = "META-INF/encryption.xml"
 SINF_PATH = "META-INF/sinf.xml"
@@ -156,7 +157,7 @@ def has_drm(package: Path) -> tuple[bool, str | None]:
         # Treated as protected rather than readable: exporting a book whose
         # protection could not be ruled out produces a broken archive that is
         # then recorded as finished work.
-        logger.debug("Assuming %s is protected: %s", package.name, exc)
+        logger.debug("Assuming %s is protected: %s", printable(package.name), exc)
         return True, f"encryption could not be checked ({exc})"
 
     protecting = algorithms - FONT_OBFUSCATION_ALGORITHMS
@@ -202,20 +203,35 @@ def has_dataless_files(package: Path) -> bool:
         )
         return False
 
-    def on_error(exc: OSError) -> None:
-        logger.debug("Could not inspect %s: %s", exc.filename or package, exc)
+    unreadable = False
 
-    for root, _dirs, files in os.walk(package, onerror=on_error):
+    def on_error(exc: OSError) -> None:
+        nonlocal unreadable
+        # Fails closed, like every other unreadable state in this module. A
+        # subtree that could not be scanned used to answer "downloaded" for a
+        # package that was never examined.
+        logger.debug("Could not inspect %s: %s", exc.filename or package, exc)
+        unreadable = True
+
+    for root, dirs, files in os.walk(package, onerror=on_error):
         directory = Path(root)
+        # A symlinked directory is never descended, so its contents are
+        # unexamined -- indistinguishable from a package that is not there.
+        for name in dirs:
+            if not contains(package, directory / name):
+                logger.debug(
+                    "Symlinked directory in %s: %s", printable(package.name), name
+                )
+                return True
         for name in files:
             try:
                 stat = (directory / name).stat()
             except OSError as exc:  # pragma: no cover - racing removal
                 logger.debug("Could not stat %s: %s", name, exc)
-                continue
+                return True
             if getattr(stat, "st_flags", 0) & SF_DATALESS:
                 return True
-    return False
+    return unreadable
 
 
 def inspect_package(package: Path, check_incomplete: bool = False) -> SourceStatus:

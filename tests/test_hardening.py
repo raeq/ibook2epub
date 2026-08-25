@@ -13,12 +13,11 @@ them cost something.
 
 import errno
 import logging
-import os
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from epubconvert import convert, inspect_output, run, source, validate
+from epubconvert import archive, convert, inspect_output, run, source, validate
 from epubconvert.app_logger import logger
 from epubconvert.display import printable
 from epubconvert.naming import StripNaming
@@ -95,8 +94,8 @@ class TestMimetypeIsNotReadWhole:
         # member declaring 512 MiB was materialised first. --verify runs over
         # files this tool may not have written.
         archive_path = output_dir / "Big.epub"
-        with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
-            archive.writestr("mimetype", b"x" * (1024 * 1024))
+        with ZipFile(archive_path, "w", ZIP_DEFLATED) as opened:
+            opened.writestr("mimetype", b"x" * (1024 * 1024))
 
         problems = validate.validate_archive(archive_path)
 
@@ -121,19 +120,19 @@ class TestControlCharactersDoNotReachTheTerminal:
 class TestExportedFilesHonourTheUmask:
     """0644 must not be forced over a restrictive umask."""
 
-    def test_a_restrictive_umask_is_respected(self, tmp_path, output_dir):
+    def test_the_umask_in_force_is_respected(self, tmp_path, output_dir):
         # Regression (S8): chmod(0o644) was unconditional, so `umask 077`
-        # still produced world-readable books.
+        # still produced world-readable books. The umask is now read once at
+        # import -- reading it requires setting it, which is not safe to do
+        # per book from 64 workers -- so this asserts against the value that
+        # was in force then rather than changing it mid-process.
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        previous = os.umask(0o077)
-        try:
-            run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
-        finally:
-            os.umask(previous)
 
-        mode = (output_dir / "Book.epub").stat().st_mode & 0o077
-        assert mode == 0
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        mode = (output_dir / "Book.epub").stat().st_mode & 0o777
+        assert mode == archive.file_mode()
 
 
 class TestLockFailuresAreDistinguished:

@@ -291,7 +291,11 @@ async def export_planned(
 
     if dry_run:
         for package, target in pending:
-            logger.info("Would export: %s -> %s", package, target)
+            logger.info(
+                "Would export: %s -> %s",
+                printable(str(package)),
+                printable(str(target)),
+            )
         report.planned += len(pending)
         return report
 
@@ -310,18 +314,24 @@ async def export_planned(
         max_workers=default_workers(max_workers), thread_name_prefix="zip"
     )
     try:
-        await asyncio.gather(
+        # The worker catches Exception, but not every call site inside it is
+        # covered. A surprise should cost one book, not the run -- and it must
+        # still be counted, or the summary reports a clean run with a book
+        # missing and exit_code returns 0.
+        outcomes = await asyncio.gather(
             *(
                 _export_one(
                     pool, package, target, report=report, progress=progress, run=run
                 )
                 for package, target in pending
             ),
-            # The worker catches Exception, but not every call site inside it
-            # is covered. A surprise should cost one book, not the run and the
-            # summary of everything already written.
             return_exceptions=True,
         )
+        for outcome in outcomes:
+            if isinstance(outcome, BaseException):
+                with _REPORT_LOCK:
+                    report.failed += 1
+                logger.error("Export failed unexpectedly: %r", outcome)
     finally:
         # cancel_futures drops books that have not started, so an interrupt
         # does not wait for the whole queued backlog. wait=True still joins
@@ -372,7 +382,7 @@ def count_pending_decisions(decisions: Sequence[Decision]) -> int:
 
 
 @contextmanager
-def output_lock(output_dir: Path) -> Iterator[None]:
+def output_lock(output_dir: Path) -> Iterator[bool]:
     """
     Hold an advisory lock on the output directory for the duration of a run.
 
@@ -385,10 +395,16 @@ def output_lock(output_dir: Path) -> Iterator[None]:
 
     :param output_dir: Directory to lock.
 
+    :return: True when the lock was really taken. False means the filesystem
+        does not do advisory locking, and the caller must not do anything that
+        assumes exclusivity -- sweeping temporaries, above all, since a
+        concurrent run's in-flight file is indistinguishable from an abandoned
+        one.
+
     :raises OutputLockedError: If another run already holds the lock.
     """
     if not HAVE_FLOCK:  # pragma: no cover - exercised only on Windows
-        yield
+        yield False
         return
 
     path = output_dir / LOCK_NAME
@@ -417,7 +433,7 @@ def output_lock(output_dir: Path) -> Iterator[None]:
                     exc,
                 )
                 handle.close()
-                yield
+                yield False
                 return
             raise OutputLockedError(
                 f"another ibook2epub run is already using {output_dir} "
@@ -434,7 +450,7 @@ def output_lock(output_dir: Path) -> Iterator[None]:
         handle.write(f"pid={os.getpid()} host={socket.gethostname()}\n")
         handle.flush()
         try:
-            yield
+            yield True
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
     finally:
@@ -533,7 +549,7 @@ def sweep_partials(output_dir: Path) -> int:
         try:
             stale.unlink()
         except OSError as exc:  # pragma: no cover - racing removal
-            logger.debug("Could not remove %s: %s", stale.name, exc)
+            logger.debug("Could not remove %s: %s", printable(stale.name), exc)
             continue
         removed += 1
 

@@ -9,6 +9,7 @@ concurrency -- :mod:`epubconvert.convert` supplies those.
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import tempfile
@@ -17,6 +18,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from .app_logger import logger
 from .contained import contains
+from .display import printable
 from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
 from .validate import ArchiveInvalidError, ValidationOptions
 
@@ -257,7 +259,7 @@ def zip_package(
     # regardless. A user running with `umask 077` still got world-readable
     # books. ARCHIVE_MODE stays as the zip entry's recorded mode, which is
     # metadata and rightly fixed for byte-identical re-exports.
-    partial.chmod(_file_mode())
+    partial.chmod(file_mode())
     file_count = 0
 
     try:
@@ -296,15 +298,22 @@ def zip_package(
     return file_count
 
 
-def _file_mode() -> int:
+#: The process umask, read once at import. Reading it requires *setting* it --
+#: there is no query-only call -- so doing that per book from up to 64 workers
+#: let one thread observe another's zeroed window and write a world-writable
+#: book, and could leave the process umask at 0 for everything afterwards.
+#: Import happens before any thread exists, and this tool never changes it.
+UMASK = os.umask(0)
+os.umask(UMASK)
+
+
+def file_mode() -> int:
     """
     Return the mode an exported file should carry, per the user's umask.
 
     :return: 0o666 with the umask applied.
     """
-    mask = os.umask(0)
-    os.umask(mask)
-    return 0o666 & ~mask
+    return 0o666 & ~UMASK
 
 
 def assert_is_a_book(name: str, stored: set[str]) -> None:
@@ -352,11 +361,12 @@ def _members(source_dir: Path) -> list[Path]:
     content, reported as a success, and recorded as completed work -- so
     repairing the permissions and rerunning skipped the book.
 
-    Symlinks are skipped. ``os.walk`` does not descend into a symlinked
-    directory, but it does list symlinked *files*, and opening one reads
-    whatever it points at. A book that ships a link to a file outside itself
-    would otherwise have that file's bytes copied into the archive under an
-    innocuous name, and travel wherever the shelf is copied.
+    A symlink anywhere in the package **fails the export**. Skipping one is
+    not safe: ``os.walk`` does not descend into a symlinked directory, so a
+    package whose whole content tree is a link contributed nothing at all, and
+    the archive -- holding a real ``container.xml`` at the root -- passed
+    :func:`assert_is_a_book` and was recorded as finished work. Refusing the
+    book is the only answer that cannot silently lose content.
 
     :param source_dir: The package directory to enumerate.
 
@@ -370,13 +380,19 @@ def _members(source_dir: Path) -> list[Path]:
 
     found: list[Path] = []
     resolved = source_dir.resolve()
-    for root, _dirs, files in os.walk(source_dir, onerror=on_error):
+    for root, dirs, files in os.walk(source_dir, onerror=on_error):
         directory = Path(root)
-        for name in files:
+        # Directories as well as files. os.walk quietly declines to descend a
+        # symlinked directory, which is exactly how a package could contribute
+        # nothing and still be reported as exported.
+        for name in dirs + files:
             path = directory / name
             if not contains(source_dir, path, resolved_root=resolved):
-                logger.warning("Skipped symlink %s in %s", name, source_dir.name)
-                continue
+                raise OSError(
+                    errno.ELOOP,
+                    f"symlink in package: {printable(name)}",
+                    str(path),
+                )
             if path.is_file():
                 found.append(path)
 

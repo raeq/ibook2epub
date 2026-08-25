@@ -23,7 +23,7 @@ def printable(name: str) -> str:
 
     :param name: The name as it appears on disk.
 
-    :return: The name with C0 and C1 control characters escaped.
+    :return: The name with control characters and lone surrogates escaped.
 
     """
     return "".join(
@@ -33,11 +33,17 @@ def printable(name: str) -> str:
 
 def _is_control(char: str) -> bool:
     """
-    Report whether a character steers a terminal rather than showing in it.
+    Report whether a character cannot safely be written out.
 
     :param char: The character to test.
 
-    :return: True for C0, DEL and C1.
+    :return: True for C0, DEL, C1 and lone surrogates.
     """
     code = ord(char)
+    if 0xD800 <= code <= 0xDFFF:
+        # A lone surrogate, which os.walk returns for an undecodable filename.
+        # It survives every control-character test and then makes the log
+        # handler raise UnicodeEncodeError while emitting the record, so the
+        # line is lost -- the same names encode_name exists to survive.
+        return True
     return code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F

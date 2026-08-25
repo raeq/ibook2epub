@@ -84,20 +84,21 @@ class TestSymlinksAreNotFollowed:
         written = list(output_dir.glob("*.epub"))
         assert written == []
 
-    def test_a_symlinked_member_is_not_dereferenced(self, tmp_path, output_dir):
-        # Regression: symlinked files inside a package were followed and their
-        # targets embedded in the archive under innocuous names.
+    def test_a_symlinked_member_fails_the_export(self, tmp_path, output_dir):
+        # Regression: symlinked files were followed and their targets embedded
+        # under innocuous names. They were then *skipped*, which is also
+        # wrong: a package whose whole tree is linked contributed nothing and
+        # was still recorded as exported. Refusing the book is the only answer
+        # that cannot silently lose content.
         secret = tmp_path / "secret.txt"
         secret.write_text("TOP-SECRET", encoding="utf-8")
         package = make_package(tmp_path / "lib", "Book.epub")
         (package / "OEBPS" / "stolen.txt").symlink_to(secret)
-        (package / "OEBPS" / "relative.txt").symlink_to("../../../secret.txt")
 
-        target = output_dir / "Book.epub"
-        zip_package(package, target)
+        with pytest.raises(OSError):
+            zip_package(package, output_dir / "Book.epub")
 
-        assert "OEBPS/stolen.txt" not in members(target)
-        assert "OEBPS/relative.txt" not in members(target)
+        assert list(output_dir.glob("*.epub")) == []
 
 
 class TestAnArchiveIsNeverSilentlyIncomplete:

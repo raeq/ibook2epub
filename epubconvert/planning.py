@@ -20,6 +20,7 @@ from .app_logger import logger
 from .display import printable
 from .naming import (
     NamingPolicy,
+    encode_name,
     filesystem_key,
     split_extension,
     truncate_bytes,
@@ -108,11 +109,11 @@ def suffixed(filename: str, position: int, max_bytes: int) -> str:
     stem_text, extension = split_extension(filename)
     marker = f" ({position})"
     candidate = f"{stem_text}{marker}{extension}"
-    if not max_bytes or len(candidate.encode("utf-8")) <= max_bytes:
+    if not max_bytes or len(encode_name(candidate)) <= max_bytes:
         return candidate
 
-    budget = max_bytes - len(marker.encode("utf-8"))
-    budget -= len(extension.encode("utf-8"))
+    budget = max_bytes - len(encode_name(marker))
+    budget -= len(encode_name(extension))
     stem_text = truncate_bytes(stem_text, max(budget, 1)).rstrip(" .") or "_"
     return f"{stem_text}{marker}{extension}"
 
@@ -225,8 +226,11 @@ def plan_exports(
     settings = options if options is not None else PlanOptions()
 
     # Missing directories glob to nothing, which is what a dry run wants.
+    # Keyed through the same fold the name assignment uses. Folding one and
+    # not the other meant a book already exported under a different case was
+    # never recognised, and was re-exported on every run for ever.
     existing = {
-        policy.identity(found.name): found
+        filesystem_key(policy.identity(found.name)): found
         for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
         if found.is_file()
     }
@@ -267,17 +271,28 @@ def _decide(
             package, COLLISION, reason="another book already claims this name"
         )
 
-    found = existing.get(key)
-    settled = _decide_against_existing(package, found, settings)
-    if settled is not None:
-        return settled
-    refreshing = found is not None
+    found = existing.get(filesystem_key(key))
+    # --force still has to pass inspection. Settling it here, before the walk
+    # below, let a DRM-protected or half-downloaded source overwrite a good
+    # archive -- the one path a user reaches for when something already looks
+    # wrong. Only the "already done" answer may be given without inspecting.
+    forced = found is not None and settings.force
+    if not forced:
+        settled = _decide_against_existing(package, found, settings)
+        if settled is not None:
+            return settled
+    refreshing = found is not None and not forced
 
-    status = inspect_package(package, check_incomplete=settings.check_incomplete)
-    if status.drm:
-        return Decision(package, DRM, reason=status.reason)
-    if status.incomplete:
-        return Decision(package, INCOMPLETE, reason=status.reason)
+    unusable = _decide_against_source(package, settings)
+    if unusable is not None:
+        return unusable
+
+    if forced and found is not None:
+        # Written over the archive that is really there, not a freshly
+        # computed name: under a policy whose identity is looser than its
+        # filename the two differ, and the stale file would satisfy the
+        # identity check for ever.
+        return Decision(package, PENDING, found, reason="forced")
 
     if refreshing and found is not None:
         # Write over the archive judged stale, not over a freshly computed
@@ -299,10 +314,9 @@ def _decide_against_existing(
     needs no source walk, and ``--skip-incomplete`` would otherwise pay for one
     on every book of the library on every rerun.
 
-    Both branches that write target ``found`` rather than a freshly computed
-    name. Under a policy whose identity is looser than its filename the two are
-    different paths, and targeting the new one leaves the stale archive in
-    place, still satisfying the identity check for ever.
+    Only ever answers "already exported" or "needs looking at". The paths that
+    write are settled by the caller *after* inspection, because a book that is
+    about to be overwritten still has to be a book worth writing.
 
     :param package: The package directory.
     :param found: The archive already present under this identity, if any.
@@ -312,11 +326,30 @@ def _decide_against_existing(
     """
     if found is None:
         return None
-    if settings.force:
-        return Decision(package, PENDING, found, reason="forced")
     if settings.refresh and _source_is_newer(package, found):
         return None
     return Decision(package, EXPORTED, found)
+
+
+def _decide_against_source(package: Path, settings: PlanOptions) -> Decision | None:
+    """
+    Decide what inspecting the source settles, if anything.
+
+    Runs for every book that is going to be written, ``--force`` included: a
+    book about to overwrite a good archive still has to be a book worth
+    writing.
+
+    :param package: The package directory.
+    :param settings: Planning behaviour.
+
+    :return: The decision, or None when the package is usable.
+    """
+    status = inspect_package(package, check_incomplete=settings.check_incomplete)
+    if status.drm:
+        return Decision(package, DRM, reason=status.reason)
+    if status.incomplete:
+        return Decision(package, INCOMPLETE, reason=status.reason)
+    return None
 
 
 def _source_is_newer(package: Path, exported: Path) -> bool:

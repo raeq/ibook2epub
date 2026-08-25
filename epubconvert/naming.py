@@ -93,7 +93,7 @@ def filesystem_key(filename: str) -> str:
     return unicodedata.normalize("NFC", filename).casefold()
 
 
-def _encode(text: str) -> bytes:
+def encode_name(text: str) -> bytes:
     """
     Encode a filename for length measurement, surrogates included.
 
@@ -118,10 +118,10 @@ def truncate_bytes(text: str, limit: int) -> str:
 
     :return: The trimmed string.
     """
-    encoded = _encode(text)
+    encoded = encode_name(text)
     if len(encoded) <= limit:
         return text
-    return encoded[:limit].decode("utf-8", errors="ignore")
+    return encoded[:limit].decode("utf-8", errors="surrogatepass")
 
 
 def split_extension(name: str) -> tuple[str, str]:
@@ -199,13 +199,13 @@ def strip_unsafe(
     if not stem:
         stem = "_"
 
-    budget = max_bytes - len(_encode(extension))
+    budget = max_bytes - len(encode_name(extension))
     if budget < 1:
         # An extension that alone exceeds the budget leaves nothing worth
         # preserving; clamp the whole name and accept the loss.
         return truncate_bytes(f"{stem}{extension}", max_bytes)
 
-    if len(_encode(stem)) > budget:
+    if len(encode_name(stem)) > budget:
         stem = truncate_bytes(stem, budget).rstrip(" .") or "_"
 
     return f"{stem}{extension}"
@@ -322,8 +322,8 @@ class PortableNaming:
         cleaned = cleaned.strip(" .") or "_"
         if not extension:
             return cleaned
-        budget = MAX_FILENAME_BYTES - len(_encode(extension))
-        if len(_encode(cleaned)) > budget:
+        budget = MAX_FILENAME_BYTES - len(encode_name(extension))
+        if len(encode_name(cleaned)) > budget:
             cleaned = truncate_bytes(cleaned, max(budget, 1)).rstrip(" .") or "_"
         return f"{cleaned}{extension}"
 
