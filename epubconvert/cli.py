@@ -188,7 +188,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=SKIP,
         help=(
             "What to do when two books want the same output name: 'skip' "
-            "exports only the first, 'suffix' keeps both by appending ' (2)'."
+            "exports only the first, 'suffix' keeps both. A suffixed book is "
+            "marked with a digest of its own dc:identifier, so adding another "
+            "book later does not rename it; books whose identifier is missing "
+            "or shared fall back to ' (2)', which does move."
         ),
     )
     integrity.add_argument(

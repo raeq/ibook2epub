@@ -62,6 +62,40 @@ class Package:
     cover_id: str | None = None
 
 
+#: Values that appear where a ``dc:identifier`` should be but identify nothing.
+#: Every one was found in a real 2,805-book library: ``none`` is the identifier
+#: for 92 books, ``ISBN`` for three, ``unknown`` for one. Matched case-folded.
+JUNK_IDENTIFIERS = frozenset(
+    {"none", "null", "isbn", "unknown", "uuid", "calibre", "0"}
+)
+
+
+def usable_identifier(package: Package | None) -> str | None:
+    """
+    Return the package's identifier, if it identifies anything.
+
+    An identifier is worth using only when it distinguishes this book from
+    another. A placeholder the publisher never replaced does the opposite: 92
+    books in a surveyed library all claim to be ``none``, so treating that as a
+    real value would merge them.
+
+    Uniqueness is *not* checked here, because it cannot be: two books can carry
+    the same genuine identifier -- six unrelated technical books in that library
+    share one converter's template UUID. Callers that need distinctness have to
+    confirm it against the set they are naming.
+
+    :param package: The parsed package document, or None if it was not read.
+
+    :return: The trimmed identifier, or None if there is nothing usable.
+    """
+    if package is None or not package.identifier:
+        return None
+    trimmed = package.identifier.strip()
+    if not trimmed or trimmed.casefold() in JUNK_IDENTIFIERS:
+        return None
+    return trimmed
+
+
 class ValidationError(Exception):
     """Raised when an archive cannot be validated at all."""
 

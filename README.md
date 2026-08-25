@@ -175,8 +175,11 @@ Naming and output:
                         are reported as orphans, not deleted.
   --on-collision {skip,suffix}
                         What to do when two books want the same output name:
-                        'skip' exports only the first, 'suffix' keeps both by
-                        appending ' (2)'.
+                        'skip' exports only the first, 'suffix' keeps both. A
+                        suffixed book is marked with a digest of its own
+                        dc:identifier, so adding another book later does not
+                        rename it; books whose identifier is missing or
+                        shared fall back to ' (2)', which does move.
   --no-copy-through     Do not copy already-valid .epub files and .pdf files
                         to the output directory. They are copied by default,
                         because a real library holds both Apple's package
@@ -360,7 +363,8 @@ them would be gratuitous churn. Two things to know before turning either on:
   behind. Start with `-d` to preview.
 - **Distinct books can want the same name.** `Vol 1:2` and `Vol 1?2` both
   become `Vol 1 2`. The first wins; the rest are reported as name collisions
-  and skipped rather than silently overwritten.
+  and skipped rather than silently overwritten. `--on-collision suffix` keeps
+  them all instead — see below.
 
 Without `-p`, names are used exactly as they appear in the source directory.
 
@@ -411,6 +415,44 @@ orphan so you can see the full list before deciding:
 ```bash
 ibook2epub -o ~/Books --name-by author-title --list
 ```
+
+### When two books want the same name
+
+`--on-collision skip`, the default, exports the first and reports the rest.
+`--on-collision suffix` keeps them all, and how it tells them apart matters if
+you run this on a schedule.
+
+A book that has to share a name is marked with a short digest of its own
+`dc:identifier`:
+
+```text
+Cook, Glen - The Tyranny of the Night [b17c15bc].epub
+Cook, Glen - The Tyranny of the Night [d5c52684].epub
+```
+
+The marker describes the book, not its position in the group, so adding a
+fourth copy of something next month does not rename the three already on the
+shelf. Numbering did: a book that sorted earlier pushed every later member of
+its group down by one, and the old files stayed behind under names nothing
+claimed any more.
+
+Two cases still fall back to ` (2)`, and both say so rather than pretending:
+
+- **No usable identifier.** Some books carry a placeholder where the identifier
+  should be. In a real 2,805-book library the literal string `none` is the
+  identifier for 92 books, and `ISBN` for three.
+- **Two books, one identifier.** Publishers reuse them. Four different novels
+  in that library share a series ISBN, and six unrelated technical books share
+  one converter's template UUID.
+
+Measured on that library with `--name-by author-title --on-collision suffix`:
+2,692 names untouched, 78 marked with a digest, 10 of those needing a number as
+well, and 29 falling back to a number outright. Every one of the 2,799 names
+came out distinct, and two independent runs produced identical results.
+
+One thing the marker cannot fix: a book *entering* a collision gains its marker,
+which is a rename. That happens once, when the second copy shows up, instead of
+every time the group changes.
 
 ### Tracking what's been converted
 

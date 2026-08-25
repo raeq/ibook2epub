@@ -77,6 +77,52 @@ def make_package(parent: Path, name: str) -> Path:
     return package
 
 
+CONTAINER = (
+    '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+    '<rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles>'
+    "</container>"
+)
+
+
+def make_metadata_package(
+    parent: Path,
+    name: str,
+    *,
+    title: str,
+    creator: str | None = None,
+    file_as: str | None = None,
+    identifier: str = "urn:uuid:1",
+) -> Path:
+    """Create a package directory whose OPF carries real Dublin Core."""
+    attribute = f' opf:file-as="{file_as}"' if file_as else ""
+    person = creator or file_as
+    creator_element = f"<dc:creator{attribute}>{person}</dc:creator>" if person else ""
+    opf = (
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0"'
+        ' unique-identifier="bid">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"'
+        ' xmlns:opf="http://www.idpf.org/2007/opf">'
+        f"<dc:title>{title}</dc:title>{creator_element}"
+        f'<dc:identifier id="bid">{identifier}</dc:identifier>'
+        "</metadata>"
+        '<manifest><item id="ch1" href="text/chapter1.xhtml"'
+        ' media-type="application/xhtml+xml"/></manifest>'
+        '<spine><itemref idref="ch1"/></spine></package>'
+    )
+    layout = {
+        "mimetype": "application/epub+zip",
+        "META-INF/container.xml": CONTAINER,
+        "OEBPS/content.opf": opf,
+        "OEBPS/text/chapter1.xhtml": "<html><body>Ged</body></html>",
+    }
+    package = parent / name
+    for relative, body in layout.items():
+        path = package / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return package
+
+
 @pytest.fixture(name="library")
 def library_fixture(tmp_path: Path) -> Path:
     """

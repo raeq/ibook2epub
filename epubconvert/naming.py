@@ -27,6 +27,7 @@ recomputed by reading its filename back off disk, with no state file.
 
 from __future__ import annotations
 
+import hashlib
 import unicodedata
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
@@ -220,6 +221,34 @@ def strip_unsafe(
         stem = truncate_bytes(stem, budget).rstrip(" .") or "_"
 
     return f"{stem}{extension}"
+
+
+#: Hex characters in a collision marker. Four bytes of digest distinguishes the
+#: dozens of books that ever collide with room to spare, and stays short enough
+#: to read past.
+DISAMBIGUATOR_CHARS = 8
+
+
+def disambiguator(identifier: str) -> str:
+    """
+    Render a stable marker for a book that has to share a name.
+
+    Numbering colliding books by their position meant adding one book renamed
+    the others, because a position describes the group rather than the book. A
+    digest of the book's own identifier describes only the book, so the marker
+    holds still while the library changes around it.
+
+    The digest rather than the identifier itself: real values run to 45
+    characters and carry ``:`` and ``/``, which a filename cannot.
+
+    :param identifier: The book's canonical ``dc:identifier``.
+
+    :return: A short alphanumeric marker.
+    """
+    digest = hashlib.blake2s(
+        identifier.encode("utf-8"), digest_size=DISAMBIGUATOR_CHARS // 2
+    )
+    return digest.hexdigest()
 
 
 @runtime_checkable

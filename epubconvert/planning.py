@@ -20,6 +20,7 @@ from .app_logger import logger
 from .display import printable
 from .naming import (
     NamingPolicy,
+    disambiguator,
     encode_name,
     filesystem_key,
     split_extension,
@@ -27,7 +28,7 @@ from .naming import (
 )
 from .source import inspect_package
 from .spec import PACKAGE_SUFFIX
-from .validate import Package, ValidationError, read_package_dir
+from .validate import Package, ValidationError, read_package_dir, usable_identifier
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
@@ -93,6 +94,20 @@ class _Existing:
     identity: str
 
 
+@dataclass(frozen=True)
+class Assignment:
+    """One package's output name, and why it has none when it has none."""
+
+    package: Path
+    #: The name to write, or ``""`` when the package lost a collision.
+    filename: str
+    identity: str
+    #: What holds the name instead, set only when *filename* is empty.
+    reason: str | None = None
+    #: Named from metadata that declared no creator. Reported, not fatal.
+    authorless: bool = False
+
+
 @dataclass
 class Decision:
     """What the planner decided about one package."""
@@ -122,12 +137,23 @@ def suffixed(filename: str, position: int, max_bytes: int) -> str:
     """
     if position == 1:
         return filename
+    return marked(filename, f" ({position})", max_bytes)
 
+
+def marked(filename: str, marker: str, max_bytes: int) -> str:
+    """
+    Insert *marker* before the extension, within the policy's byte budget.
+
+    :param filename: The base filename.
+    :param marker: Text to insert, its own leading space included.
+    :param max_bytes: The policy's byte budget, or 0 for no clamping.
+
+    :return: The marked filename.
+    """
     # The module's own splitter, not Path().suffix: pathlib treats ".epub" as
     # extension-less, so the marker landed after it -- ".epub (2)" -- and no
     # *.epub glob matches that.
     stem_text, extension = split_extension(filename)
-    marker = f" ({position})"
     candidate = f"{stem_text}{marker}{extension}"
     if not max_bytes or len(encode_name(candidate)) <= max_bytes:
         return candidate
@@ -156,19 +182,26 @@ class _Claims:
         self.identities: set[str] = set()
         self.paths: set[str] = set()
         self.positions: dict[str, int] = {}
+        self.holders: dict[str, str] = {}
 
     def resume(self, group: str) -> int:
         """Return the first position worth trying for this group."""
         return self.positions.get(group, 1)
 
-    def take(self, group: str, position: int, key: str, path_key: str) -> bool:
+    def take(self, group: str, position: int, key: str, candidate: str) -> bool:
         """Claim a candidate if both its identity and its path are free."""
+        path_key = filesystem_key(candidate)
         if key in self.identities or path_key in self.paths:
             return False
         self.identities.add(key)
         self.paths.add(path_key)
         self.positions[group] = position + 1
+        self.holders.setdefault(group, candidate)
         return True
+
+    def holder(self, group: str) -> str | None:
+        """Return the name that took this group, if anything did."""
+        return self.holders.get(group)
 
     def exhaust(self, group: str, limit: int) -> None:
         """Record that this group has no positions left to try."""
@@ -197,7 +230,7 @@ def _metadata_of(package: Path, wanted: bool) -> Package | None:
 
 def assign_names(
     packages: Sequence[Path], policy: NamingPolicy, on_collision: CollisionMode
-) -> list[tuple[Path, str, str]]:
+) -> list[Assignment]:
     """
     Give every package an output name, resolving collisions deterministically.
 
@@ -205,15 +238,20 @@ def assign_names(
     were selected, so the same set of packages always produces the same names
     regardless of shuffling.
 
-    It is stable for a **fixed** set of packages only. Suffixes are positions
-    within the colliding group, so adding a book that sorts earlier shifts
-    every later member of that group, and ``--max-export-files`` selecting a
-    different subset changes the group. Nothing here can do better without
-    recording which archive belongs to which package, and this tool
-    deliberately keeps no state file; identity keyed on the package document's
-    dc:identifier would be the real fix. Until then, ``--on-collision
-    suffix`` is best used with ``-m 0 --no-shuffle`` on a library that is not
-    changing underneath it.
+    Under :data:`SUFFIX`, a book that has to share a name is marked with a
+    digest of its own ``dc:identifier`` rather than its position in the
+    colliding group. A position describes the group, so adding a book that
+    sorted earlier renamed every later member; a digest describes the book, so
+    the marker holds still while the library changes around it. Every member of
+    a crowded group is marked, not all but the first, because "all but the
+    first" is itself a position.
+
+    Two things still move a name, and both are visible. A book entering or
+    leaving a collision gains or loses its marker, which is one rename rather
+    than a cascade. And a book whose identifier is junk or shared -- 92 books in
+    a surveyed library claim to be ``none``, and 52 more share a real value --
+    keeps the old positional suffix, because a marker that pretended to be
+    stable would be worse than a number that admits it is not.
 
     Policies that name a book after its own metadata need the package document
     read first. That read is skipped entirely for the policies that do not ask
@@ -225,30 +263,155 @@ def assign_names(
     :param policy: Naming policy supplying filenames and identities.
     :param on_collision: :data:`SKIP` or :data:`SUFFIX`.
 
-    :return: Triples of package, filename and identity. A filename of ``""``
-        marks a package that lost a collision.
+    :return: One :class:`Assignment` per package, in sorted order.
     """
-    assigned: list[tuple[Path, str, str]] = []
+    setup = _Naming(policy, on_collision, getattr(policy, "max_bytes", 0))
+    wanted = _wanted_names(packages, policy)
+    crowded = Counter(policy.identity(name) for _, name, _ in wanted)
     claims = _Claims()
 
+    return [
+        _assign_one(
+            package, name, metadata, setup=setup, claims=claims, crowded=crowded
+        )
+        for package, name, metadata in wanted
+    ]
+
+
+@dataclass(frozen=True)
+class _Naming:
+    """The naming configuration, which every step of an assignment needs."""
+
+    policy: NamingPolicy
+    on_collision: CollisionMode
+    #: The policy's byte budget, or 0 for no clamping.
+    budget: int
+
+
+def _wanted_names(
+    packages: Sequence[Path], policy: NamingPolicy
+) -> list[tuple[Path, str, Package | None]]:
+    """
+    Name every package once, before any collision is resolved.
+
+    Naming is two passes because a book cannot know it is in a crowd until
+    every other book has been named. A single streaming pass could only mark
+    the second and later arrivals, which is the positional rule again.
+
+    :param packages: Packages to name.
+    :param policy: The naming policy.
+
+    :return: Package, wanted name and metadata, in sorted order.
+    """
     wants_metadata = getattr(policy, "needs_metadata", False)
-
+    wanted = []
     for package in sorted(packages):
-        wanted = policy.filename(package.name, _metadata_of(package, wants_metadata))
-        limit = MAX_SUFFIX if on_collision == SUFFIX else 1
-        group = policy.identity(wanted)
+        metadata = _metadata_of(package, wants_metadata)
+        wanted.append((package, policy.filename(package.name, metadata), metadata))
+    return wanted
 
-        for position in range(claims.resume(group), limit + 1):
-            candidate = suffixed(wanted, position, getattr(policy, "max_bytes", 0))
-            key = policy.identity(candidate)
-            if claims.take(group, position, key, filesystem_key(candidate)):
-                assigned.append((package, candidate, key))
-                break
-        else:
-            claims.exhaust(group, limit)
-            assigned.append((package, "", group))
 
-    return assigned
+def _assign_one(
+    package: Path,
+    name: str,
+    metadata: Package | None,
+    *,
+    setup: _Naming,
+    claims: _Claims,
+    crowded: Counter[str],
+) -> Assignment:
+    """
+    Settle one package's output name against the names already taken.
+
+    :param package: The package directory.
+    :param name: The name its policy asked for.
+    :param metadata: Its package document, if one was read.
+    :param setup: The naming configuration.
+    :param claims: Names already spoken for, updated in place.
+    :param crowded: How many packages wanted each identity.
+
+    :return: The assignment, with an empty filename if the book lost.
+    """
+    base = name
+    if setup.on_collision == SUFFIX and crowded[setup.policy.identity(name)] > 1:
+        base = _stable_base(name, metadata, setup.budget)
+    group = setup.policy.identity(base)
+
+    taken = _claim(claims, base, group, setup=setup)
+    if taken is None:
+        return Assignment(package, "", group, _lost_to(claims.holder(group), metadata))
+
+    filename, key = taken
+    return Assignment(package, filename, key, None, _named_without_author(metadata))
+
+
+def _stable_base(name: str, metadata: Package | None, budget: int) -> str:
+    """
+    Mark a crowded name with a digest of the book's own identifier.
+
+    :param name: The name the book wants and cannot have alone.
+    :param metadata: The parsed package document, if it was read.
+    :param budget: The policy's byte budget, or 0 for no clamping.
+
+    :return: The marked name, or *name* unchanged when nothing usable
+        identifies the book and the positional suffix has to do the job.
+    """
+    identifier = usable_identifier(metadata)
+    if identifier is None:
+        return name
+    return marked(name, f" [{disambiguator(identifier)}]", budget)
+
+
+def _named_without_author(metadata: Package | None) -> bool:
+    """Whether this book was named from a document declaring no creator."""
+    return bool(metadata and metadata.title and not metadata.creator)
+
+
+def _claim(
+    claims: _Claims, base: str, group: str, *, setup: _Naming
+) -> tuple[str, str] | None:
+    """
+    Take the first free candidate name for a book, or report that none is.
+
+    :param claims: Names already spoken for, updated in place.
+    :param base: The name to start from.
+    :param group: The identity group this book competes in.
+    :param setup: The naming configuration.
+
+    :return: The claimed filename and its identity, or None if the group is
+        exhausted.
+    """
+    limit = MAX_SUFFIX if setup.on_collision == SUFFIX else 1
+    for position in range(claims.resume(group), limit + 1):
+        candidate = suffixed(base, position, setup.budget)
+        key = setup.policy.identity(candidate)
+        if claims.take(group, position, key, candidate):
+            return candidate, key
+    claims.exhaust(group, limit)
+    return None
+
+
+def _lost_to(holder: str | None, metadata: Package | None) -> str:
+    """
+    Explain which book holds the name, and say what this one is.
+
+    Naming the winner turns "another book already claims this name" into
+    something a person can act on, and the loser's identifier is what tells
+    them whether the two are the same book stored twice or genuinely different
+    editions. In a surveyed library both cases are common.
+
+    :param holder: The filename that took the name, if one did.
+    :param metadata: The losing package's document, if it was read.
+
+    :return: The reason to record on the decision.
+    """
+    reason = (
+        f"{holder} already holds this name"
+        if holder
+        else "another book already claims this name"
+    )
+    identifier = usable_identifier(metadata)
+    return f"{reason}; this book is {identifier}" if identifier else reason
 
 
 def find_orphans(
@@ -284,9 +447,9 @@ def find_orphans(
     :return: Archives no book accounts for, sorted by path.
     """
     claimed = {
-        filesystem_key(key)
-        for _package, filename, key in assign_names(packages, policy, on_collision)
-        if filename
+        filesystem_key(item.identity)
+        for item in assign_names(packages, policy, on_collision)
+        if item.filename
     }
     claimed |= {filesystem_key(policy.identity(name)) for name in claimed_extra}
 
@@ -349,12 +512,13 @@ def plan_exports(
         for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
         if found.is_file()
     }
-    named = {
-        package: (filename, key)
-        for package, filename, key in assign_names(
-            packages, policy, settings.on_collision
-        )
-    }
+    assignments = assign_names(packages, policy, settings.on_collision)
+    authorless = sum(1 for item in assignments if item.authorless)
+    if authorless:
+        # Not a failure. The shelf will hold some 'Author - Title.epub' and
+        # some 'Title.epub', and saying how many beats leaving it to be noticed.
+        logger.warning("%d book(s) named without an author: none declared.", authorless)
+    named = {item.package: item for item in assignments}
 
     return [
         _decide(package, named[package], existing, output_dir, settings)
@@ -364,7 +528,7 @@ def plan_exports(
 
 def _decide(
     package: Path,
-    assignment: tuple[str, str],
+    assignment: Assignment,
     existing: dict[str, _Existing],
     output_dir: Path,
     settings: PlanOptions,
@@ -373,18 +537,16 @@ def _decide(
     Decide what to do with a single package.
 
     :param package: The package directory.
-    :param assignment: Its assigned filename and identity.
+    :param assignment: Its assigned name, identity and collision reason.
     :param existing: Identities already present in the output directory.
     :param output_dir: Directory the epub files are written into.
     :param settings: Planning behaviour.
 
     :return: The decision for this package.
     """
-    filename, key = assignment
+    filename, key = assignment.filename, assignment.identity
     if not filename:
-        return Decision(
-            package, COLLISION, reason="another book already claims this name"
-        )
+        return Decision(package, COLLISION, reason=assignment.reason)
 
     clash = existing.get(filesystem_key(key))
     taken = _decide_against_clash(package, clash, key)
