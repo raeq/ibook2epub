@@ -305,19 +305,13 @@ def _decide(
     if unusable is not None:
         return unusable
 
-    if forced and found is not None:
-        # Written over the archive that is really there, not a freshly
+    if found is not None and (forced or refreshing):
+        # Written over the archive that is really there, not over a freshly
         # computed name: under a policy whose identity is looser than its
-        # filename the two differ, and the stale file would satisfy the
-        # identity check for ever.
-        return Decision(package, PENDING, found, reason="forced")
-
-    if refreshing and found is not None:
-        # Write over the archive judged stale, not over a freshly computed
-        # name. Under a policy whose identity is looser than its filename the
-        # two differ, and targeting the new name would leave the stale file in
-        # place, still satisfying the identity check forever.
-        return Decision(package, PENDING, found, reason="source is newer")
+        # filename the two differ, and the stale file would keep satisfying
+        # the identity check for ever.
+        reason = "forced" if forced else "source is newer"
+        return Decision(package, PENDING, found, reason=reason)
 
     return Decision(package, PENDING, output_dir / filename)
 
