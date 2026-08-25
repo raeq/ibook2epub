@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from epubconvert import cli, convert, naming, run
+from epubconvert import cli, convert, exits, naming, run
 from epubconvert.archive import collect_package_dirs
 from tests.conftest import make_package
 
@@ -238,7 +238,7 @@ class TestMissingExtra:
 
         assert naming.build_policy(None).filename("Dune.epub") == "Dune.epub"
 
-    def test_cli_exits_2_when_the_extra_is_missing(self, tmp_path, output_dir):
+    def test_cli_reports_a_missing_tool(self, tmp_path, output_dir):
         monkeypatch = pytest.MonkeyPatch()
         source = tmp_path / "lib"
         make_package(source, "Dune.epub")
@@ -250,7 +250,7 @@ class TestMissingExtra:
         finally:
             monkeypatch.undo()
 
-        assert code == 2
+        assert code == exits.MISSING_TOOL
         assert list(output_dir.iterdir()) == []
 
 

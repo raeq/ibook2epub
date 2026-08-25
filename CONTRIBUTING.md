@@ -61,6 +61,17 @@ Names shown to a user go through `epubconvert/display.py`, which escapes
 control characters. A package name carrying `ESC[2K` can otherwise erase the
 line reporting it.
 
+### Exit codes are a contract
+
+`epubconvert/exits.py` holds every code with its meaning, and the README table
+is generated from `MEANINGS`, so the two cannot drift. A new failure mode gets
+a new code rather than reusing a near-enough one: five conditions once shared
+`2`, and a scheduled run could not tell a typo from a missing dependency.
+
+Environment checks — does this directory exist, is that tool installed — go in
+`run.main`, not in `parse_args`. `parser.error` always exits 2, so validating
+the environment there is what collapsed them in the first place.
+
 ## Measure before tuning
 
 Two of this project's performance assumptions were wrong, and both had been

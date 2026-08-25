@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from epubconvert import app_logger, cli, convert, defaults, run
+from epubconvert import app_logger, cli, convert, defaults, exits, run
 from tests.conftest import make_package
 
 
@@ -59,9 +59,19 @@ class TestParseArgs:
 
         assert args.output_dir == tmp_path / "out"
 
-    def test_missing_source_dir_is_rejected(self, tmp_path):
-        with pytest.raises(SystemExit):
-            cli.parse_args(["-s", str(tmp_path / "absent")])
+    def test_a_missing_source_dir_is_not_argparse_business(self, tmp_path):
+        # Environment checks moved to run.main so each can carry its own exit
+        # code; parser.error always exits 2 and would collapse them again.
+        args = cli.parse_args(["-s", str(tmp_path / "absent")])
+
+        assert args.source_dir == tmp_path / "absent"
+
+    def test_a_missing_source_dir_has_its_own_exit_code(self, tmp_path):
+        code = run.main(
+            ["-s", str(tmp_path / "absent"), "-o", str(tmp_path / "out"), "-q"]
+        )
+
+        assert code == exits.NO_SOURCE
 
     def test_negative_cap_is_rejected(self, library):
         with pytest.raises(SystemExit):

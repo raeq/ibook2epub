@@ -16,12 +16,10 @@ from .defaults import (
     DEFAULT_MAX_EXPORT_FILES,
     DEFAULT_MIN_FREE_MB,
     DEFAULT_OUTPUT,
-    SOURCE_CANDIDATES,
     discover_source,
 )
 from .naming import PORTABLE_MODES, STRIP
 from .planning import COLLISION_MODES, SKIP, STATUSES
-from .validate import epubcheck_available
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -284,11 +282,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     if args.epubcheck:
         args.validate = True
-        if not epubcheck_available():
-            parser.error(
-                "--epubcheck needs the 'epubcheck' tool on PATH "
-                "(brew install epubcheck, or see w3c.github.io/epubcheck)"
-            )
 
     args.source_auto = args.source_dir is None
     if args.source_auto:
@@ -297,17 +290,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     # --verify only reads the output directory. Requiring an iBooks library
     # for it would stop anyone checking a shelf of exported books on a machine
     # that never had one.
-    if not args.verify and not args.source_dir.is_dir():
-        if args.source_auto:
-            # Both known homes were probed and neither held books. Naming only
-            # the fallback reads as "this one path is wrong" rather than "we
-            # looked in these places, and here is what to do about it".
-            probed = "\n  ".join(str(path) for path in SOURCE_CANDIDATES)
-            parser.error(
-                f"No Apple Books library found. Looked in:\n  {probed}\n"
-                "If your books are somewhere else, pass -s DIR."
-            )
-        parser.error(f"source directory does not exist: {args.source_dir}")
+
+    # The environment -- whether directories exist, whether tools are
+    # installed -- is checked in run.main, which can give each failure its own
+    # exit code. parser.error always exits 2, and putting environment checks
+    # here is what made five unrelated conditions indistinguishable.
 
     # Writing into the tree being scanned pollutes the next run: temporary
     # files land mid-scan and finished exports look like source packages.

@@ -64,7 +64,7 @@
       "title": "130",
       "file": "epubconvert/convert.py",
       "line": 564,
-      "pattern": "    if report\\.interrupted:\n        return 130",
+      "pattern": "return exits\\.INTERRUPTED",
       "description": "The conventional exit code for termination by SIGINT. It takes priority over the failure check below it: an interrupted run reports as interrupted, not as failed."
     },
     {

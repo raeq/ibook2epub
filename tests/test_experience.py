@@ -184,10 +184,23 @@ class TestNothingInTheSourceGoesUnmentioned:
 class TestFirstContactOrients:
     """An error on a machine with no library should say what to do."""
 
-    def test_the_missing_library_message_offers_the_flag(self, tmp_path, capsys):
+    def test_the_missing_source_message_names_the_path(self, tmp_path, capsys):
         missing = tmp_path / "nowhere"
 
-        with pytest.raises(SystemExit):
-            cli.parse_args(["-s", str(missing), "-o", str(tmp_path / "out")])
+        run.main(["-s", str(missing), "-o", str(tmp_path / "out")])
 
-        assert "-s" in capsys.readouterr().err
+        assert str(missing) in capsys.readouterr().err
+
+    def test_the_missing_library_message_lists_where_it_looked(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        # Auto-discovery: both known homes probed, neither holding books.
+        monkeypatch.setattr(
+            "epubconvert.cli.discover_source", lambda: tmp_path / "nowhere"
+        )
+
+        run.main(["-o", str(tmp_path / "out")])
+
+        message = capsys.readouterr().err
+        assert "Looked in" in message
+        assert "-s DIR" in message

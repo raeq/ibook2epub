@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
 
-from . import app_logger
+from . import app_logger, exits
 from .app_logger import logger
 from .archive import collect_package_dirs, count_ignored
 from .cli import parse_args
@@ -35,6 +35,7 @@ from .convert import (
     output_lock,
     sweep_partials,
 )
+from .defaults import SOURCE_CANDIDATES
 from .inspect_output import verify_output
 from .naming import (
     NamingPolicy,
@@ -44,7 +45,7 @@ from .naming import (
     build_policy,
 )
 from .planning import PlanOptions, plan_exports, render_listing
-from .validate import ValidationOptions
+from .validate import ValidationOptions, epubcheck_available
 
 
 def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
@@ -108,7 +109,7 @@ def _run_verify(args: argparse.Namespace) -> int:
     # success having checked not a single file.
     if not args.output_dir.is_dir():
         logger.critical("Output directory does not exist: %s", args.output_dir)
-        return 2
+        return exits.NO_OUTPUT
 
     checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
     if not checked:
@@ -125,7 +126,7 @@ def _run_verify(args: argparse.Namespace) -> int:
             print(f"  ibook2epub --match {shlex.quote(Path(name).stem)} --force")
         if len(broken) > 3:
             print(f"  ...and {len(broken) - 3} more")
-    return 1 if damaged else 0
+    return exits.DAMAGED if damaged else exits.SUCCESS
 
 
 def _plan_options(args: argparse.Namespace) -> PlanOptions:
@@ -227,6 +228,63 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
     return report, max(0, pending_before - report.exported)
 
 
+def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:
+    """
+    Run whichever reporting mode was asked for, if either was.
+
+    ``--list`` and ``--verify`` only read. Creating the destination for them
+    would turn a typo in ``-o`` into a stray directory instead of a report
+    about the one that was meant.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+
+    :return: An exit code, or None when this is an ordinary export run.
+    """
+    if args.list_only:
+        return _run_listing(args, policy)
+    if args.verify:
+        return _run_verify(args)
+    return None
+
+
+def _check_environment(args: argparse.Namespace) -> int | None:
+    """
+    Check what the run needs from the machine, before it does anything.
+
+    Kept out of argparse deliberately. ``parser.error`` always exits 2, so
+    validating the environment there made a missing library, a missing extra
+    and a typo'd flag indistinguishable to a script.
+
+    :param args: Parsed command line arguments.
+
+    :return: An exit code, or None when the environment is usable.
+    """
+    if not args.verify and not args.source_dir.is_dir():
+        if args.source_auto:
+            # Both known homes were probed and neither held books. Naming only
+            # the fallback reads as "this one path is wrong" rather than "we
+            # looked in these places, and here is what to do about it".
+            probed = "\n  ".join(f"  {path}" for path in SOURCE_CANDIDATES)
+            logger.critical(
+                "No Apple Books library found. Looked in:\n%s\n"
+                "If your books are somewhere else, pass -s DIR.",
+                probed,
+            )
+        else:
+            logger.critical("Source directory does not exist: %s", args.source_dir)
+        return exits.NO_SOURCE
+
+    if args.epubcheck and not epubcheck_available():
+        logger.critical(
+            "--epubcheck needs the 'epubcheck' tool on PATH "
+            "(brew install epubcheck, or see w3c.github.io/epubcheck)"
+        )
+        return exits.MISSING_TOOL
+
+    return None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """
     Run the conversion from the command line.
@@ -243,35 +301,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     verbosity = 0 if args.quiet else 1 + args.verbose
     app_logger.configure(verbosity=verbosity, log_file=args.log_file)
 
+    unusable = _check_environment(args)
+    if unusable is not None:
+        return unusable
+
     try:
         policy = build_policy(args.portable_names)
     except PortableNamesUnavailableError as exc:
         logger.critical("%s", exc)
-        return 2
+        return exits.MISSING_TOOL
 
     _log_preamble(args, policy)
 
     # --list and --verify only read. Creating the destination for them would
     # turn a typo in -o into a stray directory instead of a report about the
     # one that was meant.
-    if args.list_only:
-        return _run_listing(args, policy)
-
-    if args.verify:
-        return _run_verify(args)
+    read_only = _run_read_only(args, policy)
+    if read_only is not None:
+        return read_only
 
     if not args.dry_run:
         try:
             args.output_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             logger.critical("Could not create output directory: %s", exc)
-            return 1
+            return exits.NO_OUTPUT
 
     try:
         report, remaining = _run_export(args, policy)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
-        return 3
+        return exits.LOCKED if "already using" in str(exc) else exits.NO_OUTPUT
 
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     print(summary)

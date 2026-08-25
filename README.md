@@ -366,11 +366,20 @@ output directory back off disk.
 
 | Code | Meaning |
 |------|---------|
-| `0`  | Success. Books skipped as already-exported, or skipped for a name collision, still count as success. |
-| `1`  | At least one book failed to convert, the output directory could not be created, or `--verify` found a damaged archive. |
-| `2`  | **Several causes** — see below. |
-| `3`  | Another `ibook2epub` run already holds the output directory lock, or the lock file itself could not be opened. |
-| `130` | Interrupted with Ctrl-C. Finished books are intact; rerun to continue. |
+| `0` | Every book that could be converted was. |
+| `1` | At least one book failed to convert. |
+| `2` | The command line was wrong: unknown or contradictory flags. |
+| `3` | Another run holds the output lock. Retry later. |
+| `4` | The source directory does not exist, or no library was found. |
+| `5` | The output directory could not be created, opened or found. |
+| `6` | A required extra or external tool is not installed. |
+| `7` | --verify found at least one damaged archive. |
+| `130` | Stopped with Ctrl-C. Finished books are intact. |
+
+Each code means exactly one thing, so a scheduled run can act on the status
+without reading the message: `3` is worth retrying later, `6` needs something
+installed, `4` and `5` are paths to fix, `7` means a book on the shelf is
+broken. `2` keeps its universal meaning of a bad command line.
 
 `2` is not specific, and a script cannot tell its causes apart from the code
 alone. It covers a usage error from `argparse` (an unknown or malformed flag,

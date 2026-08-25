@@ -27,6 +27,7 @@ from pathlib import Path
 from random import shuffle
 from typing import TextIO
 
+from . import exits
 from .app_logger import logger
 from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from .display import printable
@@ -712,5 +713,5 @@ def exit_code(report: Report) -> int:
         proceed at all, otherwise 0.
     """
     if report.interrupted:
-        return 130  # Conventional exit code for termination by SIGINT.
-    return 1 if report.failed or report.aborted else 0
+        return exits.INTERRUPTED
+    return exits.FAILED if report.failed or report.aborted else exits.SUCCESS

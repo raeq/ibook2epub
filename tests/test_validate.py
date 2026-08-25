@@ -10,7 +10,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert import cli, run, validate
+from epubconvert import cli, exits, run, validate
 from epubconvert.archive import zip_package
 
 CONTAINER = """<?xml version="1.0"?>
@@ -324,7 +324,7 @@ class TestVerifyMode:
         code = run.main(["-s", str(source), "-o", str(output_dir), "--verify", "-q"])
 
         out = capsys.readouterr().out
-        assert code == 1
+        assert code == exits.DAMAGED
         assert "1 damaged" in out
         assert "--force" in out
 
@@ -347,15 +347,19 @@ class TestEpubcheck:
             "epubcheck is not on PATH"
         ]
 
-    def test_flag_is_rejected_without_the_tool(self, library, monkeypatch):
-        monkeypatch.setattr(cli, "epubcheck_available", lambda: False)
+    def test_a_missing_tool_has_its_own_exit_code(self, library, tmp_path, monkeypatch):
+        # Was a usage error, indistinguishable from a typo'd flag. Whether the
+        # tool is installed is a fact about the machine, not about the command
+        # line, so it is checked in run.main and carries its own code.
+        monkeypatch.setattr("epubconvert.run.epubcheck_available", lambda: False)
 
-        with pytest.raises(SystemExit):
-            cli.parse_args(["-s", str(library), "--epubcheck"])
+        code = run.main(
+            ["-s", str(library), "-o", str(tmp_path / "out"), "--epubcheck", "-q"]
+        )
 
-    def test_flag_implies_validate(self, library, monkeypatch):
-        monkeypatch.setattr(cli, "epubcheck_available", lambda: True)
+        assert code == exits.MISSING_TOOL
 
+    def test_flag_implies_validate(self, library):
         args = cli.parse_args(["-s", str(library), "--epubcheck"])
 
         assert args.validate is True
