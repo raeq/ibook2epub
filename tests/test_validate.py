@@ -381,3 +381,116 @@ def _package_from_members(package: Path, drop: str | None = None) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
     return package
+
+
+def _opf_with(metadata: str, unique_id: str | None = "bid") -> str:
+    """Build a package document with a chosen metadata block."""
+    attribute = "" if unique_id is None else f' unique-identifier="{unique_id}"'
+    return (
+        '<?xml version="1.0"?>\n'
+        f'<package xmlns="http://www.idpf.org/2007/opf" version="3.0"{attribute}>\n'
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
+        f"{metadata}\n"
+        "  </metadata>\n"
+        "  <manifest>\n"
+        '    <item id="ch1" href="text/chapter1.xhtml"'
+        ' media-type="application/xhtml+xml"/>\n'
+        "  </manifest>\n"
+        '  <spine><itemref idref="ch1"/></spine>\n'
+        "</package>\n"
+    )
+
+
+def _read_both_ways(
+    tmp_path: Path, opf: str
+) -> tuple[validate.Package, validate.Package]:
+    """Parse one package document through both readers.
+
+    Identifier selection has two entry points -- ``read_package`` for an
+    archive and ``read_package_dir`` for a source directory -- and both go
+    through ``_package_from_root``. Returning both keeps one test per site.
+    """
+    members = {
+        "META-INF/container.xml": CONTAINER,
+        "OEBPS/content.opf": opf,
+        "OEBPS/text/chapter1.xhtml": "<html><body>Ged</body></html>",
+    }
+    archive_path = write_epub(tmp_path / "archive.epub", members)
+    with ZipFile(archive_path) as opened:
+        from_archive = validate.read_package(opened)
+
+    package = tmp_path / "source" / "Book.epub"
+    for relative, body in {"mimetype": "application/epub+zip", **members}.items():
+        path = package / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    return from_archive, validate.read_package_dir(package)
+
+
+#: A retail id listed first, and the UUID the package actually declares.
+RETAIL_ID = "B07691HV88"
+CANONICAL_ID = "urn:uuid:fb2c92bb-c9e4-49a7-bc9e-3b06350c44a5"
+
+TWO_IDENTIFIERS = (
+    "    <dc:title>A Wizard of Earthsea</dc:title>\n"
+    f'    <dc:identifier id="asin">{RETAIL_ID}</dc:identifier>\n'
+    f'    <dc:identifier id="bid">{CANONICAL_ID}</dc:identifier>'
+)
+
+
+class TestCanonicalIdentifier:
+    """
+    The spec names the canonical identifier through the ``unique-identifier``
+    IDREF on ``<package>``. Taking the first ``dc:identifier`` in document
+    order returned a retailer ASIN or ISBN instead for 798 of 2,805 books in a
+    real library, because publishers list the retail id first.
+    """
+
+    def test_the_archive_reader_honours_the_idref(self, tmp_path):
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(TWO_IDENTIFIERS))
+
+        assert from_archive.identifier == CANONICAL_ID
+
+    def test_the_directory_reader_honours_the_idref(self, tmp_path):
+        _, from_directory = _read_both_ways(tmp_path, _opf_with(TWO_IDENTIFIERS))
+
+        assert from_directory.identifier == CANONICAL_ID
+
+    def test_a_dangling_idref_falls_back_to_the_first(self, tmp_path):
+        # 17 books in the surveyed library point at an id that is not there.
+        opf = _opf_with(TWO_IDENTIFIERS, unique_id="absent")
+
+        from_archive, from_directory = _read_both_ways(tmp_path, opf)
+
+        assert from_archive.identifier == RETAIL_ID
+        assert from_directory.identifier == RETAIL_ID
+
+    def test_a_missing_attribute_falls_back_to_the_first(self, tmp_path):
+        # 2 books in the surveyed library omit unique-identifier entirely.
+        opf = _opf_with(TWO_IDENTIFIERS, unique_id=None)
+
+        from_archive, from_directory = _read_both_ways(tmp_path, opf)
+
+        assert from_archive.identifier == RETAIL_ID
+        assert from_directory.identifier == RETAIL_ID
+
+    def test_an_empty_canonical_element_falls_back_to_the_first(self, tmp_path):
+        metadata = (
+            "    <dc:title>A Wizard of Earthsea</dc:title>\n"
+            f'    <dc:identifier id="asin">{RETAIL_ID}</dc:identifier>\n'
+            '    <dc:identifier id="bid"></dc:identifier>'
+        )
+
+        from_archive, from_directory = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.identifier == RETAIL_ID
+        assert from_directory.identifier == RETAIL_ID
+
+    def test_a_single_identifier_is_still_read(self, tmp_path):
+        metadata = """    <dc:title>A Wizard of Earthsea</dc:title>
+    <dc:identifier id="bid">  urn:isbn:9780553383041  </dc:identifier>"""
+
+        from_archive, from_directory = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.identifier == "urn:isbn:9780553383041"
+        assert from_directory.identifier == "urn:isbn:9780553383041"

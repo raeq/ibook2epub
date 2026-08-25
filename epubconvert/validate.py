@@ -34,6 +34,7 @@ from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
+DC_NS = "http://purl.org/dc/elements/1.1/"
 
 #: Cap on the *stored* size of XML read from an archive. This bounds the read,
 #: not the parse: ElementTree expands internal entities, so a small document
@@ -204,6 +205,39 @@ def read_package(archive: ZipFile) -> Package:
     return _package_from_root(_read_xml(archive, opf_path), opf_path)
 
 
+def _canonical_identifier(root: ElementTree.Element) -> str | None:
+    """
+    Return the identifier the package document declares as its own.
+
+    A book may carry several ``dc:identifier`` elements -- a retail ASIN, an
+    ISBN, a converter's UUID -- and the spec names the canonical one through
+    the ``unique-identifier`` IDREF on ``<package>``. Publishers commonly list
+    the retail id first, so taking document order returned the wrong value for
+    798 of 2,805 books in a real library.
+
+    Falling back to the first is still needed. In the same library 17 books
+    point the attribute at an id that is not in the document and 2 omit the
+    attribute, and an identifier of some sort beats none.
+
+    :param root: The parsed OPF root element.
+
+    :return: The canonical identifier, or None if the book declares none.
+    """
+    found = [
+        element
+        for element in root.iter(f"{{{DC_NS}}}identifier")
+        if element.text and element.text.strip()
+    ]
+    if not found:
+        return None
+    named = root.get("unique-identifier")
+    if named:
+        for element in found:
+            if element.get("id") == named:
+                return (element.text or "").strip()
+    return (found[0].text or "").strip()
+
+
 def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
     """
     Build a :class:`Package` from a parsed package document.
@@ -225,9 +259,7 @@ def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
         # Publishers usually supply an inverted form here; it beats guessing.
         package.creator_sort = creator.get(f"{{{OPF_NS}}}file-as")
 
-    identifier = root.find(".//{http://purl.org/dc/elements/1.1/}identifier")
-    if identifier is not None and identifier.text:
-        package.identifier = identifier.text.strip()
+    package.identifier = _canonical_identifier(root)
 
     for item in root.iter(f"{{{OPF_NS}}}item"):
         item_id = item.get("id")
