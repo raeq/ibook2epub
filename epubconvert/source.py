@@ -202,13 +202,6 @@ def has_dataless_files(package: Path) -> bool:
     :return: True if at least one file has no local contents.
     """
 
-    if not dataless_detection_available():
-        logger.warning(
-            "Cannot detect undownloaded files on this platform; "
-            "--skip-incomplete has no effect."
-        )
-        return False
-
     unreadable = False
 
     def on_error(exc: OSError) -> None:
@@ -218,6 +211,17 @@ def has_dataless_files(package: Path) -> bool:
         # package that was never examined.
         logger.debug("Could not inspect %s: %s", exc.filename or package, exc)
         unreadable = True
+
+    # Whether the tree can be examined at all is not a platform question. Only
+    # the stub test itself is gated: st_flags exists on BSD-derived systems
+    # only, and returning early for its absence skipped the structural checks
+    # too, so on Linux a package that could not be read answered "downloaded".
+    detectable = dataless_detection_available()
+    if not detectable:
+        logger.warning(
+            "Cannot detect undownloaded files on this platform; "
+            "--skip-incomplete only reports packages it cannot read."
+        )
 
     for root, dirs, files in os.walk(package, onerror=on_error):
         directory = Path(root)
@@ -229,6 +233,8 @@ def has_dataless_files(package: Path) -> bool:
                     "Symlinked directory in %s: %s", printable(package.name), name
                 )
                 return True
+        if not detectable:
+            continue
         for name in files:
             try:
                 stat = (directory / name).stat()

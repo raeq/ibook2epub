@@ -582,3 +582,54 @@ class TestRuleAFilesystemClashIsNotACompletedBook:
         decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
 
         assert decisions[0].status in {planning.EXPORTED, planning.COLLISION}
+
+
+class TestRuleTheStubWalkIsStructuralEverywhere:
+    """Whether the tree can be examined is not a platform question.
+
+    Sites: ``has_dataless_files``. ``st_flags`` exists only on BSD-derived
+    systems, so the stub test is platform-gated -- but a symlinked or
+    unreadable directory means the package was never examined at all, and that
+    is true on every platform.
+    """
+
+    def test_a_symlinked_directory_fails_closed_without_stat_flags(
+        self, tmp_path, monkeypatch
+    ):
+        # The Linux path, exercised on any platform. The early return for a
+        # missing st_flags skipped the structural checks entirely, so CI on
+        # Linux answered "downloaded" for a package it could not read.
+        monkeypatch.setattr(source, "dataless_detection_available", lambda: False)
+        package = make_package(tmp_path / "lib", "Book.epub")
+        content = tmp_path / "elsewhere"
+        content.mkdir()
+        (content / "chapter.xhtml").write_text("<html/>", encoding="utf-8")
+        target = package / "OEBPS"
+        remove_tree(target)
+        target.symlink_to(content)
+
+        assert source.has_dataless_files(package) is True
+
+    @needs_permissions
+    def test_an_unreadable_directory_fails_closed_without_stat_flags(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(source, "dataless_detection_available", lambda: False)
+        package = make_package(tmp_path / "lib", "Book.epub")
+        locked = package / "OEBPS" / "locked"
+        locked.mkdir()
+        locked.chmod(0o000)
+        try:
+            assert source.has_dataless_files(package) is True
+        finally:
+            locked.chmod(0o755)
+
+    def test_an_ordinary_package_is_downloaded_without_stat_flags(
+        self, tmp_path, monkeypatch
+    ):
+        # Without st_flags the stub test cannot answer, and a readable package
+        # must not be reported incomplete just because of that.
+        monkeypatch.setattr(source, "dataless_detection_available", lambda: False)
+        package = make_package(tmp_path / "lib", "Book.epub")
+
+        assert source.has_dataless_files(package) is False
