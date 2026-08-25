@@ -35,7 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
 #: contract, not an internal detail: ``--list`` names them all in its help text
 #: and ``--list --json`` emits them verbatim. Typing them keeps a mistyped
 #: comparison from passing the type checker.
-Status = Literal["pending", "exported", "collision", "drm", "incomplete"]
+Status = Literal["pending", "exported", "collision", "drm", "incomplete", "orphan"]
 
 #: The :class:`~epubconvert.convert.Report` fields the outcome table may bump.
 ReportField = Literal["skipped", "collisions", "drm", "incomplete"]
@@ -47,6 +47,10 @@ COLLISION: Status = "collision"
 DRM: Status = "drm"
 INCOMPLETE: Status = "incomplete"
 
+#: Not a decision about a book in the library at all: an archive on the shelf
+#: that no book in the library claims. Reported, never acted on.
+ORPHAN: Status = "orphan"
+
 #: How ``--on-collision`` may be set.
 CollisionMode = Literal["skip", "suffix"]
 SKIP: CollisionMode = "skip"
@@ -57,7 +61,14 @@ COLLISION_MODES = (SKIP, SUFFIX)
 #: can name them without restating the set: Status's own docstring calls that
 #: help part of the contract, and a sixth status would otherwise leave it wrong
 #: with nothing to catch it.
-STATUSES: tuple[Status, ...] = (PENDING, EXPORTED, COLLISION, DRM, INCOMPLETE)
+STATUSES: tuple[Status, ...] = (
+    PENDING,
+    EXPORTED,
+    COLLISION,
+    DRM,
+    INCOMPLETE,
+    ORPHAN,
+)
 
 #: Highest ``" (n)"`` suffix the planner will try before giving up on a name.
 MAX_SUFFIX = 99
@@ -209,6 +220,67 @@ def assign_names(
             assigned.append((package, "", group))
 
     return assigned
+
+
+def find_orphans(
+    output_dir: Path,
+    policy: NamingPolicy,
+    packages: Sequence[Path],
+    on_collision: CollisionMode = SKIP,
+    claimed_extra: Sequence[str] = (),
+) -> list[Path]:
+    """
+    Find archives on the shelf that no book in the library claims.
+
+    The library has always been seen richly -- five statuses, reasons, tallies
+    -- and the output directory not at all. An archive left behind by a book
+    deleted from the library, or by adopting a naming policy that renames
+    everything, sits there for ever: ``--verify`` blesses it because it is a
+    sound archive, and ``--list`` only ever looked at sources.
+
+    Asks the planner for the names rather than deriving them, so a book that
+    took a ``" (2)"`` suffix is not reported as abandoning the name it holds.
+
+    Nothing is deleted, here or anywhere. The never-deletes stance is
+    deliberate; the gap was that nothing would say either.
+
+    :param output_dir: Directory holding exported files.
+    :param policy: Naming policy supplying filenames and identities.
+    :param packages: **Every** package in the library, not the subset this run
+        is looking at -- ``--match`` narrows a run, not the shelf.
+    :param on_collision: The collision mode, so suffixed names are recognised.
+    :param claimed_extra: Names claimed by something other than a package,
+        such as a file copied through verbatim.
+
+    :return: Archives no book accounts for, sorted by path.
+    """
+    claimed = {
+        filesystem_key(key)
+        for _package, filename, key in assign_names(packages, policy, on_collision)
+        if filename
+    }
+    claimed |= {filesystem_key(policy.identity(name)) for name in claimed_extra}
+
+    return sorted(
+        found
+        for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
+        if found.is_file()
+        and filesystem_key(policy.identity(found.name)) not in claimed
+    )
+
+
+def orphan_decisions(orphans: Sequence[Path]) -> list[Decision]:
+    """
+    Render orphans as decisions so one listing can carry both.
+
+    :param orphans: Archives no book accounts for.
+
+    :return: One decision per orphan.
+    """
+    return [
+        Decision(path, ORPHAN, path, reason="no book in the library claims this name")
+        for path in orphans
+    ]
 
 
 def plan_exports(
@@ -510,7 +582,11 @@ def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:
             [
                 {
                     "name": decision.package.name,
-                    "source": str(decision.package),
+                    # An orphan has no source package; the path in "target" is
+                    # where the file actually is.
+                    "source": (
+                        None if decision.status == ORPHAN else str(decision.package)
+                    ),
                     "status": decision.status,
                     "target": str(decision.target) if decision.target else None,
                     "reason": decision.reason,

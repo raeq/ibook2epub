@@ -20,7 +20,12 @@ from pathlib import Path
 
 from . import app_logger, exits
 from .app_logger import logger
-from .archive import collect_package_dirs, count_ignored
+from .archive import (
+    collect_copyable,
+    collect_package_dirs,
+    copy_through,
+    count_ignored,
+)
 from .cli import parse_args
 from .convert import (
     ExportOptions,
@@ -36,6 +41,7 @@ from .convert import (
     sweep_partials,
 )
 from .defaults import SOURCE_CANDIDATES
+from .display import printable
 from .inspect_output import verify_output
 from .naming import (
     NamingPolicy,
@@ -44,7 +50,13 @@ from .naming import (
     StripNaming,
     build_policy,
 )
-from .planning import PlanOptions, plan_exports, render_listing
+from .planning import (
+    PlanOptions,
+    find_orphans,
+    orphan_decisions,
+    plan_exports,
+    render_listing,
+)
 from .validate import ValidationOptions, epubcheck_available
 
 
@@ -87,12 +99,25 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     :return: A process exit code.
     """
     discovered = collect_package_dirs(args.source_dir)
+    copyable = [] if args.no_copy_through else collect_copyable(args.source_dir)
     packages = filter_packages(discovered, args.match)
     decisions = plan_exports(packages, args.output_dir, policy, _plan_options(args))
-    print(render_listing(decisions, args.as_json))
-    ignored = count_ignored(args.source_dir, discovered)
+    # Orphans come from the whole library, not this run's filtered subset:
+    # --match narrows a run, not the shelf. Files copied through claim their
+    # names too, or the shelf would report what this run just put there.
+    orphans = orphan_decisions(
+        find_orphans(
+            args.output_dir,
+            policy,
+            discovered,
+            args.on_collision,
+            claimed_extra=[path.name for path in copyable],
+        )
+    )
+    print(render_listing(decisions + orphans, args.as_json))
+    ignored = count_ignored(args.source_dir, discovered) - len(copyable)
     if ignored and not args.as_json:
-        print(f"{ignored} ignored (not *.epub/ packages)")
+        print(f"{ignored} ignored (not books)")
     return 0
 
 
@@ -165,7 +190,17 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
     # Held here rather than inside the exporter so the partial counts survive
     # a Ctrl-C.
     report = Report()
-    report.ignored = count_ignored(args.source_dir, discovered)
+    copyable = [] if args.no_copy_through else collect_copyable(args.source_dir)
+    report.ignored = count_ignored(args.source_dir, discovered) - len(copyable)
+    report.orphaned = len(
+        find_orphans(
+            args.output_dir,
+            policy,
+            discovered,
+            args.on_collision,
+            claimed_extra=[path.name for path in copyable],
+        )
+    )
 
     if args.force and args.max_export_files and len(packages) > args.max_export_files:
         logger.warning(
@@ -197,6 +232,8 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         # concurrent run move the output directory underneath the decisions.
         pending_before = 0
         try:
+            if not args.dry_run:
+                report.copied = _copy_through_all(copyable, args.output_dir)
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
             # a cloud shelf, and a Ctrl-C there produced a raw traceback with
@@ -246,6 +283,34 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
     if args.verify:
         return _run_verify(args)
     return None
+
+
+def _copy_through_all(copyable: Sequence[Path], output_dir: Path) -> int:
+    """
+    Put already-valid books on the shelf without converting them.
+
+    Rerun-safe on the same terms as everything else: a file already there is
+    left alone rather than rewritten, so a second run does nothing and says
+    nothing.
+
+    :param copyable: Files found beside the packages.
+    :param output_dir: Directory to copy into.
+
+    :return: How many were copied this run.
+    """
+    copied = 0
+    for source in copyable:
+        target = output_dir / source.name
+        if target.exists():
+            continue
+        try:
+            copy_through(source, target)
+        except OSError as exc:
+            logger.error("Could not copy %s: %s", printable(source.name), exc)
+            continue
+        copied += 1
+        logger.info("Copied %s", printable(source.name))
+    return copied
 
 
 def _check_environment(args: argparse.Namespace) -> int | None:

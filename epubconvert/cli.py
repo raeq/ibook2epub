@@ -191,6 +191,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     output.add_argument(
+        "--no-copy-through",
+        action="store_true",
+        help=(
+            "Do not copy already-valid .epub files and .pdf files to the "
+            "output directory. They are copied by default, because a real "
+            "library holds both Apple's package folders and books that "
+            "arrived already zipped, and exporting only the first produces "
+            "half a shelf."
+        ),
+    )
+    output.add_argument(
         "--covers",
         action="store_true",
         help="Also write each book's cover image beside its epub file.",

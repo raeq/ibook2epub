@@ -12,8 +12,6 @@ source directory can go unmentioned.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
-from zipfile import ZipFile
-
 import pytest
 
 from epubconvert import cli, run
@@ -147,15 +145,15 @@ class TestContradictoryVerbosityIsRefused:
 class TestNothingInTheSourceGoesUnmentioned:
     """A partial export must not read as a complete one."""
 
-    def test_non_package_items_are_counted(self, tmp_path, output_dir, capsys):
-        # A sideloaded already-zipped book and an unrelated file appeared in
-        # no output of any command: not skipped, not counted, not listed. The
-        # summary read complete while two of five items were never considered.
+    def test_non_book_items_are_counted(self, tmp_path, output_dir, capsys):
+        # Anything in the source appeared in no output of any command: not
+        # skipped, not counted, not listed, so the summary read complete while
+        # some of what the user put there was never considered. Books are now
+        # copied through; everything else is still counted.
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        with ZipFile(library / "Already Valid.epub", "w") as opened:
-            opened.writestr("mimetype", "application/epub+zip")
-        (library / "Some Paper.pdf").write_text("pdf", encoding="utf-8")
+        (library / "notes.txt").write_text("mine", encoding="utf-8")
+        (library / "cover.png").write_bytes(b"\x89PNG")
 
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
@@ -164,7 +162,7 @@ class TestNothingInTheSourceGoesUnmentioned:
     def test_the_listing_mentions_them_too(self, tmp_path, output_dir, capsys):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        (library / "Some Paper.pdf").write_text("pdf", encoding="utf-8")
+        (library / "notes.txt").write_text("mine", encoding="utf-8")
 
         run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
 

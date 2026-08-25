@@ -27,6 +27,10 @@ module, so this map saves a search:
 ``test_containment.py``      the one path-trust rule (``contained``)
 ``test_rules.py``            one class per rule, one test per call site
 ``test_packaging.py``        what ships, and the version it reports
+``test_experience.py``       what the tool tells the person running it
+``test_exit_codes.py``       the exit codes, as a contract for scripts
+``test_shelf.py``            orphans: what is on the shelf and not in the library
+``test_copy_through.py``     books taken along without converting
 ===========================  ==================================================
 
 ``spec`` is exercised through the modules that use it rather than directly.

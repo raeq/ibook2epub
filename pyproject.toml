@@ -68,7 +68,7 @@ max-args = 8
 # Report and Package are counter bags and parsed-document holders: attributes
 # with no interactions between them, which is not the state this check exists
 # to bound.
-max-attributes = 12
+max-attributes = 14
 
 [tool.ruff]
 target-version = "py310"

@@ -91,6 +91,8 @@ class Report:
     interrupted: bool = False  # The run was stopped with Ctrl-C.
     aborted: bool = False  # The run could not proceed, e.g. no disk space.
     ignored: int = 0  # Things in the source that were not *.epub/ packages.
+    orphaned: int = 0  # Archives on the shelf no book in the library claims.
+    copied: int = 0  # Files taken along unchanged rather than converted.
 
 
 #: Guards the shared Report and progress counter, which worker threads update.
@@ -639,7 +641,9 @@ def _clauses(report: Report, *, failures: bool) -> str:
         (report.collisions, "{} name collision(s)"),
         (report.drm, "{} DRM-protected"),
         (report.incomplete, "{} not downloaded"),
+        (report.copied, "{} copied"),
         (report.ignored, "{} ignored"),
+        (report.orphaned, "{} orphaned"),
     ]
     if failures:
         parts.append((report.failed, "failed {}"))

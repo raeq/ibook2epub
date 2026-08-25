@@ -34,6 +34,12 @@ ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 PARTIAL_PREFIX = ".ibook2epub-"
 #: Appended to every temporary this tool writes.
 PARTIAL_SUFFIX = ".part"
+
+#: Suffixes worth taking along verbatim. A real library holds both forms --
+#: Apple's package directories, and books that arrived already zipped or as
+#: PDFs -- and converting only the first produced a partial shelf whose
+#: summary read complete.
+COPYABLE_SUFFIXES = frozenset({".epub", ".pdf"})
 #: Deflate level for text members. Measured on a 3 MB book: level 9 costs 3.2x
 #: the CPU of level 6 for 0.6% less size, and bare zlib on the same text is
 #: 4.8x for 1.6%. Level 6 is zlib's default and the level worth paying for.
@@ -109,6 +115,72 @@ def is_excluded(name: str, *, at_root: bool) -> bool:
         or Path(name).suffix in EXCLUDED_ROOT_SUFFIXES
         or name.startswith(EXCLUDED_ROOT_PREFIXES)
     )
+
+
+def collect_copyable(source_dir: Path) -> list[Path]:
+    """
+    Find files worth copying to the shelf unchanged.
+
+    A ``*.epub`` **file** rather than a directory is a book that arrived
+    already zipped; a ``*.pdf`` is a book this tool has nothing to do to. Both
+    belong on the shelf the run produces, and neither needs converting.
+
+    Only real files: the same trust rule every other reader here uses, so a
+    symlink out of the library is not followed.
+
+    :param source_dir: The directory to search.
+
+    :return: Files to copy, sorted by path.
+    """
+    found: list[Path] = []
+    resolved = source_dir.resolve()
+
+    def on_error(exc: OSError) -> None:
+        logger.warning("Could not scan %s: %s", exc.filename or source_dir, exc)
+
+    for root, dirs, files in os.walk(source_dir, onerror=on_error):
+        directory = Path(root)
+        # A package's own contents are never copy-through candidates.
+        dirs[:] = [name for name in dirs if not name.endswith(PACKAGE_SUFFIX)]
+        for name in files:
+            path = directory / name
+            if PurePosixPath(name).suffix.lower() not in COPYABLE_SUFFIXES:
+                continue
+            if not contains(source_dir, path, resolved_root=resolved):
+                logger.warning(
+                    "Skipped symlink %s in %s", printable(name), source_dir.name
+                )
+                continue
+            found.append(path)
+
+    found.sort()
+    return found
+
+
+def copy_through(source: Path, target: Path) -> None:
+    """
+    Put a file on the shelf without touching its bytes.
+
+    Written to a temporary and moved into place, like every other write here,
+    so an interrupted run never leaves a half-copied file that a later run
+    mistakes for finished work.
+
+    :param source: The file to copy.
+    :param target: Where it should land.
+    """
+    handle, partial_name = tempfile.mkstemp(
+        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
+    )
+    os.close(handle)
+    partial = Path(partial_name)
+    try:
+        partial.chmod(file_mode())
+        with open_contained(source) as reading, partial.open("wb") as writing:
+            shutil.copyfileobj(reading, writing)
+        partial.replace(target)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 def count_ignored(source_dir: Path, packages: Sequence[Path]) -> int:

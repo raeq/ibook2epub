@@ -117,9 +117,9 @@ killed run is inert and needs no cleanup.
 usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
                   [--version] [-f] [--match PATTERN] [-w N] [-p [MODE]]
                   [--list] [--json] [--refresh] [--skip-incomplete]
-                  [--on-collision {skip,suffix}] [--min-free MB] [--covers]
-                  [--validate] [--epubcheck] [--verify] [--no-shuffle] [-v]
-                  [-q] [--log-file PATH]
+                  [--on-collision {skip,suffix}] [--min-free MB]
+                  [--no-copy-through] [--covers] [--validate] [--epubcheck]
+                  [--verify] [--no-shuffle] [-v] [-q] [--log-file PATH]
 
 Convert Apple iBooks epub packages to zipped epub files.
 
@@ -169,6 +169,11 @@ Naming and output:
                         What to do when two books want the same output name:
                         'skip' exports only the first, 'suffix' keeps both by
                         appending ' (2)'.
+  --no-copy-through     Do not copy already-valid .epub files and .pdf files
+                        to the output directory. They are copied by default,
+                        because a real library holds both Apple's package
+                        folders and books that arrived already zipped, and
+                        exporting only the first produces half a shelf.
   --covers              Also write each book's cover image beside its epub
                         file.
 
@@ -180,9 +185,9 @@ Deciding what to do:
   -f, --force           Re-export books even if they are already in the
                         output directory.
   --list                List every *.epub/ package with its status (pending,
-                        exported, collision, drm, incomplete) and exit
-                        without converting anything. Anything in the source
-                        that is not a package is counted, not listed.
+                        exported, collision, drm, incomplete, orphan) and
+                        exit without converting anything. Anything in the
+                        source that is not a package is counted, not listed.
   --json                With --list, emit machine-readable JSON instead of a
                         table.
   --refresh             Re-export a book when its source directory is newer
