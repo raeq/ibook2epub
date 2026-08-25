@@ -120,7 +120,7 @@
       "file": ".github/workflows/ci.yml",
       "line": 46,
       "pattern": "  test-minimal:",
-      "description": "Three jobs. `lint` runs ruff, ruff format, mypy and pylint with a floor of 8.0. `test` runs pytest across Python 3.10 through 3.14 with the `portable` extra.\n\n`test-minimal` is the interesting one: it installs without extras, **asserts that importing `disarm` fails**, and runs the suite anyway. That is the guarantee in the README — no dependencies — turned into something that breaks the build.\n\nRun the same checks locally before pushing: `ruff check epubconvert tests`, `mypy`, `pytest`."
+      "description": "Three jobs. `lint` runs ruff, ruff format, mypy and pylint. `test` runs pytest across Python 3.10 through 3.14 with the `portable` extra.\n\n`test-minimal` is the interesting one: it installs without extras, **asserts that importing `disarm` fails**, and runs the suite anyway. That is the guarantee in the README — no dependencies — turned into something that breaks the build.\n\nRun the same checks locally before pushing: `ruff check epubconvert tests`, `mypy`, `pytest`."
     }
   ]
 }

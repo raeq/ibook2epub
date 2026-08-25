@@ -235,7 +235,12 @@ def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
         # A remote resource is not expected in the archive, so recording it
         # would only produce a false "manifest item is not in the archive".
         if item_id and href and not is_remote(href):
-            package.manifest[item_id] = _resolve(opf_path, href)
+            # A fragment-only href ("#toc") resolves to nothing. Recording it
+            # made --validate report a sound book as missing a member, so the
+            # archive was never written and the book was retried for ever.
+            resolved = _resolve(opf_path, href)
+            if resolved:
+                package.manifest[item_id] = resolved
         if item_id and "cover-image" in (item.get("properties") or ""):
             package.cover_id = item_id
 
@@ -362,9 +367,10 @@ def validate_archive(path: Path) -> list[str]:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
         return [f"could not open: {exc}"]
-    except (NotImplementedError, RuntimeError, ValueError) as exc:
+    except (EOFError, NotImplementedError, RuntimeError, ValueError) as exc:
         # zipfile raises NotImplementedError for a compression method it does
-        # not implement and RuntimeError for an encrypted member. --verify is
+        # not implement, RuntimeError for an encrypted member, and EOFError
+        # when a member holds less data than the directory declares. --verify is
         # the one command whose job is finding damage, so it must report a
         # hostile archive rather than die on it and check nothing further.
         return [f"unreadable archive: {exc}"]

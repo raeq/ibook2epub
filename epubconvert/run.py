@@ -139,7 +139,8 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
 
     :return: The run's report, and the number of books still to convert.
 
-    :raises OutputLockedError: If another run holds the output lock.
+    :raises OutputLockedError: If another run holds the output lock, or the
+        lock file could not be opened.
     """
     packages = filter_packages(collect_package_dirs(args.source_dir), args.match)
     if not packages:
@@ -169,13 +170,17 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         # the count of what is left come from this one plan, so they cannot
         # describe different libraries; planning outside the lock would let a
         # concurrent run move the output directory underneath the decisions.
-        decisions = plan_exports(packages, args.output_dir, policy, options.plan)
-        pending_before = count_pending_decisions(decisions)
-        selected = cap_exports(
-            decisions, args.max_export_files, randomise=not args.no_shuffle
-        )
-
+        pending_before = 0
         try:
+            # Planning is inside the guard too: under --skip-incomplete it
+            # walks every package in the library, which is minutes of work on
+            # a cloud shelf, and a Ctrl-C there produced a raw traceback with
+            # no summary and no 130.
+            decisions = plan_exports(packages, args.output_dir, policy, options.plan)
+            pending_before = count_pending_decisions(decisions)
+            selected = cap_exports(
+                decisions, args.max_export_files, randomise=not args.no_shuffle
+            )
             asyncio.run(
                 export_planned(
                     selected,

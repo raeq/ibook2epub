@@ -224,6 +224,10 @@ def plan_exports(
     :return: One decision per package, in the order given.
     """
     settings = options if options is not None else PlanOptions()
+    # Deduplicated, order preserved: the name map is keyed by path, so a
+    # repeated package collapsed there while the decision list still emitted
+    # one per element -- two workers writing the same target.
+    packages = list(dict.fromkeys(packages))
 
     # Missing directories glob to nothing, which is what a dry run wants.
     # Keyed through the same fold the name assignment uses. Folding one and

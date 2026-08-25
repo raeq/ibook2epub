@@ -50,7 +50,7 @@
       "title": "Budget arithmetic",
       "file": "epubconvert/naming.py",
       "line": 158,
-      "pattern": "    budget = max_bytes - len\\(_encode\\(extension\\)\\)",
+      "pattern": "    budget = max_bytes - len\\(encode_name\\(extension\\)\\)",
       "description": "The extension is reserved first, then the stem gets what is left, then a trailing dot or space exposed by the cut is stripped again — falling back to `_` rather than to nothing.\n\nThe `budget < 1` branch is the degenerate case: an extension that alone exceeds the limit leaves nothing worth preserving, so the whole name is clamped and the loss accepted."
     },
     {

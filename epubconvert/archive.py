@@ -259,10 +259,12 @@ def zip_package(
     # regardless. A user running with `umask 077` still got world-readable
     # books. ARCHIVE_MODE stays as the zip entry's recorded mode, which is
     # metadata and rightly fixed for byte-identical re-exports.
-    partial.chmod(file_mode())
     file_count = 0
 
     try:
+        # Inside the guard: a failure here used to leak a .part per book,
+        # because the handler that unlinks it starts below.
+        partial.chmod(file_mode())
         with ZipFile(
             partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL
         ) as archive:

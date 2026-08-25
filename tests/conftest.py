@@ -24,6 +24,8 @@ module, so this map saves a search:
                              trustworthy
 ``test_hardening.py``        untrusted input and hostile filesystems
 ``test_efficiency.py``       work done per book, and work declined
+``test_containment.py``      the one path-trust rule (``contained``)
+``test_rules.py``            one class per rule, one test per call site
 ===========================  ==================================================
 
 ``spec`` is exercised through the modules that use it rather than directly.

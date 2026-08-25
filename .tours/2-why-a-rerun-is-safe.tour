@@ -22,7 +22,7 @@
       "title": "Reading the record",
       "file": "epubconvert/planning.py",
       "line": 172,
-      "pattern": "    existing = \\{\n        policy\\.identity\\(found\\.name\\): found",
+      "pattern": "filesystem_key\\(policy\\.identity\\(found\\.name\\)\\): found",
       "description": "The record, read in one line: glob `*.epub` in the output directory, run each filename back through `policy.identity`.\n\nA missing directory globs to nothing, which is exactly what a dry run against a not-yet-created output directory wants."
     },
     {
@@ -78,7 +78,7 @@
       "title": "One writer at a time",
       "file": "epubconvert/convert.py",
       "line": 335,
-      "pattern": "def output_lock\\(output_dir: Path\\) -> Iterator\\[None\\]:",
+      "pattern": "def output_lock\\(output_dir: Path\\) -> Iterator\\[bool\\]:",
       "description": "Rerun safety invites scheduling this from cron or launchd, and that is where two runs overlap. Both would read the output directory before either wrote to it, and both would export the same books. `os.replace` keeps that from corrupting anything; it still wastes the work and muddles the logs.\n\n`flock`, non-blocking. A second run raises `OutputLockedError` and `main` turns that into exit code `3`. No `fcntl` on Windows, where the whole thing is a no-op."
     },
     {

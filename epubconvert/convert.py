@@ -66,7 +66,13 @@ class ExportOptions:
 
 
 class OutputLockedError(RuntimeError):
-    """Raised when another run already holds the output directory lock."""
+    """
+    Raised when the output directory cannot be locked for this run.
+
+    Two causes: another run already holds the lock, or the lock file itself
+    could not be opened -- a read-only output directory gets past ``main``'s
+    ``mkdir(exist_ok=True)`` and fails here.
+    """
 
 
 @dataclass
@@ -92,15 +98,19 @@ _REPORT_LOCK = threading.Lock()
 class _Progress:  # pylint: disable=too-few-public-methods
     """Counts finished books so each log line shows how far along the run is."""
 
-    #: How often the output volume is re-measured, in books. The floor is a
-    #: safety margin rather than an accounting, and --min-free's own help names
-    #: SD cards and Kindles, where statvfs is slowest.
+    #: Upper bound on how often the output volume is re-measured, in books.
+    #: The floor is a safety margin rather than an accounting, and --min-free's
+    #: own help names SD cards and Kindles, where statvfs is slowest.
     ROOM_INTERVAL = 32
 
-    def __init__(self, total: int) -> None:
+    def __init__(self, total: int, interval: int = ROOM_INTERVAL) -> None:
         self.total = total
         self.done = 0
         self.checks = 0
+        # Never wider than the pool. Sampling one book in 32 while 64 run at
+        # once means up to 31 further books are written after the floor has
+        # already been crossed.
+        self.interval = max(1, min(interval, self.ROOM_INTERVAL))
 
     def should_check_room(self) -> bool:
         """
@@ -111,7 +121,7 @@ class _Progress:  # pylint: disable=too-few-public-methods
         sampled. The caller holds the report lock, which makes this atomic.
         """
         self.checks += 1
-        return (self.checks - 1) % self.ROOM_INTERVAL == 0
+        return (self.checks - 1) % self.interval == 0
 
     def tick(self) -> str:
         """Advance the counter and render it as ``[12/240]``."""
@@ -309,7 +319,7 @@ async def export_planned(
         report.aborted = True
         return report
 
-    progress = _Progress(len(pending))
+    progress = _Progress(len(pending), default_workers(max_workers))
     pool = ThreadPoolExecutor(
         max_workers=default_workers(max_workers), thread_name_prefix="zip"
     )
@@ -576,12 +586,7 @@ def format_summary(
             f"Dry run: would export {report.planned} epub file(s) to "
             f"{output_dir} (skipped {report.skipped} already present"
         )
-        if report.collisions:
-            summary += f", {report.collisions} name collision(s)"
-        if report.drm:
-            summary += f", {report.drm} DRM-protected"
-        if report.incomplete:
-            summary += f", {report.incomplete} not downloaded"
+        summary += _clauses(report, failures=False)
         summary += ")."
         if remaining:
             summary += f" {remaining} remaining."
@@ -593,20 +598,51 @@ def format_summary(
     )
     if report.skipped:
         summary += f", skipped {report.skipped}"
-    if report.collisions:
-        summary += f", {report.collisions} name collision(s)"
-    if report.drm:
-        summary += f", {report.drm} DRM-protected"
-    if report.incomplete:
-        summary += f", {report.incomplete} not downloaded"
-    if report.failed:
-        summary += f", failed {report.failed}"
+    summary += _clauses(report, failures=True)
     summary += "."
     if report.interrupted:
         summary = f"Interrupted. {summary}"
+    if report.aborted:
+        summary = f"Aborted: not enough free space on {output_dir}. {summary}"
     if remaining:
         summary += f" {remaining} remaining; rerun to continue."
     return summary
+
+
+def _clauses(report: Report, *, failures: bool) -> str:
+    """
+    Render the optional counts a summary mentions only when they are non-zero.
+
+    Stated once rather than repeated per branch, which is what pushed
+    :func:`format_summary` past the branch limit and would have grown with
+    every new counter.
+
+    :param report: The report to read.
+    :param failures: Whether to include the failure count, which a dry run has
+        no meaning for.
+
+    :return: The clauses, each already prefixed with ", ".
+    """
+    parts = [
+        (report.collisions, "{} name collision(s)"),
+        (report.drm, "{} DRM-protected"),
+        (report.incomplete, "{} not downloaded"),
+    ]
+    if failures:
+        parts.append((report.failed, "failed {}"))
+    return "".join(f", {phrase.format(count)}" for count, phrase in parts if count)
+
+
+def progress_for(total: int, interval: int) -> _Progress:
+    """
+    Build a progress counter, for callers that need to inspect its cadence.
+
+    :param total: Books to be written.
+    :param interval: Pool size; the sampling cadence is clamped to it.
+
+    :return: The counter.
+    """
+    return _Progress(total, interval)
 
 
 def default_workers(max_workers: int | None = None) -> int:

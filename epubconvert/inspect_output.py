@@ -19,10 +19,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .app_logger import logger
-from .contained import resolve
+from .contained import is_free, resolve
 from .display import printable
 from .spec import PACKAGE_SUFFIX
 from .validate import ValidationError, ValidationOptions, read_package_dir
+
+#: Guards the "cannot measure free space" warning so it is said once per
+#: process rather than once per sampling interval.
+_warned_about_free_space: set[bool] = set()
 
 
 def free_megabytes(path: Path) -> int:
@@ -37,8 +41,13 @@ def free_megabytes(path: Path) -> int:
         return shutil.disk_usage(path).free // (1024 * 1024)
     except OSError as exc:
         # Permissive, so a volume we cannot measure never blocks work -- but
-        # said once, because this silently turns --min-free into a no-op on
-        # exactly the removable and network volumes it exists for.
+        # said, because this silently turns --min-free into a no-op on exactly
+        # the removable and network volumes it exists for. Said once per run:
+        # the caller samples this on a cadence, so an unguarded warning would
+        # repeat for the life of the run.
+        if _warned_about_free_space:
+            return 1 << 30
+        _warned_about_free_space.add(True)
         logger.warning(
             "Cannot measure free space on %s (%s); --min-free is not enforced.",
             path,
@@ -94,7 +103,7 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         # any path that is not a new file beside the archive.
         suffix = Path(href).suffix or ".jpg"
         cover = target_archive.parent / f"{target_archive.stem}{suffix}"
-        if cover == target_archive or cover.exists():
+        if cover == target_archive or not is_free(cover):
             logger.debug(
                 "Not writing cover for %s: %s is taken",
                 target_archive.name,

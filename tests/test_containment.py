@@ -132,8 +132,9 @@ class TestNoSecondImplementation:
     def test_only_the_containment_module_tests_for_symlinks(self):
         # The concern this whole module answers: the guard existed and the
         # archive writer did not call it, so the same rule was written again
-        # with less care. A second is_symlink() outside contained.py means
-        # somebody has started a third implementation.
+        # with less care. An is_symlink() outside contained.py means somebody
+        # has started another implementation -- on the read side (is a member
+        # safe to open) or the write side (is this name free to create).
         offenders = []
         for path in sorted(Path("epubconvert").glob("*.py")):
             if path.name == "contained.py":

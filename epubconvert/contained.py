@@ -17,15 +17,19 @@ still point its own package document at any file the user could read.
 Everything that resolves a name against a package goes through :func:`resolve`.
 There is no second implementation, and a test asserts there is not.
 
-**Symlinks are refused outright, even when they point back inside the
-package.** A package Apple wrote contains none, so "a member is a real file"
-is both true and far easier to be sure of than "a member is a link that happens
-to land somewhere acceptable".
+**Links are refused outright** -- symlinks even when they point back inside
+the package, and hardlinks, which are links the symlink test cannot see: a
+hardlink reports ``is_symlink() == False`` and never resolves outside the
+package, so it passed both halves of the rule and carried its target's bytes
+into the archive under an innocuous name. A package Apple wrote contains
+neither kind, so "a member is a file this package owns" is both true and far
+easier to be sure of than "a link that happens to land somewhere acceptable".
 """
 
 from __future__ import annotations
 
 import posixpath
+import stat
 from pathlib import Path
 
 #: Prefixes that name a resource outside the archive rather than a member of
@@ -93,7 +97,7 @@ def resolve(
         return None
 
     candidate = root / text
-    if candidate.is_symlink():
+    if _is_linked(candidate):
         return None
 
     base = resolved_root if resolved_root is not None else root.resolve()
@@ -106,6 +110,46 @@ def resolve(
         return None
 
     return candidate
+
+
+def is_free(target: Path) -> bool:
+    """
+    Report whether a path can be created without writing through anything.
+
+    The write-side half of path trust. ``exists()`` alone is not enough: a
+    **dangling** symlink reports False, and a copy then follows it, so a link
+    planted at the name a cover is about to take redirects those bytes
+    anywhere the user can write.
+
+    :param target: The path about to be created.
+
+    :return: True if nothing already claims the name.
+    """
+    return not target.exists() and not target.is_symlink()
+
+
+def _is_linked(candidate: Path) -> bool:
+    """
+    Report whether a path is a link of either kind.
+
+    :param candidate: The path to test.
+
+    :return: True for a symlink, or for a regular file with more than one name.
+    """
+    if candidate.is_symlink():
+        return True
+    try:
+        info = candidate.lstat()
+    except FileNotFoundError:
+        # Absent is not linked. The caller asks about paths that may not
+        # exist -- an optional META-INF/sinf.xml, for one -- and answering
+        # "linked" there reported every unprotected book as DRM-protected.
+        return False
+    except (OSError, ValueError):
+        # Anything else means we could not establish what this is, and the
+        # rule fails closed.
+        return True
+    return stat.S_ISREG(info.st_mode) and info.st_nlink > 1
 
 
 def contains(root: Path, candidate: Path, *, resolved_root: Path | None = None) -> bool:
@@ -121,7 +165,7 @@ def contains(root: Path, candidate: Path, *, resolved_root: Path | None = None) 
 
     :return: True if the path may be read as part of this package.
     """
-    if candidate.is_symlink():
+    if _is_linked(candidate):
         return False
     base = resolved_root if resolved_root is not None else root.resolve()
     try:

@@ -25,9 +25,21 @@ from zipfile import ZipFile
 
 import pytest
 
-from epubconvert import archive, convert, display, naming, planning, run, source
+from epubconvert import (
+    archive,
+    contained,
+    convert,
+    display,
+    inspect_output,
+    naming,
+    planning,
+    run,
+    source,
+    validate,
+)
 from epubconvert.naming import PassthroughNaming, StripNaming
 from tests.conftest import make_package
+from tests.test_export import _cover_package
 
 SURROGATE = "Bad\udce9Name.epub"
 
@@ -359,3 +371,145 @@ class TestRuleTheSweepNeedsARealLock:
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert not stale.exists()
+
+
+class TestRuleLinksOutAreRefusedWhateverKind:
+    """A member must be a file this package owns, not a link to another.
+
+    Sites: ``contained.resolve`` and ``contained.contains`` -- both check
+    symlinks; a hardlink is a link too and passed both.
+    """
+
+    def test_a_symlink_out_is_refused(self, tmp_path):
+        outside = tmp_path / "secret.txt"
+        outside.write_text("SECRET", encoding="utf-8")
+        root = tmp_path / "Book.epub"
+        root.mkdir()
+        (root / "link.txt").symlink_to(outside)
+
+        assert contained.resolve(root, "link.txt") is None
+
+    def test_a_hardlink_out_is_refused(self, tmp_path):
+        # is_symlink() is False and resolve() never leaves the package, so a
+        # hardlink passed both halves of the rule and its target's bytes were
+        # copied into the archive under an innocuous name.
+        outside = tmp_path / "secret.txt"
+        outside.write_text("SECRET", encoding="utf-8")
+        root = tmp_path / "Book.epub"
+        root.mkdir()
+        os.link(outside, root / "cover.xhtml")
+
+        assert contained.resolve(root, "cover.xhtml") is None
+
+    def test_an_ordinary_member_is_still_allowed(self, tmp_path):
+        root = tmp_path / "Book.epub"
+        (root / "OEBPS").mkdir(parents=True)
+        (root / "OEBPS" / "text.xhtml").write_text("<html/>", encoding="utf-8")
+
+        assert contained.resolve(root, "OEBPS/text.xhtml") is not None
+
+
+class TestRuleACoverTargetMustBeNew:
+    """The cover is written to a path nothing already claims.
+
+    Sites: the guard in ``extract_cover`` before ``copyfile``.
+    """
+
+    def test_an_existing_file_is_not_overwritten(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        _cover_package(library / "Book.epub")
+        guard = output_dir / "Book.jpg"
+        guard.write_bytes(b"PRE-EXISTING")
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
+        )
+
+        assert guard.read_bytes() == b"PRE-EXISTING"
+
+    def test_a_dangling_symlink_is_not_followed(self, tmp_path, output_dir):
+        # exists() is False for a dangling link, and copyfile then follows it,
+        # so a planted <Book>.jpg redirected the cover bytes anywhere.
+        library = tmp_path / "lib"
+        _cover_package(library / "Book.epub")
+        victim = tmp_path / "victim.txt"
+        (output_dir / "Book.jpg").symlink_to(victim)
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--covers", "-q"]
+        )
+
+        assert not victim.exists()
+
+
+class TestRuleValidateReportsRatherThanDies:
+    """--verify must survive every archive zipfile can choke on.
+
+    Sites: ``validate_archive``'s handler, and ``verify_output``'s loop.
+    """
+
+    def test_a_truncated_member_is_reported(self, output_dir):
+        # zipfile raises EOFError when a member holds less data than declared,
+        # which the widened handler did not name.
+        path = output_dir / "Truncated.epub"
+        with ZipFile(path, "w") as opened:
+            opened.writestr("mimetype", "application/epub+zip")
+            opened.writestr("OEBPS/big.xhtml", "x" * 5000)
+        raw = bytearray(path.read_bytes())
+        del raw[len(raw) // 2 : len(raw) // 2 + 200]
+        path.write_bytes(bytes(raw))
+
+        problems = validate.validate_archive(path)
+
+        assert problems
+
+    def test_one_bad_archive_does_not_end_the_sweep(self, output_dir):
+        with ZipFile(output_dir / "Good.epub", "w") as opened:
+            opened.writestr("mimetype", "application/epub+zip")
+        (output_dir / "Bad.epub").write_bytes(b"not a zip at all")
+
+        checked, damaged = inspect_output.verify_output(output_dir)
+
+        assert checked == 2
+        assert damaged == 2
+
+
+class TestRuleAFragmentIsNotAMissingFile:
+    """An href that names no file must not be reported as absent.
+
+    Sites: ``_package_from_root``'s manifest build.
+    """
+
+    def test_a_fragment_only_href_is_not_a_manifest_entry(self, output_dir):
+        path = output_dir / "Frag.epub"
+        with ZipFile(path, "w") as opened:
+            opened.writestr("mimetype", "application/epub+zip")
+            opened.writestr(
+                "META-INF/container.xml",
+                '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                '<rootfiles><rootfile full-path="content.opf"/></rootfiles>'
+                "</container>",
+            )
+            opened.writestr(
+                "content.opf",
+                '<package xmlns="http://www.idpf.org/2007/opf"><manifest>'
+                '<item id="t" href="t.xhtml"/><item id="here" href="#toc"/>'
+                '</manifest><spine><itemref idref="t"/></spine></package>',
+            )
+            opened.writestr("t.xhtml", "<html/>")
+
+        assert validate.validate_archive(path) == []
+
+
+class TestRuleTheFloorIsCheckedOftenEnough:
+    """The sampling interval cannot exceed the number of workers in flight.
+
+    Sites: ``_Progress.ROOM_INTERVAL`` against ``default_workers``.
+    """
+
+    def test_the_interval_never_exceeds_the_pool(self):
+        # Sampling one book in 32 while 8 run concurrently means books are
+        # written after the --min-free floor has already been crossed. The
+        # constructor clamps, so this holds on any machine.
+        for pool in (1, 4, 8, 40, 64):
+            assert convert.progress_for(100, pool).interval <= pool

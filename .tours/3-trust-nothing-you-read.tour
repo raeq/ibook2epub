@@ -62,23 +62,23 @@
     },
     {
       "title": "What \"outside\" means",
-      "file": "epubconvert/validate.py",
+      "file": "epubconvert/contained.py",
       "line": 187,
-      "pattern": "def escapes_archive\\(path: str\\) -> bool:",
+      "pattern": "def escapes\\(path: str\\) -> bool:",
       "description": "Absolute, or `..`-prefixed after normalization. No archive member can match either, so inside a zip these are merely futile.\n\nThe docstring names the reason they are rejected rather than ignored: **the source side**. The cover extractor and the package reader join these onto the `*.epub/` directory on disk, where they reach real files that are no part of the book."
     },
     {
       "title": "Two checks, because neither covers the other",
-      "file": "epubconvert/validate.py",
+      "file": "epubconvert/contained.py",
       "line": 206,
-      "pattern": "def contained_file\\(",
+      "pattern": "def resolve\\(",
       "description": "`escapes_archive` rejects the `../` and absolute paths. The resolved comparison on line 230 catches the other case: a symlink that sits inside the package but leads out of it.\n\nThis lives beside `escapes_archive` rather than beside its caller on purpose, so the containment rule is in one place. Any future reader that turns a manifest entry into a path on disk — fonts, thumbnails, metadata sidecars — should come through here rather than reinvent half of it."
     },
     {
       "title": "Remote is legitimate",
-      "file": "epubconvert/validate.py",
+      "file": "epubconvert/contained.py",
       "line": 44,
-      "pattern": "#: Href prefixes that name a resource outside the archive",
+      "pattern": "#: Prefixes that name a resource outside the archive rather than a member",
       "description": "The counterweight to the last three steps. The epub specification allows a remote resource in the manifest, so resolving one as an archive path would report a perfectly good book as missing a file.\n\nStrictness that fires on valid input is not strictness, it is a bug."
     },
     {

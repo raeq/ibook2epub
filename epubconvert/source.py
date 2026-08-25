@@ -148,7 +148,12 @@ def has_drm(package: Path) -> tuple[bool, str | None]:
     :return: Whether it is protected, and a short reason when it is.
     """
     sinf = resolve(package, SINF_PATH)
-    if sinf is None or sinf.is_file():
+    if sinf is None:
+        # The rule refused the path itself, which means the package is doing
+        # something with it that cannot be interpreted. Fails closed, like
+        # every other unreadable state here.
+        return True, f"{SINF_PATH} could not be read"
+    if sinf.is_file():
         return True, "FairPlay protected (META-INF/sinf.xml)"
 
     try:

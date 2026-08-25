@@ -346,9 +346,9 @@ output directory back off disk.
 | Code | Meaning |
 |------|---------|
 | `0`  | Success. Books skipped as already-exported, or skipped for a name collision, still count as success. |
-| `1`  | At least one book failed to convert, or the output directory could not be created. |
-| `2`  | `--portable-names` was requested but the `portable` extra is not installed. |
-| `3`  | Another `ibook2epub` run already holds the output directory lock. |
+| `1`  | At least one book failed to convert, the output directory could not be created, or `--verify` found a damaged archive. |
+| `2`  | `--portable-names` was requested but the `portable` extra is not installed, or `--verify` was given an output directory that does not exist. |
+| `3`  | Another `ibook2epub` run already holds the output directory lock, or the lock file itself could not be opened. |
 | `130` | Interrupted with Ctrl-C. Finished books are intact; rerun to continue. |
 
 `1` also covers a run that could not proceed at all — for example when the
@@ -371,7 +371,7 @@ pytest                              # tests
 ruff check epubconvert tests        # lint
 ruff format epubconvert tests       # format
 mypy                                # type check (strict)
-pylint --fail-under=8.0 $(git ls-files '*.py')
+pylint epubconvert tests
 ```
 
 CI runs all of these: lint and type checks once on Python 3.14, and the test

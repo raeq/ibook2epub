@@ -43,7 +43,7 @@
       "title": "Fan out",
       "file": "epubconvert/convert.py",
       "line": 274,
-      "pattern": "    progress = _Progress\\(len\\(pending\\)\\)",
+      "pattern": "    progress = _Progress\\(len\\(pending\\), default_workers\\(max_workers\\)\\)",
       "description": "One `_export_one` per pending book, all gathered. `max_workers=None` lets `ThreadPoolExecutor` pick from the CPU count; `--workers` overrides it.\n\n`thread_name_prefix=\"zip\"` is a small kindness in a stack trace."
     },
     {

@@ -23,7 +23,7 @@ def printable(name: str) -> str:
 
     :param name: The name as it appears on disk.
 
-    :return: The name with control characters and lone surrogates escaped.
+    :return: The name with C0, DEL, C1 and lone surrogates escaped.
 
     """
     return "".join(
