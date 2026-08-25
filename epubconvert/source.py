@@ -20,6 +20,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from .app_logger import logger
+from .contained import resolve
 
 ENCRYPTION_PATH = "META-INF/encryption.xml"
 SINF_PATH = "META-INF/sinf.xml"
@@ -90,7 +91,11 @@ def encryption_algorithms(package: Path) -> set[str]:
         must not be read as "no protection", or a protected book is exported
         as an unopenable archive that no rerun will retry.
     """
-    path = package / ENCRYPTION_PATH
+    path = resolve(package, ENCRYPTION_PATH)
+    if path is None:
+        # A symlink here would let the book choose which file answers "is this
+        # protected", which is the question that decides whether it exports.
+        raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not a readable file")
     if not path.is_file():
         return set()
 
@@ -141,7 +146,8 @@ def has_drm(package: Path) -> tuple[bool, str | None]:
 
     :return: Whether it is protected, and a short reason when it is.
     """
-    if (package / SINF_PATH).is_file():
+    sinf = resolve(package, SINF_PATH)
+    if sinf is None or sinf.is_file():
         return True, "FairPlay protected (META-INF/sinf.xml)"
 
     try:

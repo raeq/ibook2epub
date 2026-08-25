@@ -19,13 +19,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .app_logger import logger
+from .contained import resolve
 from .spec import PACKAGE_SUFFIX
-from .validate import (
-    ValidationError,
-    ValidationOptions,
-    contained_file,
-    read_package_dir,
-)
+from .validate import ValidationError, ValidationOptions, read_package_dir
 
 
 def free_megabytes(path: Path) -> int:
@@ -82,8 +78,8 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         href = described.manifest.get(described.cover_id)
         if not href:
             return None
-        source = contained_file(package, href, root=package.resolve())
-        if source is None:
+        source = resolve(package, href, resolved_root=package.resolve())
+        if source is None or not source.is_file():
             logger.debug(
                 "No cover for %s: %r is not a readable file inside the package",
                 target_archive.name,

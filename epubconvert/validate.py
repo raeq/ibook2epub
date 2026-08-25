@@ -28,6 +28,8 @@ from xml.etree import ElementTree
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
 from .app_logger import logger
+from .contained import escapes as escapes_archive
+from .contained import is_remote, resolve
 from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
@@ -40,11 +42,6 @@ OPF_NS = "http://www.idpf.org/2007/opf"
 MAX_XML_BYTES = 16 * 1024 * 1024
 
 EPUBCHECK = "epubcheck"
-
-#: Href prefixes that name a resource outside the archive. The epub
-#: specification allows remote resources in the manifest, and resolving one as
-#: an archive path would report a perfectly good book as missing a file.
-REMOTE_PREFIXES = ("http://", "https://", "ftp://", "ftps://", "data:", "mailto:")
 
 
 @dataclass
@@ -169,82 +166,6 @@ def _checked_opf_path(full_path: str) -> str:
     return normalized
 
 
-def is_remote(href: str) -> bool:
-    """
-    Report whether an href is a URL rather than an archive member.
-
-    A remote resource is legitimate: the epub specification allows one in the
-    manifest. It simply is not expected to be inside the archive, so it must
-    not be looked for there.
-
-    :param href: The manifest href to test.
-
-    :return: True if the href is a remote or inline URL.
-    """
-    return href.lower().startswith(REMOTE_PREFIXES)
-
-
-def escapes_archive(path: str) -> bool:
-    """
-    Report whether a path resolves above the archive root.
-
-    :func:`_resolve` normalizes ``..`` segments, but an href carrying more of
-    them than the package document has parent directories resolves to a path
-    above the archive root, and an absolute path never was inside it. No
-    archive member can match either. What makes them worth rejecting rather
-    than ignoring is the source side: the cover extractor and the package
-    reader join these onto the ``*.epub/`` directory on disk, where they reach
-    real files that are no part of the book.
-
-    :param path: An archive path, already normalized.
-
-    :return: True if the path leaves the archive.
-    """
-    return path.startswith("/") or path == ".." or path.startswith("../")
-
-
-def contained_file(package: Path, href: str, root: Path | None = None) -> Path | None:
-    """
-    Resolve a manifest href to a real file inside a package, or refuse it.
-
-    Two checks, because neither covers the other: :func:`escapes_archive`
-    rejects the ``../`` and absolute paths :func:`_resolve` preserves, and the
-    resolved comparison catches a symlink that sits inside the package but
-    leads out of it.
-
-    This lives beside :func:`escapes_archive` rather than beside its caller so
-    that the whole containment rule is in one place. Any future reader that
-    turns a manifest entry into a path on disk -- fonts, thumbnails, metadata
-    sidecars -- should come through here rather than reinvent half of it.
-
-    :param package: The ``*.epub/`` package directory.
-    :param href: An archive path from the manifest.
-
-    :return: The file to read, or None if there is nothing safe to read.
-    """
-    if escapes_archive(href):
-        logger.trace("%r escapes the package %s", href, package.name)
-        return None
-
-    # The caller may already hold the resolved root; it does not change across
-    # a package, and resolving it walks every path component each time.
-    resolved_root = root if root is not None else package.resolve()
-    source = package / href
-    try:
-        inside = source.resolve().is_relative_to(resolved_root)
-    except (OSError, ValueError):
-        # A NUL byte in the href, or a resolve on a broken mount. The
-        # documented contract is "None if there is nothing safe to read", and
-        # this function invites callers who will not expect a raise.
-        logger.trace("%r could not be resolved inside %s", href, package.name)
-        return None
-    if not inside:
-        logger.trace("%r resolves outside the package %s", href, package.name)
-        return None
-
-    return source if source.is_file() else None
-
-
 def _resolve(base: str, href: str) -> str:
     """
     Resolve a manifest href against the package document's directory.
@@ -347,7 +268,13 @@ def read_package_dir(package: Path) -> Package:
     :raises ValidationError: If the container or package document is missing
         or unparsable.
     """
-    container = package / CONTAINER_PATH
+    # Both documents are named by the book, and both were read straight off
+    # disk: a symlinked package document let a book choose any file the user
+    # could read as its own metadata.
+    resolved_root = package.resolve()
+    container = resolve(package, CONTAINER_PATH, resolved_root=resolved_root)
+    if container is None:
+        raise ValidationError(f"{CONTAINER_PATH} is not a readable file")
     try:
         root = ElementTree.fromstring(_read_capped(container))
     except OSError as exc:
@@ -367,8 +294,11 @@ def read_package_dir(package: Path) -> Package:
     # rather than merely missed.
     opf_path = _checked_opf_path(opf_path)
 
+    document = resolve(package, opf_path, resolved_root=resolved_root)
+    if document is None:
+        raise ValidationError(f"{opf_path} is not a readable file")
     try:
-        opf_root = ElementTree.fromstring(_read_capped(package / opf_path))
+        opf_root = ElementTree.fromstring(_read_capped(document))
     except OSError as exc:
         raise ValidationError(f"missing {opf_path}") from exc
     except ElementTree.ParseError as exc:

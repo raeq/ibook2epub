@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from .app_logger import logger
+from .contained import contains
 from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
 from .validate import ArchiveInvalidError, ValidationOptions
 
@@ -134,9 +135,9 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
             candidate = Path(root) / name
             # A package is a directory the walk owns, never a redirection. A
             # symlink named *.epub was accepted here and its whole target
-            # zipped into the shelf, which turned "convert my books" into
-            # "copy that directory somewhere shareable".
-            if candidate.is_symlink():
+            # zipped into the shelf. The rule lives in one place; see
+            # :mod:`epubconvert.contained` for why it is not restated here.
+            if not contains(Path(root), candidate):
                 logger.warning("Ignoring symlinked package %s", candidate)
                 continue
             if name.endswith(PACKAGE_SUFFIX):
@@ -278,17 +279,7 @@ def zip_package(
                 stored.add(arcname)
                 file_count += 1
 
-        # An archive holding only the mimetype we wrote ourselves is a valid
-        # zip and not a book. Without this the empty case -- a package that was
-        # never downloaded, or one deleted between planning and writing --
-        # lands in the output directory and is recorded as finished work that
-        # no rerun ever retries.
-        if not file_count:
-            raise ArchiveInvalidError(target_archive.name, ["package holds no files"])
-        if CONTAINER_PATH not in stored:
-            raise ArchiveInvalidError(
-                target_archive.name, [f"package has no {CONTAINER_PATH}"]
-            )
+        assert_is_a_book(target_archive.name, stored)
 
         if validation is not None:
             problems = validation.check(partial)
@@ -314,6 +305,38 @@ def _file_mode() -> int:
     mask = os.umask(0)
     os.umask(mask)
     return 0o666 & ~mask
+
+
+def assert_is_a_book(name: str, stored: set[str]) -> None:
+    """
+    Refuse to hand back an archive that is not a book.
+
+    **This is the choke point.** The output directory is the tool's only record
+    of completed work, so anything that reaches it is recorded as finished and
+    no rerun retries it. Every silent-success defect this project has had ended
+    here: an unreadable subdirectory that contributed nothing, a package
+    deleted between planning and writing, a package that was never downloaded,
+    a symlinked directory holding somebody else's files. In each case the run
+    wrote a structurally valid zip, reported an export, and permanently
+    recorded a book that was wrong or missing.
+
+    A valid zip is not the bar. The bar is the two things every epub has: the
+    container document that says where the package document lives, and at least
+    one member besides the ``mimetype`` this function's caller wrote itself.
+
+    Deliberately cheap and unconditional -- ``--validate`` is the thorough
+    check and it is off by default, so this is what protects the invariant on
+    an ordinary run.
+
+    :param name: The archive's name, for the error message.
+    :param stored: Arc names written from the package, excluding ``mimetype``.
+
+    :raises ArchiveInvalidError: If the archive is not a book.
+    """
+    if not stored:
+        raise ArchiveInvalidError(name, ["package holds no files"])
+    if CONTAINER_PATH not in stored:
+        raise ArchiveInvalidError(name, [f"package has no {CONTAINER_PATH}"])
 
 
 def _members(source_dir: Path) -> list[Path]:
@@ -346,11 +369,12 @@ def _members(source_dir: Path) -> list[Path]:
         raise exc
 
     found: list[Path] = []
+    resolved = source_dir.resolve()
     for root, _dirs, files in os.walk(source_dir, onerror=on_error):
         directory = Path(root)
         for name in files:
             path = directory / name
-            if path.is_symlink():
+            if not contains(source_dir, path, resolved_root=resolved):
                 logger.warning("Skipped symlink %s in %s", name, source_dir.name)
                 continue
             if path.is_file():
