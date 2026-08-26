@@ -45,17 +45,65 @@ dropped at any depth.
 
 Python 3.10 or newer. There are no runtime dependencies — the tool uses only
 the standard library. The optional `portable` extra adds
-[disarm](https://pypi.org/project/disarm/) for `--portable-names`.
+[disarm](https://pypi.org/project/disarm/), which is needed for
+`--portable-names romanize` and for nothing else.
 
 ## Installation
 
 ```bash
-pip install -e .              # standard library only
-pip install -e ".[portable]"  # adds --portable-names support
+pip install ibook2epub
 ```
 
-This installs the `ibook2epub` command. You can also run the package directly
-with `python3 -m epubconvert`, without installing it.
+That is the whole thing: no compiled wheel, no third-party package, nothing to
+pull in at runtime. It installs an `ibook2epub` command.
+
+### With the portable extra
+
+```bash
+pip install "ibook2epub[portable]"
+```
+
+The extra buys one mode. `-p` and `-p strip` remove the characters Windows,
+exFAT and Kindles reject using the standard library alone, and are what most
+people want. `-p romanize` additionally transliterates non-Latin titles
+(`こころ.epub` becomes `kokoro.epub`) and folds accents when deciding whether
+two files are the same book — that is the part `disarm` provides. Install the
+base package unless you need it; the quotes around the argument matter in zsh.
+
+### As an isolated tool
+
+A command-line tool does not belong in the same environment as your projects:
+
+```bash
+pipx install ibook2epub
+uv tool install ibook2epub
+```
+
+Add the extra the same way — `pipx install "ibook2epub[portable]"`.
+
+### From source
+
+```bash
+git clone https://github.com/raeq/ibook2epub
+cd ibook2epub
+pip install -e ".[dev]"   # test and lint tooling, and the portable extra
+```
+
+You can also run the package without installing anything:
+
+```bash
+python3 -m epubconvert --help
+```
+
+### Upgrading and removing
+
+```bash
+pip install --upgrade ibook2epub
+pip uninstall ibook2epub
+```
+
+Uninstalling leaves your exported books alone. The tool keeps no state outside
+the output directory, so there is nothing else to clean up.
 
 ## Performance
 

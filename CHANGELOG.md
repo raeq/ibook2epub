@@ -93,6 +93,9 @@ release is additions.
   book that loses a collision can say which file holds the name and what its
   own identifier is.
 - The PyPI publish workflow was hardened and pinned.
+- Installation instructions cover the published distribution rather than only
+  an editable checkout, and say what the `portable` extra actually buys: it is
+  needed for `--portable-names romanize` and for nothing else.
 - CodeTour walkthroughs were added for the conversion and planning paths.
 
 ## [1.2.1] - 2026-08-24
