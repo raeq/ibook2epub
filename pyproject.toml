@@ -32,10 +32,31 @@ dependencies = []
 portable = ["disarm>=0.13"]
 dev = [
     "pytest>=7.0",
+    "pytest-cov>=5.0",
     "pylint>=3.0",
     "ruff>=0.6",
     "mypy>=1.11",
     "ibook2epub[portable]",
+]
+
+[tool.coverage.run]
+# Named here rather than passed on the command line, so a local `pytest --cov`
+# measures exactly what CI measures. Checking a gate a different way than CI
+# checks it is how a red main gets pushed.
+source = ["epubconvert"]
+branch = true
+
+[tool.coverage.report]
+# The suite covers 95.24%. The gate sits just under that: high enough that
+# deleting a test or shipping an unexercised branch trips it, low enough that
+# it is not renegotiated every commit. Raise it when the real figure moves up,
+# never lower it to make a build pass.
+fail_under = 95
+show_missing = true
+skip_covered = true
+exclude_also = [
+    # Typing-only imports never execute.
+    "if TYPE_CHECKING:",
 ]
 
 [project.urls]

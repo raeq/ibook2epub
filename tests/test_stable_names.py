@@ -22,7 +22,12 @@ called, and nothing else.
 from pathlib import Path
 
 from epubconvert import archive, planning, run
-from epubconvert.naming import MetadataNaming, disambiguator
+from epubconvert.naming import (
+    MAX_FILENAME_BYTES,
+    MetadataNaming,
+    disambiguator,
+    encode_name,
+)
 from epubconvert.validate import Package, usable_identifier
 from tests.conftest import make_metadata_package, remove_tree
 
@@ -317,3 +322,30 @@ class TestTheRunSaysWhatHappened:
         )
 
         assert "1 book(s) named without an author" in capsys.readouterr().err
+
+
+class TestMarkingANameAlreadyAtTheLimit:
+    """
+    A digest marker is added to a name that may already be 255 bytes, because
+    the naming policy clamped it there. Appending without re-clamping pushes it
+    over, and the export then fails at the closing rename with a filesystem
+    error rather than anything about names.
+    """
+
+    def test_the_marked_name_stays_within_the_budget(self):
+        stem = "A" * (MAX_FILENAME_BYTES - len(".epub"))
+
+        marked = planning.marked(f"{stem}.epub", " [deadbeef]", MAX_FILENAME_BYTES)
+
+        assert len(encode_name(marked)) <= MAX_FILENAME_BYTES
+        assert marked.endswith(" [deadbeef].epub")
+
+    def test_a_marker_leaving_no_room_still_yields_a_usable_name(self):
+        # The glob that decides what is already exported is '*.epub'. A name
+        # that loses its extension is re-converted on every run for ever.
+        marker = " [" + "x" * MAX_FILENAME_BYTES + "]"
+
+        marked = planning.marked("Book.epub", marker, MAX_FILENAME_BYTES)
+
+        assert marked.endswith(".epub")
+        assert marked.startswith("_ [") or marked.startswith("B")

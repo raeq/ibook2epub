@@ -51,6 +51,28 @@ jobs:
     - name: Run tests
       run: pytest
 
+  coverage:
+    # One job on one interpreter. The test matrix would measure the same lines
+    # five times, and test-minimal installs without extras so it cannot reach
+    # the disarm-backed naming policy at all -- gating there would fail on code
+    # that job is deliberately not allowed to import.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.14"
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+    - name: Run tests with coverage
+      # Threshold and sources both come from pyproject, so this is the same
+      # command a developer runs locally.
+      run: pytest --cov
+
   test-minimal:
     # Proves the default install stays pure standard library: no disarm, no
     # compiled wheel. The portable-naming tests skip themselves here.

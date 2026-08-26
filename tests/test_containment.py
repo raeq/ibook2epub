@@ -192,3 +192,51 @@ class TestOpeningRefusesToFollow:
 
         with pytest.raises(validate.ValidationError):
             validate.read_package_dir(package)
+
+
+class TestTheRuleFailsClosed:
+    """
+    Every branch here refuses a path it could not establish anything about.
+    That is the correct direction, and none of it was pinned by a test: a
+    refactor that flipped any of them to fail *open* would have passed the
+    suite. This module has already shipped one such defect, when ``_is_linked``
+    treated ``FileNotFoundError`` as "linked" and reported every unprotected
+    book as FairPlay-protected.
+    """
+
+    def test_a_name_that_cannot_be_examined_is_treated_as_linked(self, tmp_path):
+        # A NUL byte makes lstat raise rather than answer. Fail closed: the
+        # rule cannot tell what this is, so it refuses.
+        package = tmp_path / "Book.epub"
+        package.mkdir()
+
+        assert contained.resolve(package, "chapter\x00.xhtml") is None
+
+    def test_a_path_that_cannot_be_resolved_is_refused(self, tmp_path, monkeypatch):
+        package = tmp_path / "Book.epub"
+        package.mkdir()
+        (package / "content.opf").write_text("<package/>", encoding="utf-8")
+        resolved = package.resolve()
+
+        def unresolvable(self, strict=False):
+            raise OSError("broken mount")
+
+        monkeypatch.setattr(Path, "resolve", unresolvable)
+
+        assert contained.resolve(package, "content.opf", resolved_root=resolved) is None
+
+    def test_contains_refuses_a_path_that_cannot_be_resolved(
+        self, tmp_path, monkeypatch
+    ):
+        package = tmp_path / "Book.epub"
+        package.mkdir()
+        member = package / "content.opf"
+        member.write_text("<package/>", encoding="utf-8")
+        resolved = package.resolve()
+
+        def unresolvable(self, strict=False):
+            raise OSError("broken mount")
+
+        monkeypatch.setattr(Path, "resolve", unresolvable)
+
+        assert contained.contains(package, member, resolved_root=resolved) is False
