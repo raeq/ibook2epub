@@ -32,8 +32,9 @@ import unicodedata
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from .spec import PACKAGE_SUFFIX
+from .validate import usable_title
 
-if TYPE_CHECKING:  # pragma: no cover - typing only, no runtime dependency
+if TYPE_CHECKING:  # pragma: no cover - typing only
     from .validate import Package
 
 try:
@@ -492,12 +493,17 @@ def compose_metadata_name(
 
     :return: A candidate filename, extension included. Not yet safe to write.
     """
-    if metadata is None or not metadata.title:
+    # The folder name is the better answer when a book cannot name itself:
+    # Apple set it, it is unique per book, and a title of "none" says less
+    # than it does. Split rather than combined so the type narrows.
+    if metadata is None:
+        return package_name
+    title = usable_title(metadata)
+    if title is None:
         return package_name
 
     _, extension = split_extension(package_name)
     extension = extension or PACKAGE_SUFFIX
-    title = metadata.title.strip()
     author = (metadata.creator_sort or metadata.creator or "").strip()
     # An author of ".." or "?" is non-empty here and empty after cleaning, so
     # joining first left a separator with nothing in front of it: "- Dune.epub".

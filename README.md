@@ -450,7 +450,11 @@ The rest of the behaviour, measured on that same library:
   surname. The rest declare no creator and are named by title alone.
 - The run says how many books were named without an author, and how many
   kept their folder name because the package document gave no title.
-- A book whose package document cannot be read keeps its directory name.
+- A book that cannot name itself keeps its directory name — one whose
+  package document cannot be read, and one whose `dc:title` is a
+  placeholder. Some converters write the literal string `none` into every
+  metadata field; 31 books in a real library do, and the folder name Apple
+  set is both more informative and unique per book.
 - Up to two contributors are named in full. Beyond that the list collapses:
   `Peralta, Samuel et al. - The Galaxy Chronicles.epub`. Publishers often put a
   book's whole contributor list in one field, and a twelve-author name is not a

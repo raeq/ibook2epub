@@ -104,6 +104,73 @@ class TestTheNameComesFromTheBook:
         assert policy.filename("Broken.epub", None) == "Broken.epub"
 
 
+class TestAJunkTitleIsNoTitle:
+    """
+    Some converters write the literal string "none" into every metadata field
+    a book has. 31 books in a surveyed library do, and every one of them named
+    itself ``none.epub`` -- so they collided with each other and were suffixed
+    into a pile: none.epub, none (2).epub, up to none (30).epub.
+
+    The package directory name is the better answer there. It is what Apple
+    set, it is unique per book, and a title that says "none" says less than a
+    folder name does. The same rule ``usable_identifier`` already applies to
+    ``dc:identifier``, which those books also fill with "none" -- it was
+    applied at one of the fields that needed it.
+    """
+
+    def test_a_title_of_none_falls_back_to_the_folder(self):
+        policy = MetadataNaming()
+
+        name = policy.filename("none 17.epub", book(title="none"))
+
+        assert name == "none 17.epub"
+
+    def test_the_match_ignores_case_and_spacing(self):
+        policy = MetadataNaming()
+
+        for junk in ["None", "NONE", "  none  ", "null", "N/A"]:
+            assert policy.filename("Real Folder.epub", book(title=junk)) == (
+                "Real Folder.epub"
+            ), junk
+
+    def test_a_junk_title_ignores_the_creator_too(self):
+        # Naming it "Author - none.epub" would keep the pile and add a prefix.
+        policy = MetadataNaming()
+
+        name = policy.filename("none 3.epub", book(title="none", creator="Somebody, A"))
+
+        assert name == "none 3.epub"
+
+    def test_a_real_title_containing_none_is_untouched(self):
+        # Exact match, not a substring: these are real books.
+        policy = MetadataNaming()
+
+        for title in ["None of This Is True", "Nonesuch", "The None Zone"]:
+            name = policy.filename("x.epub", book(title=title, creator="Doe, J"))
+            assert name == f"Doe, J - {title}.epub", title
+
+    def test_a_creator_of_unknown_is_kept(self):
+        # Deliberate asymmetry. 300 books in the surveyed library declare
+        # "Unknown", and filing them together under U is a real cataloguing
+        # answer; dropping the prefix would scatter them through the shelf.
+        policy = MetadataNaming()
+
+        name = policy.filename("x.epub", book(title="Conan", creator="Unknown"))
+
+        assert name == "Unknown - Conan.epub"
+
+    def test_the_pile_disperses(self):
+        # The whole point: 31 books that all wanted one name now want 31.
+        policy = MetadataNaming()
+
+        names = {
+            policy.filename(f"none {index}.epub", book(title="none"))
+            for index in range(1, 32)
+        }
+
+        assert len(names) == 31
+
+
 class TestGeneratedNamesAreSafeToWrite:
     """A directory name was already a valid filename. A title is not."""
 

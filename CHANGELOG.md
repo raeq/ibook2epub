@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A `dc:title` of `none` was treated as a title. Some converters write that
+  literal string into every metadata field a book has, including the one Apple
+  derives its folder name from, and 31 books in a real library do. All 31 named
+  themselves `none.epub`, collided with each other, and were suffixed into a
+  pile — `none.epub`, `none (2).epub`, up to `none (30).epub`. A placeholder
+  title is now no title, so those books keep the folder name Apple set, which
+  is unique per book. Collisions across that library fall from 72 to 43.
+  Matched whole and case-folded: `None of This Is True` is a real book. A
+  *creator* of `Unknown` is deliberately left alone — 300 books declare it, and
+  filing them together under U is a real answer where a title of `none` is not.
+
 ## [2.0.1] - 2026-08-26
 
 Fixes only. Three of them are places where a rule was applied on one path and
@@ -159,6 +174,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.1...HEAD
 [2.0.1]: https://github.com/raeq/ibook2epub/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/raeq/ibook2epub/compare/v1.2.1...v2.0.0
 [1.2.1]: https://github.com/raeq/ibook2epub/compare/v1.2.0...v1.2.1

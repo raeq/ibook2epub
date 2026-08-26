@@ -97,6 +97,36 @@ def usable_identifier(package: Package | None) -> str | None:
     return trimmed
 
 
+#: Values a converter writes where a title should be. Narrower than
+#: :data:`JUNK_IDENTIFIERS` and applied only to titles: 300 books in a surveyed
+#: library declare a *creator* of "Unknown", and filing those together under U
+#: is a real cataloguing answer, where a title of "none" says less than the
+#: folder name the book already has. Matched case-folded, and whole: "None of
+#: This Is True" is a real book.
+JUNK_TITLES = frozenset({"none", "null", "n/a", "unknown"})
+
+
+def usable_title(package: Package | None) -> str | None:
+    """
+    Return the package's title, if it names anything.
+
+    31 books in a surveyed library carry the literal string "none" in every
+    metadata field they have, including the one Apple derives its folder name
+    from. Treating that as a title made all 31 want ``none.epub``, so they
+    collided with each other and were suffixed into a pile.
+
+    :param package: The parsed package document, or None if it was not read.
+
+    :return: The trimmed title, or None if there is nothing usable.
+    """
+    if package is None or not package.title:
+        return None
+    trimmed = package.title.strip()
+    if not trimmed or trimmed.casefold() in JUNK_TITLES:
+        return None
+    return trimmed
+
+
 class ValidationError(Exception):
     """Raised when an archive cannot be validated at all."""
 
