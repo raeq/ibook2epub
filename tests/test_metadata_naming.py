@@ -147,6 +147,56 @@ class TestGeneratedNamesAreSafeToWrite:
         assert name.endswith(".epub")
 
 
+class TestTheAuthorIsSanitisedToo:
+    """
+    The author is attacker-controlled in exactly the way the title is: both
+    come out of a package document the tool did not write. Every test above
+    aims at the title, which is the shape of defect this codebase has shipped
+    twice -- a rule fixed and tested at one call site of two.
+
+    Composition happens before sanitising, so one pass covers both halves.
+    These pin that, so a refactor that sanitised the title alone would fail
+    rather than pass quietly.
+    """
+
+    @staticmethod
+    def _named(creator: str, title: str = "Dune") -> str:
+        return MetadataNaming().filename(
+            "Book.epub", book(title=title, creator=creator)
+        )
+
+    def test_a_path_separator_in_the_author_cannot_escape_the_directory(self):
+        name = self._named("../../etc/passwd")
+
+        assert "/" not in name
+        assert name.endswith(".epub")
+
+    def test_a_windows_separator_in_the_author_is_replaced(self):
+        assert "\\" not in self._named("a\\b")
+
+    def test_control_characters_are_removed_from_the_author(self):
+        name = self._named("Name\x00hidden\nsecond")
+
+        assert not [char for char in name if ord(char) < 32]
+
+    def test_characters_other_filesystems_reject_are_replaced_in_the_author(self):
+        name = self._named('Quote"Colon:Star*Pipe|')
+
+        assert not [char for char in name if char in '<>:"/\\|?*']
+
+    def test_an_overlong_author_is_clamped(self):
+        name = self._named("Surname, " * 60)
+
+        assert len(encode_name(name)) <= MAX_FILENAME_BYTES
+        assert name.endswith(".epub")
+
+    def test_an_author_that_cleans_away_to_nothing_is_treated_as_absent(self):
+        # '..' and '?' survive the truthiness check but not the cleaning, and
+        # the join then left a separator with nothing in front of it.
+        for creator in ["..", ".", "?", "***"]:
+            assert self._named(creator) == "Dune.epub", creator
+
+
 class TestIdentityRoundTrips:
     """The output directory stays the sole record of completed work."""
 

@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- An author made only of characters that sanitising removes — `..`, `?`, `***`
+  — was non-empty before cleaning and empty after, so the name came out as
+  `- Dune.epub` with a separator and nothing in front of it. Such an author is
+  now treated as absent and the book is named by title alone. No book in a real
+  2,805-book library is affected; the path was reachable and untested.
+
 ## [2.0.0] - 2026-08-26
 
 The exit codes changed incompatibly. Nothing else did, and the rest of this
@@ -105,6 +115,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/raeq/ibook2epub/compare/v1.2.1...v2.0.0
 [1.2.1]: https://github.com/raeq/ibook2epub/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/raeq/ibook2epub/releases/tag/v1.2.0

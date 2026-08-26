@@ -457,6 +457,11 @@ def compose_metadata_name(package_name: str, metadata: Package | None) -> str:
     _, extension = split_extension(package_name)
     title = metadata.title.strip()
     author = (metadata.creator_sort or metadata.creator or "").strip()
+    # An author of ".." or "?" is non-empty here and empty after cleaning, so
+    # joining first left a separator with nothing in front of it: "- Dune.epub".
+    # Tested with the same rule the cleaning uses rather than a guess at it.
+    if author and not _replace_illegal(author, " ").strip(" ."):
+        author = ""
     stem = f"{author} - {title}" if author else title
     return f"{stem}{extension or PACKAGE_SUFFIX}"
 
