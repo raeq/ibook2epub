@@ -494,3 +494,110 @@ class TestCanonicalIdentifier:
 
         assert from_archive.identifier == "urn:isbn:9780553383041"
         assert from_directory.identifier == "urn:isbn:9780553383041"
+
+
+EPUB3_REFINES = (
+    "    <dc:title>Sapiens</dc:title>\n"
+    '    <dc:creator id="author">Yuval Noah Harari</dc:creator>\n'
+    '    <meta refines="#author" property="file-as">Harari, Yuval Noah</meta>\n'
+    f'    <dc:identifier id="bid">{CANONICAL_ID}</dc:identifier>'
+)
+
+
+class TestSortNameFromEpub3Refines:
+    """
+    EPUB2 put the sort name in an ``opf:file-as`` attribute on ``dc:creator``.
+    EPUB3 moved it to a ``<meta refines="#id" property="file-as">`` element and
+    deprecated the attribute. Apple's library is overwhelmingly EPUB3, so
+    reading only the attribute left 301 of 2,793 books with a creator -- 10.8%
+    -- named in display order under a policy whose whole purpose is sorting by
+    author.
+    """
+
+    def test_the_archive_reader_finds_it(self, tmp_path):
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(EPUB3_REFINES))
+
+        assert from_archive.creator_sort == "Harari, Yuval Noah"
+
+    def test_the_directory_reader_finds_it(self, tmp_path):
+        _, from_directory = _read_both_ways(tmp_path, _opf_with(EPUB3_REFINES))
+
+        assert from_directory.creator_sort == "Harari, Yuval Noah"
+
+    def test_the_display_name_is_still_the_creator(self, tmp_path):
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(EPUB3_REFINES))
+
+        assert from_archive.creator == "Yuval Noah Harari"
+
+    def test_the_legacy_attribute_still_wins_when_both_are_present(self, tmp_path):
+        metadata = (
+            "    <dc:title>Sapiens</dc:title>\n"
+            '    <dc:creator id="author" opf:file-as="Attribute, The"'
+            ' xmlns:opf="http://www.idpf.org/2007/opf">Yuval Noah Harari</dc:creator>\n'
+            '    <meta refines="#author" property="file-as">Refines, The</meta>'
+        )
+
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.creator_sort == "Attribute, The"
+
+    def test_the_first_file_as_wins_when_several_refine_one_id(self, tmp_path):
+        # A real publisher error: the author and the illustrator both refine
+        # #creator, so the element carries two sort names. Taking the last gave
+        # the illustrator's.
+        metadata = (
+            "    <dc:title>A Boy Called Christmas</dc:title>\n"
+            '    <dc:creator id="creator">Matt Haig</dc:creator>\n'
+            '    <meta property="role" refines="#creator">aut</meta>\n'
+            '    <meta property="file-as" refines="#creator">Haig, Matt</meta>\n'
+            '    <meta property="role" refines="#creator">ill</meta>\n'
+            '    <meta property="file-as" refines="#creator">Mould, Chris</meta>'
+        )
+
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.creator_sort == "Haig, Matt"
+
+    def test_a_meta_refining_something_else_is_ignored(self, tmp_path):
+        metadata = (
+            "    <dc:title>Sapiens</dc:title>\n"
+            '    <dc:creator id="author">Yuval Noah Harari</dc:creator>\n'
+            '    <meta refines="#publisher" property="file-as">Wrong, Very</meta>'
+        )
+
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.creator_sort is None
+
+    def test_a_creator_with_no_id_has_nothing_to_refine(self, tmp_path):
+        metadata = (
+            "    <dc:title>Sapiens</dc:title>\n"
+            "    <dc:creator>Yuval Noah Harari</dc:creator>\n"
+            '    <meta refines="#author" property="file-as">Harari, Yuval Noah</meta>'
+        )
+
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.creator_sort is None
+
+    def test_an_empty_refines_value_is_ignored(self, tmp_path):
+        metadata = (
+            "    <dc:title>Sapiens</dc:title>\n"
+            '    <dc:creator id="author">Yuval Noah Harari</dc:creator>\n'
+            '    <meta refines="#author" property="file-as">   </meta>'
+        )
+
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.creator_sort is None
+
+    def test_a_different_property_is_not_a_sort_name(self, tmp_path):
+        metadata = (
+            "    <dc:title>Sapiens</dc:title>\n"
+            '    <dc:creator id="author">Yuval Noah Harari</dc:creator>\n'
+            '    <meta refines="#author" property="role">aut</meta>'
+        )
+
+        from_archive, _ = _read_both_ways(tmp_path, _opf_with(metadata))
+
+        assert from_archive.creator_sort is None

@@ -272,6 +272,47 @@ def _canonical_identifier(root: ElementTree.Element) -> str | None:
     return (found[0].text or "").strip()
 
 
+def _sort_name(root: ElementTree.Element, creator: ElementTree.Element) -> str | None:
+    """
+    Find the inverted form of a creator's name, in either EPUB dialect.
+
+    EPUB2 put it in an ``opf:file-as`` attribute on ``dc:creator``. EPUB3
+    deprecated that and moved it to a ``<meta refines="#id"
+    property="file-as">`` element. Apple's library is overwhelmingly EPUB3, so
+    reading only the attribute left 301 of 2,793 books with a creator named in
+    display order -- "Yuval Noah Harari - Sapiens" -- under a policy whose only
+    purpose is sorting by author.
+
+    The attribute wins when a book somehow carries both, which keeps books that
+    already had a sort name naming exactly as they did. No book in the surveyed
+    library has both.
+
+    The *first* refining element wins. One publisher gave the author and the
+    illustrator the same ``id``, so ``#creator`` carries two sort names and
+    taking the last produced the illustrator's.
+
+    :param root: The parsed OPF root element.
+    :param creator: The ``dc:creator`` element being described.
+
+    :return: The sort name, or None if the book supplies none.
+    """
+    attribute = creator.get(f"{{{OPF_NS}}}file-as")
+    if attribute and attribute.strip():
+        return attribute.strip()
+
+    creator_id = creator.get("id")
+    if not creator_id:
+        return None
+
+    target = f"#{creator_id}"
+    for meta in root.iter(f"{{{OPF_NS}}}meta"):
+        if meta.get("refines") != target or meta.get("property") != "file-as":
+            continue
+        if meta.text and meta.text.strip():
+            return meta.text.strip()
+    return None
+
+
 def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
     """
     Build a :class:`Package` from a parsed package document.
@@ -287,11 +328,11 @@ def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
     if title is not None and title.text:
         package.title = title.text.strip()
 
-    creator = root.find(".//{http://purl.org/dc/elements/1.1/}creator")
+    creator = root.find(f".//{{{DC_NS}}}creator")
     if creator is not None and creator.text:
         package.creator = creator.text.strip()
-        # Publishers usually supply an inverted form here; it beats guessing.
-        package.creator_sort = creator.get(f"{{{OPF_NS}}}file-as")
+        # Publishers usually supply an inverted form; it beats guessing.
+        package.creator_sort = _sort_name(root, creator)
 
     package.identifier = _canonical_identifier(root)
 

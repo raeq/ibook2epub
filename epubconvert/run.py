@@ -330,7 +330,7 @@ def _check_environment(args: argparse.Namespace) -> int | None:
             # Both known homes were probed and neither held books. Naming only
             # the fallback reads as "this one path is wrong" rather than "we
             # looked in these places, and here is what to do about it".
-            probed = "\n  ".join(f"  {path}" for path in SOURCE_CANDIDATES)
+            probed = "\n".join(f"  {path}" for path in SOURCE_CANDIDATES)
             logger.critical(
                 "No Apple Books library found. Looked in:\n%s\n"
                 "If your books are somewhere else, pass -s DIR.",

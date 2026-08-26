@@ -202,3 +202,26 @@ class TestFirstContactOrients:
         message = capsys.readouterr().err
         assert "Looked in" in message
         assert "-s DIR" in message
+
+
+class TestTheLibraryNotFoundListingLinesUp:
+    """
+    The message lists both known homes so it reads as "we looked in these
+    places" rather than "this one path is wrong". A join separator that carried
+    its own indent gave the first path two spaces and the rest four.
+    """
+
+    def test_every_candidate_is_indented_the_same(self, tmp_path, monkeypatch, capsys):
+        candidates = (tmp_path / "one", tmp_path / "two")
+        monkeypatch.setattr("epubconvert.run.SOURCE_CANDIDATES", candidates)
+        monkeypatch.setattr("epubconvert.cli.discover_source", lambda: candidates[0])
+
+        run.main(["-o", str(tmp_path / "out"), "-q"])
+
+        listed = [
+            line
+            for line in capsys.readouterr().err.splitlines()
+            if str(tmp_path) in line
+        ]
+        assert len(listed) == 2
+        assert {len(line) - len(line.lstrip()) for line in listed} == {2}

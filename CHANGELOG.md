@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The sort name was read only from the EPUB2 `opf:file-as` attribute, so books
+  using the EPUB3 form — `<meta refines="#id" property="file-as">` — were named
+  in display order. Apple's library is overwhelmingly EPUB3, and this left 301
+  of 2,793 books with a creator sorting under their first name, which is the
+  one thing `--name-by author-title` exists to prevent. Sort-name coverage in a
+  real library goes from 63% to 74%, and 274 output names change. Where one
+  publisher gave the author and the illustrator the same `id`, the first
+  `file-as` wins, which is the author's.
+- The "No Apple Books library found" message indented its first candidate path
+  two spaces and the rest four, because the join separator carried an indent of
+  its own.
+
+### Added
+
+- The run reports how many books kept their folder name because the package
+  document declared no title. Together with the existing count of books named
+  without an author, a shelf that came out half-named now says so rather than
+  leaving it to be noticed later.
+
 ## [2.0.0] - 2026-08-26
 
 The exit codes changed incompatibly. Nothing else did, and the rest of this
@@ -98,6 +121,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/raeq/ibook2epub/compare/v1.2.1...v2.0.0
 [1.2.1]: https://github.com/raeq/ibook2epub/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/raeq/ibook2epub/releases/tag/v1.2.0

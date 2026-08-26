@@ -387,17 +387,21 @@ Clock Dance.epub           ->  Anne Tyler - Clock Dance.epub
 ```
 
 Those two lines show the one thing to understand before turning it on. **The
-shelf will mix two conventions.** Publishers may supply a sort name through the
-`opf:file-as` attribute, and 38% of books in a real 2,805-book library do not.
-There is no safe way to invent one: the raw `dc:creator` text is sometimes
-already inverted, so a rule that flips `Anne Tyler` into `Tyler, Anne` would
-also flip `Patterson, James` into `James, Patterson`. The publisher's sort name
-is used when it exists and the creator is used verbatim otherwise.
+shelf will mix two conventions.** A sort name is read from either EPUB dialect
+— the EPUB2 `opf:file-as` attribute or the EPUB3 `<meta refines="#id"
+property="file-as">` element — and 26% of books in a real 2,805-book library
+supply neither. There is no safe way to invent one: the raw `dc:creator` text
+is sometimes already inverted, so a rule that flips `Anne Tyler` into `Tyler,
+Anne` would also flip `Patterson, James` into `James, Patterson`. The
+publisher's sort name is used when it exists and the creator is used verbatim
+otherwise.
 
 The rest of the behaviour, measured on that same library:
 
-- 2,713 of 2,729 books get an author prefix. The other 16 declare no creator
-  and are named by title alone.
+- 2,713 of 2,729 books get an author prefix, and 1,609 of them sort by
+  surname. The rest declare no creator and are named by title alone.
+- The run says how many books were named without an author, and how many
+  kept their folder name because the package document gave no title.
 - A book whose package document cannot be read keeps its directory name.
 - Names are sanitised and clamped to 255 bytes, so a sixteen-author anthology
   that would produce a 422-byte name is trimmed rather than rejected.

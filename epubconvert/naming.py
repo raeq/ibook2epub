@@ -396,13 +396,13 @@ class MetadataNaming:
     name is always sanitized and clamped even when the wrapped policy would
     not bother.
 
-    The author is ``creator_sort`` when the publisher supplied ``opf:file-as``
-    and ``creator`` **verbatim** otherwise. It is never rearranged: in a
-    surveyed 2,805-book library 38% of books carry no ``file-as``, and among
-    those the raw ``dc:creator`` text is sometimes already inverted
-    (``Patterson, James``), so a split-on-last-space rule would turn it into
-    ``James, Patterson``. A shelf therefore mixes both conventions. That is
-    visible and correct, where guessing would be invisible and wrong.
+    The author is ``creator_sort`` when the book supplies a sort name in either
+    EPUB dialect, and ``creator`` **verbatim** otherwise. It is never
+    rearranged: in a surveyed 2,805-book library 26% of books supply no sort
+    name, and among those the raw ``dc:creator`` text is sometimes already
+    inverted (``Patterson, James``), so a split-on-last-space rule would turn
+    it into ``James, Patterson``. A shelf therefore mixes both conventions.
+    That is visible and correct, where guessing would be invisible and wrong.
 
     Books with no creator are named by title alone rather than falling back to
     the directory name, because in the same library 77% of directory names are

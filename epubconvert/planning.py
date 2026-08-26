@@ -106,6 +106,9 @@ class Assignment:
     reason: str | None = None
     #: Named from metadata that declared no creator. Reported, not fatal.
     authorless: bool = False
+    #: The policy wanted metadata and got none it could name from, so the
+    #: package directory name was used. Reported, not fatal.
+    from_folder: bool = False
 
 
 @dataclass
@@ -342,7 +345,14 @@ def _assign_one(
         return Assignment(package, "", group, _lost_to(claims.holder(group), metadata))
 
     filename, key = taken
-    return Assignment(package, filename, key, None, _named_without_author(metadata))
+    return Assignment(
+        package,
+        filename,
+        key,
+        None,
+        _named_without_author(metadata),
+        _named_from_folder(metadata, setup.policy),
+    )
 
 
 def _stable_base(name: str, metadata: Package | None, budget: int) -> str:
@@ -365,6 +375,23 @@ def _stable_base(name: str, metadata: Package | None, budget: int) -> str:
 def _named_without_author(metadata: Package | None) -> bool:
     """Whether this book was named from a document declaring no creator."""
     return bool(metadata and metadata.title and not metadata.creator)
+
+
+def _named_from_folder(metadata: Package | None, policy: NamingPolicy) -> bool:
+    """
+    Whether a metadata policy had to fall back to the directory name.
+
+    Only true for a policy that asked for metadata: every other policy names
+    from the directory by design, and reporting that would be noise.
+
+    :param metadata: The parsed package document, if one was read.
+    :param policy: The naming policy.
+
+    :return: True if the book gave the policy nothing to name it by.
+    """
+    if not getattr(policy, "needs_metadata", False):
+        return False
+    return metadata is None or not metadata.title
 
 
 def _claim(
@@ -513,11 +540,18 @@ def plan_exports(
         if found.is_file()
     }
     assignments = assign_names(packages, policy, settings.on_collision)
+    # Neither is a failure, and both change what the shelf looks like. A run
+    # that says nothing leaves the only way to notice as looking afterwards
+    # and wondering.
     authorless = sum(1 for item in assignments if item.authorless)
     if authorless:
-        # Not a failure. The shelf will hold some 'Author - Title.epub' and
-        # some 'Title.epub', and saying how many beats leaving it to be noticed.
         logger.warning("%d book(s) named without an author: none declared.", authorless)
+    from_folder = sum(1 for item in assignments if item.from_folder)
+    if from_folder:
+        logger.warning(
+            "%d book(s) kept their folder name: no title in the package document.",
+            from_folder,
+        )
     named = {item.package: item for item in assignments}
 
     return [

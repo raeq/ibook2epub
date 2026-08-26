@@ -46,7 +46,7 @@ class TestTheNameComesFromTheBook:
         assert name == "Le Guin, Ursula K. - A Wizard of Earthsea.epub"
 
     def test_the_publishers_sort_name_wins(self):
-        # 61.6% of the surveyed library supplies opf:file-as. It beats guessing.
+        # 74% of the surveyed library supplies a sort name. It beats guessing.
         policy = MetadataNaming()
 
         name = policy.filename(
@@ -61,7 +61,7 @@ class TestTheNameComesFromTheBook:
         assert name.startswith("Le Guin, Ursula K. - ")
 
     def test_a_missing_sort_name_uses_the_creator_verbatim(self):
-        # The other 38%. Inverting is not safe: 'Patterson, James' appears as
+        # The other 26%. Inverting is not safe: 'Patterson, James' appears as
         # dc:creator text with no attribute to say it is already inverted, so a
         # split-on-last-space rule would produce 'James, Patterson'.
         policy = MetadataNaming()
@@ -352,3 +352,83 @@ class TestRenamedBooksRerunSafely:
         )
 
         assert "1 orphaned" in capsys.readouterr().out
+
+
+class TestTheRunSaysWhenItFellBack:
+    """
+    A shelf that is half 'Author - Title.epub' and half folder names is a
+    surprise worth one line of output. Saying nothing meant the only way to
+    notice was to look at the directory afterwards and wonder.
+    """
+
+    def test_an_unreadable_package_is_counted(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Known.epub", title="Dune", file_as="Herbert")
+        make_package(library / "x", "Unparsable.epub")
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        assert "1 book(s) kept their folder name" in capsys.readouterr().err
+
+    def test_a_book_with_no_title_is_counted(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Known.epub", title="Dune", file_as="Herbert")
+        make_metadata_package(library / "x", "Untitled.epub", title="")
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        assert "1 book(s) kept their folder name" in capsys.readouterr().err
+
+    def test_nothing_is_said_when_every_book_was_named(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Known.epub", title="Dune", file_as="Herbert")
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        assert "kept their folder name" not in capsys.readouterr().err
+
+    def test_the_default_policy_says_nothing(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        make_package(library, "Unparsable.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        assert "kept their folder name" not in capsys.readouterr().err
