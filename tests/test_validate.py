@@ -5,13 +5,12 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
-import subprocess
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert import cli, exits, run, validate
+from epubconvert import exits, run, validate
 from epubconvert.archive import zip_package
 
 CONTAINER = """<?xml version="1.0"?>
@@ -337,35 +336,6 @@ class TestVerifyMode:
         assert list(output_dir.glob("*.epub")) == []
 
 
-class TestEpubcheck:
-    def test_availability_probe_does_not_raise(self):
-        assert isinstance(validate.epubcheck_available(), bool)
-
-    def test_missing_tool_is_reported(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("epubconvert.validate.shutil.which", lambda _name: None)
-
-        assert validate.run_epubcheck(tmp_path / "x.epub") == [
-            "epubcheck is not on PATH"
-        ]
-
-    def test_a_missing_tool_has_its_own_exit_code(self, library, tmp_path, monkeypatch):
-        # Was a usage error, indistinguishable from a typo'd flag. Whether the
-        # tool is installed is a fact about the machine, not about the command
-        # line, so it is checked in run.main and carries its own code.
-        monkeypatch.setattr("epubconvert.run.epubcheck_available", lambda: False)
-
-        code = run.main(
-            ["-s", str(library), "-o", str(tmp_path / "out"), "--epubcheck", "-q"]
-        )
-
-        assert code == exits.MISSING_TOOL
-
-    def test_flag_implies_validate(self, library):
-        args = cli.parse_args(["-s", str(library), "--epubcheck"])
-
-        assert args.validate is True
-
-
 def _package_from_members(package: Path, drop: str | None = None) -> Path:
     """Build a source package directory mirroring the sample epub."""
     layout = {
@@ -604,127 +574,296 @@ class TestSortNameFromEpub3Refines:
         assert from_archive.creator_sort is None
 
 
-class _Completed:
-    """A stand-in for ``subprocess.CompletedProcess``."""
-
-    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
-        self.returncode = returncode
-        self.stdout = stdout
-        self.stderr = stderr
-
-
-class TestRunningEpubcheck:
+class TestMalformedArchives:
     """
-    ``epubcheck`` is an optional external tool and is rarely installed, so
-    every branch past "is it on PATH" ran unexercised. Mocking the subprocess
-    keeps the suite free of a JVM while still pinning what the wrapper does
-    with what the tool says.
+    Structural checks over books that are wrong in ways a real library
+    contains. Every branch here decides whether a book is reported or silently
+    written broken.
     """
 
-    @staticmethod
-    def _installed(
-        monkeypatch, result=None, raises=None
-    ) -> list[tuple[list[str], dict[str, object]]]:
-        """Pretend the tool is installed, and record how it was invoked."""
-        calls: list[tuple[list[str], dict[str, object]]] = []
-        monkeypatch.setattr(
-            "epubconvert.validate.shutil.which", lambda _name: "/usr/bin/epubcheck"
+    def test_an_empty_archive_says_so(self, tmp_path):
+        path = tmp_path / "Empty.epub"
+        with ZipFile(path, "w"):
+            pass
+
+        assert "archive is empty" in validate.validate_archive(path)
+
+    def test_a_corrupt_member_is_named(self, tmp_path):
+        # Stored rather than deflated: flipping a byte then gives the CRC
+        # mismatch testzip() reports, where corrupting a deflate stream raises
+        # out of zlib instead and never reaches the check.
+        path = tmp_path / "Corrupt.epub"
+        with ZipFile(path, "w", ZIP_STORED) as archive:
+            archive.writestr("mimetype", "application/epub+zip")
+            for name, body in MEMBERS.items():
+                archive.writestr(name, body)
+        raw = bytearray(path.read_bytes())
+        marker = raw.find(b"<html><body>Ged</body></html>")
+        raw[marker] ^= 0xFF
+        path.write_bytes(raw)
+
+        problems = validate.validate_archive(path)
+
+        assert any(problem.startswith("corrupt member:") for problem in problems)
+
+    def test_an_oversized_package_document_is_refused(self, tmp_path, monkeypatch):
+        # A hostile or broken book should not be parsed into memory whole.
+        monkeypatch.setattr(validate, "MAX_XML_BYTES", 32)
+        path = write_epub(tmp_path / "Huge.epub")
+
+        with (
+            ZipFile(path) as archive,
+            pytest.raises(validate.ValidationError, match="implausibly large"),
+        ):
+            validate.read_package(archive)
+
+    def test_an_unreadable_member_is_reported_not_raised(self, tmp_path, monkeypatch):
+        path = write_epub(tmp_path / "Unreadable.epub")
+
+        def refuse(self, name):
+            raise OSError("device fell over")
+
+        monkeypatch.setattr(ZipFile, "read", refuse)
+
+        with (
+            ZipFile(path) as archive,
+            pytest.raises(validate.ValidationError, match="could not read"),
+        ):
+            validate.read_package(archive)
+
+
+class TestMalformedPackageDocuments:
+    """What the OPF reader does with a package document that is wrong."""
+
+    def test_a_rootfile_without_a_path_is_skipped(self, tmp_path):
+        # A container may list several rootfiles; one without a full-path is
+        # not the one we want, and is not a reason to give up.
+        container = (
+            '<?xml version="1.0"?>\n'
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            "<rootfiles><rootfile/>"
+            '<rootfile full-path="OEBPS/content.opf"/></rootfiles></container>'
+        )
+        members = dict(MEMBERS, **{"META-INF/container.xml": container})
+        path = write_epub(tmp_path / "Book.epub", members)
+
+        with ZipFile(path) as archive:
+            assert validate.find_opf_path(archive) == "OEBPS/content.opf"
+
+    def test_a_container_naming_no_rootfile_is_refused(self, tmp_path):
+        container = (
+            '<?xml version="1.0"?>\n'
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            "<rootfiles/></container>"
+        )
+        members = dict(MEMBERS, **{"META-INF/container.xml": container})
+        path = write_epub(tmp_path / "Book.epub", members)
+
+        with (
+            ZipFile(path) as archive,
+            pytest.raises(validate.ValidationError, match="names no rootfile"),
+        ):
+            validate.find_opf_path(archive)
+
+    def test_a_remote_manifest_item_is_not_recorded(self, tmp_path):
+        # Recording it would produce a false "manifest item is not in the
+        # archive" for a resource that was never meant to be there.
+        metadata = "    <dc:title>Book</dc:title>"
+        opf = _opf_with(metadata).replace(
+            '<item id="ch1" href="text/chapter1.xhtml"'
+            ' media-type="application/xhtml+xml"/>',
+            '<item id="ch1" href="text/chapter1.xhtml"'
+            ' media-type="application/xhtml+xml"/>'
+            '<item id="remote" href="https://example.com/font.otf"'
+            ' media-type="font/otf"/>',
+        )
+        from_archive, _ = _read_both_ways(tmp_path, opf)
+
+        assert "remote" not in from_archive.manifest
+        assert "ch1" in from_archive.manifest
+
+    def test_an_itemref_without_an_idref_is_skipped(self, tmp_path):
+        opf = _opf_with("    <dc:title>Book</dc:title>").replace(
+            '<spine><itemref idref="ch1"/></spine>',
+            '<spine><itemref/><itemref idref="ch1"/></spine>',
         )
 
-        def fake_run(command, **options):
-            calls.append((command, options))
-            if raises is not None:
-                raise raises
-            return result
+        from_archive, _ = _read_both_ways(tmp_path, opf)
 
-        monkeypatch.setattr("epubconvert.validate.subprocess.run", fake_run)
-        return calls
+        assert from_archive.spine == ["ch1"]
 
-    def test_a_clean_archive_reports_nothing(self, tmp_path, monkeypatch):
-        self._installed(monkeypatch, _Completed(returncode=0))
-
-        assert validate.run_epubcheck(tmp_path / "Book.epub") == []
-
-    def test_error_lines_are_returned_stripped(self, tmp_path, monkeypatch):
-        stderr = (
-            "  ERROR(RSC-005): bad markup\nINFO: checking\n  ERROR(OPF-030): oops\n"
-        )
-        self._installed(monkeypatch, _Completed(returncode=1, stderr=stderr))
-
-        assert validate.run_epubcheck(tmp_path / "Book.epub") == [
-            "ERROR(RSC-005): bad markup",
-            "ERROR(OPF-030): oops",
-        ]
-
-    def test_stdout_is_read_when_stderr_is_empty(self, tmp_path, monkeypatch):
-        # The tool writes to either stream depending on how it was built.
-        self._installed(
-            monkeypatch, _Completed(returncode=1, stdout="ERROR(PKG-001): broken")
+    def test_the_legacy_cover_meta_is_read(self, tmp_path):
+        # EPUB2 named the cover through <meta name="cover" content="id">.
+        # Books predating the properties attribute still use it.
+        opf = _opf_with("    <dc:title>Book</dc:title>").replace(
+            "</metadata>", '<meta name="cover" content="ch1"/></metadata>'
         )
 
-        assert validate.run_epubcheck(tmp_path / "Book.epub") == [
-            "ERROR(PKG-001): broken"
-        ]
+        from_archive, _ = _read_both_ways(tmp_path, opf)
 
-    def test_a_failure_with_no_error_lines_names_the_exit_code(
-        self, tmp_path, monkeypatch
+        assert from_archive.cover_id == "ch1"
+
+
+class TestMalformedPackageDirectories:
+    """The directory reader has its own failure paths."""
+
+    def test_an_absent_container_is_refused(self, tmp_path):
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+
+        with pytest.raises(validate.ValidationError, match="missing container.xml"):
+            validate.read_package_dir(package)
+
+    def test_a_container_that_is_a_directory_is_refused(self, tmp_path):
+        package = tmp_path / "Book.epub"
+        (package / "META-INF" / "container.xml").mkdir(parents=True)
+
+        with pytest.raises(validate.ValidationError, match="could not read"):
+            validate.read_package_dir(package)
+
+    def test_an_unparsable_container_is_refused(self, tmp_path):
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "container.xml").write_text(
+            "<not xml", encoding="utf-8"
+        )
+
+        with pytest.raises(validate.ValidationError, match="not valid XML"):
+            validate.read_package_dir(package)
+
+    def test_a_container_naming_no_rootfile_is_refused(self, tmp_path):
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "container.xml").write_text(
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path=""/></rootfiles></container>',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(validate.ValidationError, match="names no rootfile"):
+            validate.read_package_dir(package)
+
+    def test_an_unparsable_package_document_is_refused(self, tmp_path):
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "container.xml").write_text(CONTAINER, encoding="utf-8")
+        (package / "OEBPS").mkdir()
+        (package / "OEBPS" / "content.opf").write_text("<not xml", encoding="utf-8")
+
+        with pytest.raises(validate.ValidationError, match="not valid XML"):
+            validate.read_package_dir(package)
+
+    def test_an_oversized_package_document_is_refused(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(validate, "MAX_XML_BYTES", 8)
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "container.xml").write_text(CONTAINER, encoding="utf-8")
+
+        with pytest.raises(validate.ValidationError, match="implausibly large"):
+            validate.read_package_dir(package)
+
+
+def _book_declaring(tmp_path: Path, manifest: str, spine: str) -> Path:
+    """Write an epub whose package document promises exactly what is given."""
+    opf = (
+        '<?xml version="1.0"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0">\n'
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        "<dc:title>Book</dc:title></metadata>\n"
+        f"  <manifest>{manifest}</manifest>\n"
+        f"  <spine>{spine}</spine>\n"
+        "</package>\n"
+    )
+    members = {
+        "META-INF/container.xml": CONTAINER,
+        "OEBPS/content.opf": opf,
+        "OEBPS/text/chapter1.xhtml": "<html><body>Ged</body></html>",
+    }
+    return write_epub(tmp_path / "Book.epub", members)
+
+
+class TestManifestAndSpineProblemsAreSummarised:
+    """
+    A book can be wrong in hundreds of ways at once. The report names the first
+    five of each kind and counts the rest, so one broken book cannot bury the
+    others in the log.
+    """
+
+    def test_a_package_with_no_manifest_items_says_so(self, tmp_path):
+        path = _book_declaring(tmp_path, "", '<itemref idref="ch1"/>')
+
+        problems = validate.validate_archive(path)
+
+        assert any("declares no manifest items" in problem for problem in problems)
+
+    def test_a_package_with_no_spine_says_so(self, tmp_path):
+        manifest = (
+            '<item id="ch1" href="text/chapter1.xhtml"'
+            ' media-type="application/xhtml+xml"/>'
+        )
+        path = _book_declaring(tmp_path, manifest, "")
+
+        problems = validate.validate_archive(path)
+
+        assert any("declares no spine" in problem for problem in problems)
+
+    def test_more_than_five_missing_members_are_counted(self, tmp_path):
+        manifest = "".join(
+            f'<item id="id{index}" href="text/gone{index}.xhtml"'
+            ' media-type="application/xhtml+xml"/>'
+            for index in range(8)
+        )
+        path = _book_declaring(tmp_path, manifest, '<itemref idref="id0"/>')
+
+        problems = validate.validate_archive(path)
+
+        assert "...and 3 more missing manifest item(s)" in problems
+        named = sum("manifest item is not in the archive" in p for p in problems)
+        assert named == 5
+
+    def test_more_than_five_dangling_spine_ids_are_counted(self, tmp_path):
+        manifest = (
+            '<item id="ch1" href="text/chapter1.xhtml"'
+            ' media-type="application/xhtml+xml"/>'
+        )
+        spine = "".join(f'<itemref idref="ghost{index}"/>' for index in range(9))
+        path = _book_declaring(tmp_path, manifest, spine)
+
+        problems = validate.validate_archive(path)
+
+        assert "...and 4 more dangling spine id(s)" in problems
+        named = sum("spine references unknown manifest id" in p for p in problems)
+        assert named == 5
+
+
+class TestTheValidatorRunsWhatItWasAskedFor:
+    def test_epubcheck_runs_only_after_the_structural_check_passes(
+        self, good_epub, monkeypatch
     ):
-        # Silence plus a non-zero status still has to say something, or the
-        # archive is reported as failing validation for no stated reason.
-        self._installed(monkeypatch, _Completed(returncode=3, stderr="WARNING: hmm"))
+        called: list[Path] = []
 
-        assert validate.run_epubcheck(tmp_path / "Book.epub") == [
-            "epubcheck failed with exit code 3"
-        ]
+        def record(path: Path, **_options: object) -> list[str]:
+            called.append(path)
+            return []
 
-    def test_at_most_ten_errors_are_reported(self, tmp_path, monkeypatch):
-        stderr = "\n".join(f"ERROR({index}): bad" for index in range(25))
-        self._installed(monkeypatch, _Completed(returncode=1, stderr=stderr))
+        monkeypatch.setattr(validate, "run_epubcheck", record)
+        options = validate.ValidationOptions(enabled=True, epubcheck=True)
 
-        assert len(validate.run_epubcheck(tmp_path / "Book.epub")) == 10
+        assert options.check(good_epub) == []
+        assert called == [good_epub]
 
-    def test_a_tool_that_cannot_be_run_is_reported(self, tmp_path, monkeypatch):
-        self._installed(monkeypatch, raises=OSError("Exec format error"))
+    def test_a_structural_failure_skips_epubcheck(self, tmp_path, monkeypatch):
+        called: list[Path] = []
 
-        problems = validate.run_epubcheck(tmp_path / "Book.epub")
+        def record(path: Path, **_options: object) -> list[str]:
+            called.append(path)
+            return []
 
-        assert problems == ["epubcheck could not be run: Exec format error"]
+        monkeypatch.setattr(validate, "run_epubcheck", record)
+        broken = tmp_path / "Empty.epub"
+        with ZipFile(broken, "w"):
+            pass
+        options = validate.ValidationOptions(enabled=True, epubcheck=True)
 
-    def test_a_timeout_is_reported_rather_than_raised(self, tmp_path, monkeypatch):
-        # A book big enough to exceed the timeout must fail the check, not the
-        # run: everything already converted stays converted.
-        self._installed(monkeypatch, raises=subprocess.TimeoutExpired("epubcheck", 120))
-
-        problems = validate.run_epubcheck(tmp_path / "Book.epub")
-
-        assert len(problems) == 1
-        assert problems[0].startswith("epubcheck could not be run:")
-
-    def test_the_tool_is_invoked_on_the_archive_with_no_shell(
-        self, tmp_path, monkeypatch
-    ):
-        # A fixed executable and a list argument, so a filename containing
-        # shell metacharacters is an argument rather than a command.
-        archive_path = tmp_path / "Book; rm -rf x.epub"
-        calls = self._installed(monkeypatch, _Completed(returncode=0))
-
-        validate.run_epubcheck(archive_path)
-
-        command, options = calls[0]
-        assert command == ["/usr/bin/epubcheck", str(archive_path)]
-        assert "shell" not in options
-
-    def test_the_timeout_is_passed_through_and_failure_is_not_raised(
-        self, tmp_path, monkeypatch
-    ):
-        # check=False because a non-zero status is the answer, not an error:
-        # raising here would abort a run over thousands of books on one bad
-        # archive.
-        calls = self._installed(monkeypatch, _Completed(returncode=0))
-
-        validate.run_epubcheck(tmp_path / "Book.epub", timeout=7)
-
-        _command, options = calls[0]
-        assert options["timeout"] == 7
-        assert options["check"] is False
-        assert options["capture_output"] is True
+        assert "archive is empty" in options.check(broken)
+        assert called == []

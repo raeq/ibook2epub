@@ -389,8 +389,6 @@ def read_package_dir(package: Path) -> Package:
         raise ValidationError(f"{CONTAINER_PATH} is not a readable file")
     try:
         root = ElementTree.fromstring(_read_capped(container))
-    except OSError as exc:
-        raise ValidationError(f"missing {CONTAINER_PATH}") from exc
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{CONTAINER_PATH} is not valid XML: {exc}") from exc
 
@@ -411,8 +409,6 @@ def read_package_dir(package: Path) -> Package:
         raise ValidationError(f"{opf_path} is not a readable file")
     try:
         opf_root = ElementTree.fromstring(_read_capped(document))
-    except OSError as exc:
-        raise ValidationError(f"missing {opf_path}") from exc
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{opf_path} is not valid XML: {exc}") from exc
 

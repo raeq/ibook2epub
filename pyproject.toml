@@ -47,11 +47,11 @@ source = ["epubconvert"]
 branch = true
 
 [tool.coverage.report]
-# The suite covers 95.90%. The gate sits under that: high enough that deleting
+# The suite covers 97.67%. The gate sits under that: high enough that deleting
 # a test or shipping an unexercised branch trips it, low enough that it is not
 # renegotiated every commit. Raise it when the real figure moves up, never
 # lower it to make a build pass.
-fail_under = 95
+fail_under = 97
 show_missing = true
 skip_covered = true
 exclude_also = [
