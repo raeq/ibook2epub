@@ -76,6 +76,13 @@ RESERVED_STEMS = frozenset(
 #: The per-component limit on ext4, exFAT and APFS.
 MAX_FILENAME_BYTES = 255
 
+#: How publishers join a contributor list inside one metadata field.
+AUTHOR_JOINER = " & "
+
+#: Below this, an author fragment says nothing worth the bytes, so the
+#: author is dropped rather than reduced to initials.
+MIN_AUTHOR_BYTES = 8
+
 
 class PortableNamesUnavailableError(RuntimeError):
     """Raised when portable naming is requested but ``disarm`` is not installed."""
@@ -431,7 +438,7 @@ class MetadataNaming:
 
         :return: The name to write this book under.
         """
-        composed = compose_metadata_name(package_name, metadata)
+        composed = compose_metadata_name(package_name, metadata, self.max_bytes)
         return self.inner.filename(composed)
 
     def identity(self, filename: str) -> str:
@@ -439,7 +446,9 @@ class MetadataNaming:
         return self.inner.identity(filename)
 
 
-def compose_metadata_name(package_name: str, metadata: Package | None) -> str:
+def compose_metadata_name(
+    package_name: str, metadata: Package | None, max_bytes: int = 0
+) -> str:
     """
     Build the raw ``Author - Title`` name, before any sanitizing.
 
@@ -448,6 +457,8 @@ def compose_metadata_name(package_name: str, metadata: Package | None) -> str:
 
     :param package_name: Fallback when the book declares no title.
     :param metadata: The parsed package document, or None.
+    :param max_bytes: Byte budget for the result, or 0 for no clamping. Spent
+        on the author first, so a long contributor list cannot eat the title.
 
     :return: A candidate filename, extension included. Not yet safe to write.
     """
@@ -455,6 +466,7 @@ def compose_metadata_name(package_name: str, metadata: Package | None) -> str:
         return package_name
 
     _, extension = split_extension(package_name)
+    extension = extension or PACKAGE_SUFFIX
     title = metadata.title.strip()
     author = (metadata.creator_sort or metadata.creator or "").strip()
     # An author of ".." or "?" is non-empty here and empty after cleaning, so
@@ -462,8 +474,50 @@ def compose_metadata_name(package_name: str, metadata: Package | None) -> str:
     # Tested with the same rule the cleaning uses rather than a guess at it.
     if author and not _replace_illegal(author, " ").strip(" ."):
         author = ""
-    stem = f"{author} - {title}" if author else title
-    return f"{stem}{extension or PACKAGE_SUFFIX}"
+    if not author:
+        return f"{title}{extension}"
+
+    budget = max_bytes - len(encode_name(extension)) if max_bytes else 0
+    return f"{_fit(author, title, budget)}{extension}"
+
+
+def _fit(author: str, title: str, budget: int) -> str:
+    """
+    Spend a tight byte budget on the author, so the title stays whole.
+
+    Clamping used to trim the end of ``Author - Title``, which is the title. A
+    real anthology came out as ``... & Wecks, Erik - The Time Travel.epub``,
+    keeping all fourteen contributors and losing "Chronicles". The title is how
+    a person finds the book, so it is what gets protected.
+
+    :param author: The author, already chosen and stripped.
+    :param title: The title, kept whole wherever it fits.
+    :param budget: Bytes available for the stem, or 0 for no clamping.
+
+    :return: The stem to write, extension excluded.
+    """
+    stem = f"{author} - {title}"
+    if not budget or len(encode_name(stem)) <= budget:
+        return stem
+
+    # Publishers put a book's whole contributor list in one field, joined with
+    # " & ". The first name plus "et al." is what a reader expects and what
+    # other library tools produce.
+    if AUTHOR_JOINER in author:
+        shortened = f"{author.split(AUTHOR_JOINER)[0].strip()} et al."
+        stem = f"{shortened} - {title}"
+        if len(encode_name(stem)) <= budget:
+            return stem
+        author = shortened
+
+    room = budget - len(encode_name(f" - {title}"))
+    if room >= MIN_AUTHOR_BYTES:
+        trimmed = truncate_bytes(author, room).rstrip(" .,&") or "_"
+        return f"{trimmed} - {title}"
+
+    # The title alone does not fit, so there is nothing left to protect. One
+    # book in a real library has its entire jacket blurb as dc:title.
+    return title
 
 
 def build_policy(

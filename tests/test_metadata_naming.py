@@ -197,6 +197,75 @@ class TestTheAuthorIsSanitisedToo:
             assert self._named(creator) == "Dune.epub", creator
 
 
+class TestTheTitleSurvivesALongAuthorList:
+    """
+    The title is how a person finds the book; the author list is often a dozen
+    contributors to an anthology. Clamping trimmed the end of the composed
+    name, which is the title, so a real book came out as
+
+        Peralta, Samuel & ... & Wecks, Erik - The Time Travel.epub
+
+    with every one of fourteen authors intact and "Chronicles" gone. The budget
+    is spent on the author now, and the title is kept whole.
+    """
+
+    @staticmethod
+    def _named(creator: str, title: str) -> str:
+        return MetadataNaming().filename(
+            "Book.epub", book(title=title, creator=creator)
+        )
+
+    def test_a_joined_author_list_collapses_to_the_first_name(self):
+        authors = " & ".join(f"Surname{index}, Given" for index in range(14))
+
+        name = self._named(authors, "The Time Travel Chronicles")
+
+        assert name == "Surname0, Given et al. - The Time Travel Chronicles.epub"
+
+    def test_the_real_anthology_keeps_its_whole_title(self):
+        authors = (
+            "Peralta, Samuel & Sawyer, Robert J. & Walker, Rysa & Bale, Lucas"
+            " & Vicino, Anthony & Lindsey, Ernie & Davis, Carol & Bolz, Stefan"
+            " & Christy, Ann & Banghart, Tracy & Holden, Michael"
+            " & Smith, Daniel Arthur & Luis, Ernie & Wecks, Erik"
+        )
+
+        name = self._named(authors, "The Time Travel Chronicles")
+
+        assert name.endswith(" - The Time Travel Chronicles.epub")
+        assert name.startswith("Peralta, Samuel et al.")
+        assert len(encode_name(name)) <= MAX_FILENAME_BYTES
+
+    def test_a_short_author_list_is_left_alone(self):
+        # Shortening only happens when the name does not fit. Two authors that
+        # fit keep both names.
+        name = self._named("Pratchett, Terry & Gaiman, Neil", "Good Omens")
+
+        assert name == "Pratchett, Terry & Gaiman, Neil - Good Omens.epub"
+
+    def test_a_single_overlong_author_is_truncated_not_the_title(self):
+        name = self._named("Surname" * 60, "A Short Title")
+
+        assert name.endswith(" - A Short Title.epub")
+        assert len(encode_name(name)) <= MAX_FILENAME_BYTES
+
+    def test_a_title_that_alone_exceeds_the_budget_is_still_named(self):
+        # One book's dc:title is its whole jacket blurb. Nothing can be
+        # protected there, but the name still has to be writable and end .epub.
+        name = self._named("Aung Myo Min", "There are five children in this book: " * 8)
+
+        assert len(encode_name(name)) <= MAX_FILENAME_BYTES
+        assert name.endswith(".epub")
+
+    def test_every_shortening_stays_within_the_budget(self):
+        for count in (2, 5, 14, 40):
+            authors = " & ".join(f"Surname{index}, Given" for index in range(count))
+            name = self._named(authors, "A Reasonably Long Anthology Title Here")
+
+            assert len(encode_name(name)) <= MAX_FILENAME_BYTES, count
+            assert name.endswith(".epub"), count
+
+
 class TestIdentityRoundTrips:
     """The output directory stays the sole record of completed work."""
 

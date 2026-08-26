@@ -403,8 +403,10 @@ The rest of the behaviour, measured on that same library:
 - The run says how many books were named without an author, and how many
   kept their folder name because the package document gave no title.
 - A book whose package document cannot be read keeps its directory name.
-- Names are sanitised and clamped to 255 bytes, so a sixteen-author anthology
-  that would produce a 422-byte name is trimmed rather than rejected.
+- Names are sanitised and clamped to 255 bytes. The budget is spent on the
+  author, so a fourteen-contributor anthology becomes
+  `Peralta, Samuel et al. - The Time Travel Chronicles.epub` rather than losing
+  the end of its title to the author list.
 - Reading every package document to build the names costs about three seconds
   over the whole library. Without `--name-by author-title` no package document
   is read at all, so a plain rerun stays free.
