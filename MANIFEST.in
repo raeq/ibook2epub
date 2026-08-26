@@ -5,6 +5,7 @@
 recursive-include tests *.py
 
 include CONTRIBUTING.md
+include CHANGELOG.md
 
 # Review artefacts and editor tooling are working files, not part of the
 # distribution. Named explicitly so a new one does not start shipping.

@@ -41,6 +41,7 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/raeq/ibook2epub"
 Issues = "https://github.com/raeq/ibook2epub/issues"
+Changelog = "https://github.com/raeq/ibook2epub/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ibook2epub = "epubconvert.run:main"
