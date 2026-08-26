@@ -5,29 +5,6 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- The sort name was read only from the EPUB2 `opf:file-as` attribute, so books
-  using the EPUB3 form — `<meta refines="#id" property="file-as">` — were named
-  in display order. Apple's library is overwhelmingly EPUB3, and this left 301
-  of 2,793 books with a creator sorting under their first name, which is the
-  one thing `--name-by author-title` exists to prevent. Sort-name coverage in a
-  real library goes from 63% to 74%, and 274 output names change. Where one
-  publisher gave the author and the illustrator the same `id`, the first
-  `file-as` wins, which is the author's.
-- The "No Apple Books library found" message indented its first candidate path
-  two spaces and the rest four, because the join separator carried an indent of
-  its own.
-
-### Added
-
-- The run reports how many books kept their folder name because the package
-  document declared no title. Together with the existing count of books named
-  without an author, a shelf that came out half-named now says so rather than
-  leaving it to be noticed later.
-
 ## [2.0.0] - 2026-08-26
 
 The exit codes changed incompatibly. Nothing else did, and the rest of this
@@ -49,10 +26,15 @@ release is additions.
 - `--name-by author-title` names books from their own `dc:title` and
   `dc:creator` instead of the package directory. Apple names a package after
   the title, so an exported shelf sorted by title and no amount of flags would
-  make it sort by author. The publisher's `opf:file-as` sort name is preferred
-  and `dc:creator` is used verbatim otherwise, never rearranged. Composes with
-  `--portable-names`, which decides how a name is cleaned rather than where it
-  comes from.
+  make it sort by author. The publisher's sort name is preferred, read from
+  either the EPUB2 `opf:file-as` attribute or the EPUB3 `<meta refines="#id"
+  property="file-as">` element — Apple's library is overwhelmingly the latter,
+  and reading only the attribute would have left 301 of 2,793 books filed under
+  their author's first name. Where a publisher gives the author and the
+  illustrator the same `id`, the first sort name wins, which is the author's.
+  `dc:creator` is used verbatim when no sort name exists, never rearranged.
+  Composes with `--portable-names`, which decides how a name is cleaned rather
+  than where it comes from.
 - Stable collision names. Under `--on-collision suffix`, a book that has to
   share a name is marked with a digest of its own `dc:identifier` rather than
   its position in the colliding group. Adding a book that sorts earlier no
@@ -68,7 +50,9 @@ release is additions.
   Apple's package folders and books that arrived already zipped exports whole.
   `--no-copy-through` turns it off.
 - The run reports how many books were named from a package document that
-  declared no creator.
+  declared no creator, and how many kept their folder name because the document
+  declared no title. A shelf that comes out half-named says so, rather than
+  leaving it to be noticed afterwards.
 
 ### Fixed
 
@@ -121,7 +105,6 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
-[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/raeq/ibook2epub/compare/v1.2.1...v2.0.0
 [1.2.1]: https://github.com/raeq/ibook2epub/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/raeq/ibook2epub/releases/tag/v1.2.0
