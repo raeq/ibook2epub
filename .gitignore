@@ -164,3 +164,7 @@ cython_debug/
 
 # Claude Code project instructions (local only)
 CLAUDE.md
+
+# Claude Code workspace settings: local tooling config, not project source.
+# Was tracked until the history rewrite that removed it.
+.claude/
