@@ -16,6 +16,7 @@ test for that site fails rather than the rule quietly holding in one place.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import ast
 import errno
 import os
 import sys
@@ -633,3 +634,109 @@ class TestRuleTheStubWalkIsStructuralEverywhere:
         package = make_package(tmp_path / "lib", "Book.epub")
 
         assert source.has_dataless_files(package) is False
+
+
+class TestOneReaderRulePerRule:
+    """
+    A book arrives in two shapes -- an ``*.epub`` archive and an unpacked
+    ``*.epub/`` directory -- and ``validate.py`` used to walk each one with its
+    own code. Only fetching the bytes genuinely differs; finding the package
+    document and parsing it are the same rule twice.
+
+    That is what made the canonical-identifier defect need a test per entry
+    point, and what let "names no rootfile" be raised from two places with two
+    call paths behind it.
+    """
+
+    @staticmethod
+    def _tree() -> ast.Module:
+        module = Path(__file__).resolve().parent.parent / "epubconvert" / "validate.py"
+        return ast.parse(module.read_text(encoding="utf-8"))
+
+    def test_only_one_function_walks_the_container_rootfiles(self):
+        walkers = [
+            node.name
+            for node in ast.walk(self._tree())
+            if isinstance(node, ast.FunctionDef)
+            and "rootfile" in ast.dump(node)
+            and any(isinstance(child, ast.For) for child in ast.walk(node))
+        ]
+
+        assert len(walkers) == 1, f"rootfile traversal lives in {walkers}"
+
+    def test_only_one_function_builds_a_package_from_a_source(self):
+        builders = [
+            node.name
+            for node in ast.walk(self._tree())
+            if isinstance(node, ast.FunctionDef)
+            and node.name != "_package_from_root"
+            and "_package_from_root" in ast.dump(node)
+        ]
+
+        assert len(builders) == 1, f"package assembly lives in {builders}"
+
+
+class TestBothReadersReportTheSameFault:
+    """
+    The same broken book, stored two ways, should be described the same way.
+    The directory reader named `container.xml` where the archive reader named
+    `META-INF/container.xml`, so the same fault read as two different faults.
+    """
+
+    @staticmethod
+    def _as_directory(tmp_path: Path, members: dict[str, str]) -> Path:
+        package = tmp_path / "dir" / "Book.epub"
+        for name, body in members.items():
+            path = package / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        return package
+
+    @staticmethod
+    def _as_archive(tmp_path: Path, members: dict[str, str]) -> Path:
+        path = tmp_path / "Book.epub"
+        with ZipFile(path, "w") as opened:
+            opened.writestr("mimetype", "application/epub+zip")
+            for name, body in members.items():
+                opened.writestr(name, body)
+        return path
+
+    def test_a_container_naming_no_rootfile(self, tmp_path):
+        members = {
+            "META-INF/container.xml": (
+                '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                "<rootfiles/></container>"
+            )
+        }
+
+        with pytest.raises(validate.ValidationError) as from_dir:
+            validate.read_package_dir(self._as_directory(tmp_path, members))
+        with (
+            ZipFile(self._as_archive(tmp_path, members)) as zipped,
+            pytest.raises(validate.ValidationError) as from_zip,
+        ):
+            validate.read_package(zipped)
+
+        assert str(from_dir.value) == str(from_zip.value)
+
+    def test_an_unparsable_container(self, tmp_path):
+        members = {"META-INF/container.xml": "<not xml"}
+
+        with pytest.raises(validate.ValidationError) as from_dir:
+            validate.read_package_dir(self._as_directory(tmp_path, members))
+        with (
+            ZipFile(self._as_archive(tmp_path, members)) as zipped,
+            pytest.raises(validate.ValidationError) as from_zip,
+        ):
+            validate.read_package(zipped)
+
+        assert str(from_dir.value) == str(from_zip.value)
+
+    def test_a_missing_container_names_the_member_not_the_file(self, tmp_path):
+        package = tmp_path / "dir" / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+
+        with pytest.raises(validate.ValidationError) as raised:
+            validate.read_package_dir(package)
+
+        assert "META-INF/container.xml" in str(raised.value)

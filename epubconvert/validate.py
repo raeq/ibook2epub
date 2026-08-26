@@ -23,6 +23,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import unquote, urldefrag
 from xml.etree import ElementTree
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
@@ -134,39 +135,127 @@ class ValidationOptions:
         return run_epubcheck(path)
 
 
-def _read_xml(archive: ZipFile, name: str) -> ElementTree.Element:
+class _Members(Protocol):  # pylint: disable=too-few-public-methods
     """
-    Read and parse one XML member of an archive.
+    Reads a named member out of a book, however the book happens to be stored.
 
-    :param archive: The open archive.
-    :param name: Path of the member to read.
+    A book arrives in two shapes: an ``*.epub`` archive and the unpacked
+    ``*.epub/`` directory Apple keeps. Fetching the bytes genuinely differs --
+    one is a zip lookup, the other a guarded open that must refuse a symlink --
+    but everything past that is the same rule. Writing that rule twice is what
+    made the canonical-identifier defect need fixing at two entry points.
+    """
+
+    def read(self, name: str) -> bytes:
+        """Return a member's bytes, or raise :class:`ValidationError`."""
+
+
+class _ArchiveMembers:  # pylint: disable=too-few-public-methods
+    """Members of an epub archive."""
+
+    def __init__(self, archive: ZipFile) -> None:
+        self.archive = archive
+
+    def read(self, name: str) -> bytes:
+        """
+        Return a member's bytes, refusing an implausibly large one.
+
+        The size is taken from the central directory before anything is
+        inflated, so a zip bomb is refused rather than expanded.
+        """
+        try:
+            info = self.archive.getinfo(name)
+        except KeyError as exc:
+            raise ValidationError(f"missing {name}") from exc
+
+        if info.file_size > MAX_XML_BYTES:
+            raise ValidationError(
+                f"{name} is implausibly large ({info.file_size} bytes)"
+            )
+        try:
+            return self.archive.read(name)
+        except (BadZipFile, OSError) as exc:
+            raise ValidationError(f"could not read {name}: {exc}") from exc
+
+
+class _DirectoryMembers:  # pylint: disable=too-few-public-methods
+    """Members of an unpacked package directory."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        # Resolved once: resolving walks every component, and it does not
+        # change across a package.
+        self.resolved_root = root.resolve()
+
+    def read(self, name: str) -> bytes:
+        """
+        Return a member's bytes, refusing a link out of the package.
+
+        Both documents are named by the book and read straight off disk, so a
+        symlinked package document let a book choose any file the user could
+        read as its own metadata.
+        """
+        path = resolve(self.root, name, resolved_root=self.resolved_root)
+        if path is None:
+            raise ValidationError(f"{name} is not a readable file")
+        try:
+            size = path.stat().st_size
+        except OSError as exc:
+            raise ValidationError(f"missing {name}") from exc
+        if size > MAX_XML_BYTES:
+            raise ValidationError(f"{name} is implausibly large ({size} bytes)")
+        try:
+            with open_contained(path) as handle:
+                return handle.read()
+        except OSError as exc:
+            raise ValidationError(f"could not read {name}: {exc}") from exc
+
+
+def _element(members: _Members, name: str) -> ElementTree.Element:
+    """
+    Read a member and parse it as XML.
+
+    :param members: The book being read.
+    :param name: Path of the member within the book.
 
     :return: The parsed root element.
 
     :raises ValidationError: If the member is missing or not valid XML.
     """
     try:
-        info = archive.getinfo(name)
-    except KeyError as exc:
-        raise ValidationError(f"missing {name}") from exc
-
-    if info.file_size > MAX_XML_BYTES:
-        raise ValidationError(f"{name} is implausibly large ({info.file_size} bytes)")
-
-    try:
-        data = archive.read(name)
-    except (BadZipFile, OSError) as exc:
-        raise ValidationError(f"could not read {name}: {exc}") from exc
-
-    try:
-        return ElementTree.fromstring(data)
+        return ElementTree.fromstring(members.read(name))
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{name} is not valid XML: {exc}") from exc
 
 
-def find_opf_path(archive: ZipFile) -> str:
+def _opf_path(members: _Members) -> str:
     """
     Resolve the package document path from ``META-INF/container.xml``.
+
+    A container may list several rootfiles; one without a ``full-path`` is not
+    the one we want and is not a reason to give up.
+
+    :param members: The book being read.
+
+    :return: Path of the package document within the book.
+
+    :raises ValidationError: If the container is missing, names no rootfile, or
+        names one outside the book.
+    """
+    root = _element(members, CONTAINER_PATH)
+    for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
+        full_path = rootfile.get("full-path")
+        if full_path:
+            # Checked for both shapes. The directory reader joins the result
+            # onto a real directory, so a rootfile of "/etc/passwd" or
+            # "../../.." would be opened rather than merely missed.
+            return _checked_opf_path(full_path)
+    raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+
+
+def find_opf_path(archive: ZipFile) -> str:
+    """
+    Resolve the package document path of an archive.
 
     :param archive: The open archive.
 
@@ -175,12 +264,7 @@ def find_opf_path(archive: ZipFile) -> str:
     :raises ValidationError: If the container is missing, names no rootfile, or
         names one outside the archive.
     """
-    root = _read_xml(archive, CONTAINER_PATH)
-    for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
-        full_path = rootfile.get("full-path")
-        if full_path:
-            return _checked_opf_path(full_path)
-    raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+    return _opf_path(_ArchiveMembers(archive))
 
 
 def _checked_opf_path(full_path: str) -> str:
@@ -227,7 +311,7 @@ def _resolve(base: str, href: str) -> str:
 
 def read_package(archive: ZipFile) -> Package:
     """
-    Parse the package document of an archive.
+    Parse the package document of an epub archive.
 
     :param archive: The open archive.
 
@@ -235,8 +319,21 @@ def read_package(archive: ZipFile) -> Package:
 
     :raises ValidationError: If the package document is missing or unparsable.
     """
-    opf_path = find_opf_path(archive)
-    return _package_from_root(_read_xml(archive, opf_path), opf_path)
+    return _package(_ArchiveMembers(archive))
+
+
+def _package(members: _Members) -> Package:
+    """
+    Find and parse a book's package document, whatever shape the book is in.
+
+    :param members: The book being read.
+
+    :return: The package metadata, manifest and spine.
+
+    :raises ValidationError: If the package document is missing or unparsable.
+    """
+    opf_path = _opf_path(members)
+    return _package_from_root(_element(members, opf_path), opf_path)
 
 
 def _canonical_identifier(root: ElementTree.Element) -> str | None:
@@ -380,67 +477,7 @@ def read_package_dir(package: Path) -> Package:
     :raises ValidationError: If the container or package document is missing
         or unparsable.
     """
-    # Both documents are named by the book, and both were read straight off
-    # disk: a symlinked package document let a book choose any file the user
-    # could read as its own metadata.
-    resolved_root = package.resolve()
-    container = resolve(package, CONTAINER_PATH, resolved_root=resolved_root)
-    if container is None:
-        raise ValidationError(f"{CONTAINER_PATH} is not a readable file")
-    try:
-        root = ElementTree.fromstring(_read_capped(container))
-    except ElementTree.ParseError as exc:
-        raise ValidationError(f"{CONTAINER_PATH} is not valid XML: {exc}") from exc
-
-    opf_path = ""
-    for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
-        opf_path = rootfile.get("full-path") or ""
-        if opf_path:
-            break
-    if not opf_path:
-        raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
-    # Unlike the archive reader, this one joins the result onto a real
-    # directory, so a rootfile of "/etc/passwd" or "../../.." would be opened
-    # rather than merely missed.
-    opf_path = _checked_opf_path(opf_path)
-
-    document = resolve(package, opf_path, resolved_root=resolved_root)
-    if document is None:
-        raise ValidationError(f"{opf_path} is not a readable file")
-    try:
-        opf_root = ElementTree.fromstring(_read_capped(document))
-    except ElementTree.ParseError as exc:
-        raise ValidationError(f"{opf_path} is not valid XML: {exc}") from exc
-
-    return _package_from_root(opf_root, opf_path)
-
-
-def _read_capped(path: Path) -> bytes:
-    """
-    Read an XML document off disk, refusing an implausible one.
-
-    The archive reader has enforced :data:`MAX_XML_BYTES` since it was written;
-    this side had no cap at all, and it is the untrusted one -- these bytes come
-    straight out of the ``*.epub/`` directory. Measured, a 105 MB container
-    document parsed happily at 338 MB resident.
-
-    :param path: The document to read.
-
-    :return: Its bytes.
-
-    :raises ValidationError: If it is missing or implausibly large.
-    """
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise ValidationError(f"missing {path.name}") from exc
-    if size > MAX_XML_BYTES:
-        raise ValidationError(f"{path.name} is implausibly large ({size} bytes)")
-    try:
-        with open_contained(path) as handle:
-            return handle.read()
-    except OSError as exc:
-        raise ValidationError(f"could not read {path.name}: {exc}") from exc
+    return _package(_DirectoryMembers(package))
 
 
 def validate_archive(path: Path) -> list[str]:

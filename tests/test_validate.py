@@ -711,7 +711,9 @@ class TestMalformedPackageDirectories:
         package = tmp_path / "Book.epub"
         (package / "META-INF").mkdir(parents=True)
 
-        with pytest.raises(validate.ValidationError, match="missing container.xml"):
+        with pytest.raises(
+            validate.ValidationError, match="missing META-INF/container.xml"
+        ):
             validate.read_package_dir(package)
 
     def test_a_container_that_is_a_directory_is_refused(self, tmp_path):
