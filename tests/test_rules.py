@@ -38,7 +38,13 @@ from epubconvert import (
     source,
     validate,
 )
-from epubconvert.naming import PassthroughNaming, StripNaming
+from epubconvert.naming import (
+    MetadataNaming,
+    PassthroughNaming,
+    StripNaming,
+    truncate_bytes,
+)
+from epubconvert.validate import Package
 from tests.conftest import make_package, needs_permissions, remove_tree
 from tests.test_export import _cover_package
 
@@ -282,6 +288,33 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
 
     def test_suffixed_survives(self):
         assert planning.suffixed(SURROGATE, 2, naming.MAX_FILENAME_BYTES)
+
+    def test_truncate_bytes_survives_a_cut_through_a_surrogate(self):
+        # The measurement survived an undecodable name; the *truncation* did
+        # not. A surrogate is three UTF-8 bytes, so a limit landing inside one
+        # left a partial sequence that not even surrogatepass can decode.
+        long_name = "a\udcff" * 200
+
+        for limit in range(96, 112):
+            assert truncate_bytes(long_name, limit) is not None, limit
+
+    def test_strip_unsafe_survives_truncating_a_surrogate_name(self):
+        # This is the original defect verbatim: os.walk on a share hands back
+        # a surrogate-escaped name, planning clamps it, and the run died with
+        # a traceback outside any handler.
+        long_name = "a\udcff" * 200 + ".epub"
+
+        assert StripNaming().filename(long_name).endswith(".epub")
+
+    def test_suffixed_survives_truncating_a_surrogate_name(self):
+        long_name = "a\udcff" * 200 + ".epub"
+
+        assert planning.suffixed(long_name, 2, naming.MAX_FILENAME_BYTES)
+
+    def test_a_metadata_name_survives_a_surrogate(self):
+        package = Package(opf_path="c.opf", title="t\udcff" * 200, creator="a\udcff")
+
+        assert MetadataNaming().filename("b\udcff.epub", package).endswith(".epub")
 
     def test_planning_survives_a_colliding_surrogate_name(self, tmp_path):
         # Paths only -- APFS refuses to create a file whose name carries a

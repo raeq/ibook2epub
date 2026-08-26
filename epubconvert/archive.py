@@ -39,7 +39,7 @@ PARTIAL_SUFFIX = ".part"
 #: Apple's package directories, and books that arrived already zipped or as
 #: PDFs -- and converting only the first produced a partial shelf whose
 #: summary read complete.
-COPYABLE_SUFFIXES = frozenset({".epub", ".pdf"})
+COPYABLE_SUFFIXES = frozenset({PACKAGE_SUFFIX, ".pdf"})
 #: Deflate level for text members. Measured on a 3 MB book: level 9 costs 3.2x
 #: the CPU of level 6 for 0.6% less size, and bare zlib on the same text is
 #: 4.8x for 1.6%. Level 6 is zlib's default and the level worth paying for.

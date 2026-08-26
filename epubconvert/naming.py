@@ -76,6 +76,10 @@ RESERVED_STEMS = frozenset(
 #: The per-component limit on ext4, exFAT and APFS.
 MAX_FILENAME_BYTES = 255
 
+#: Longest UTF-8 encoding of a single character, so a truncation never has
+#: to back off further than this to land on a boundary.
+MAX_UTF8_SEQUENCE = 4
+
 #: How publishers join a contributor list inside one metadata field.
 AUTHOR_JOINER = " & "
 
@@ -150,7 +154,19 @@ def truncate_bytes(text: str, limit: int) -> str:
     encoded = encode_name(text)
     if len(encoded) <= limit:
         return text
-    return encoded[:limit].decode("utf-8", errors="surrogatepass")
+
+    # Backing off matters because the cut can land inside a character. A
+    # surrogate escape is three UTF-8 bytes and an astral character four, and
+    # a partial sequence is not decodable even by surrogatepass -- so the
+    # clamp raised UnicodeDecodeError from inside planning, outside any
+    # handler, which is the traceback surrogatepass was added to prevent. Only
+    # the measurement had been made safe; the truncation had not.
+    for cut in range(limit, max(limit - MAX_UTF8_SEQUENCE, -1), -1):
+        try:
+            return encoded[:cut].decode("utf-8", errors="surrogatepass")
+        except UnicodeDecodeError:
+            continue
+    return ""
 
 
 def split_extension(name: str) -> tuple[str, str]:
