@@ -5,6 +5,40 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-08-26
+
+Fixes only. Three of them are places where a rule was applied on one path and
+not on another, which is why they were invisible until someone ran a real
+library through them.
+
+### Fixed
+
+- Copied files never met the naming layer. `--portable-names` sanitises the
+  names of books it converts, and wrote a copied file's name verbatim — so a
+  colon reached a shelf bound for a Kindle, which is the one thing the flag
+  exists to prevent. `--name-by author-title` had the matching gap, leaving
+  half a mixed library named the old way. An already-zipped epub is now named
+  from its own `dc:title` and `dc:creator` like any other book; a PDF keeps its
+  filename, cleaned.
+- `--list` printed the source package name rather than the name it would write,
+  so previewing a renaming policy showed nothing about the renaming. The name
+  was already computed correctly and the listing read the wrong field. This
+  affected `-p` as far back as 1.2.0, where the difference was one character.
+- Clamping a name that carried an undecodable byte crashed the run.
+  `os.walk` on a network share returns names with surrogate escapes; a
+  surrogate is three UTF-8 bytes, so a byte limit landing inside one raised
+  `UnicodeDecodeError` out of planning, outside any handler. Truncation now
+  backs off to a character boundary. The measurement had been made safe for
+  these names some time ago; the truncation had not.
+
+### Changed
+
+- The two package readers, one for an archive and one for an unpacked
+  directory, now share everything except fetching the bytes. A book that is
+  broken the same way is described the same way whichever shape it arrives in:
+  the directory reader used to name `container.xml` where the archive reader
+  named `META-INF/container.xml`.
+
 ## [2.0.0] - 2026-08-26
 
 The exit codes changed incompatibly. Nothing else did, and the rest of this
@@ -125,6 +159,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[2.0.1]: https://github.com/raeq/ibook2epub/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/raeq/ibook2epub/compare/v1.2.1...v2.0.0
 [1.2.1]: https://github.com/raeq/ibook2epub/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/raeq/ibook2epub/releases/tag/v1.2.0
