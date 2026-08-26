@@ -273,6 +273,30 @@ class TestTheTitleSurvivesALongAuthorList:
         assert len(encode_name(name)) <= MAX_FILENAME_BYTES
         assert name.endswith(".epub")
 
+    def test_a_trimmed_title_does_not_end_mid_word(self):
+        # "...watch television a" is a damaged name; "...watch television" is a
+        # deliberate one. The bytes are the same either way.
+        blurb = "There are five children in this book: " * 8
+
+        name = self._named("Aung Myo Min", blurb)
+
+        stem = name[: -len(".epub")]
+        assert not stem.endswith(" a")
+        assert stem == stem.rstrip(" .,;:-")
+
+    def test_a_title_with_no_spaces_is_still_trimmed(self):
+        # Nothing to back off to, so a hard cut is the only option.
+        name = self._named("Author, An", "A" * 400)
+
+        assert len(encode_name(name)) <= MAX_FILENAME_BYTES
+        assert name.startswith("Author, An - AAA")
+
+    def test_backing_off_never_costs_most_of_the_title(self):
+        # A single space early in a long title must not throw the rest away.
+        name = self._named("Author, An", "A " + "B" * 400)
+
+        assert len(encode_name(name)) > MAX_FILENAME_BYTES // 2
+
     def test_the_author_never_takes_more_than_its_share(self):
         # A single enormous author must not squeeze the title out either.
         name = self._named("Surname" * 60, "A Reasonable Title")

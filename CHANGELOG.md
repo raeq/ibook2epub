@@ -49,6 +49,9 @@ release is additions.
 - An author made only of characters that sanitising removes (`..`, `?`) is
   treated as absent rather than leaving a separator with nothing in front of
   it.
+- A trimmed title backs off to the last whole word, so a shortened name reads
+  as deliberate rather than damaged: `...watch television` rather than
+  `...watch television a`.
 - Stable collision names. Under `--on-collision suffix`, a book that has to
   share a name is marked with a digest of its own `dc:identifier` rather than
   its position in the colliding group. Adding a book that sorts earlier no

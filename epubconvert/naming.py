@@ -89,6 +89,10 @@ MAX_NAMED_AUTHORS = 2
 #: out entirely.
 AUTHOR_BUDGET_SHARE = 3
 
+#: How far into a trimmed string a word boundary must fall before backing off
+#: to it is worth the bytes. Below this the cut is taken as it lands.
+WORD_BACKOFF_FLOOR = 0.7
+
 
 class PortableNamesUnavailableError(RuntimeError):
     """Raised when portable naming is requested but ``disarm`` is not installed."""
@@ -529,8 +533,31 @@ def _fit(author: str, title: str, budget: int) -> str:
         author = truncate_bytes(author, share).rstrip(" .,&") or "_"
 
     room = budget - len(encode_name(f"{author} - "))
-    trimmed = truncate_bytes(title, max(room, 1)).rstrip(" .") or "_"
-    return f"{author} - {trimmed}"
+    return f"{author} - {_trim_at_word(title, max(room, 1))}"
+
+
+def _trim_at_word(text: str, limit: int) -> str:
+    """
+    Cut text to a byte limit, preferring the last whole word.
+
+    A hard cut leaves the name looking damaged rather than shortened: one
+    book's blurb-as-title ended "...watch television a", the front of "and".
+    Backing off to the previous space costs a few bytes and reads as
+    deliberate.
+
+    The back-off is refused when it would throw away most of what was kept, so
+    a title whose only space is near the front is still cut hard.
+
+    :param text: The text to shorten.
+    :param limit: Maximum length in bytes.
+
+    :return: The shortened text, never empty.
+    """
+    cut = truncate_bytes(text, limit).rstrip()
+    space = cut.rfind(" ")
+    if space > len(cut) * WORD_BACKOFF_FLOOR:
+        cut = cut[:space]
+    return cut.rstrip(" .,;:-") or "_"
 
 
 def build_policy(
