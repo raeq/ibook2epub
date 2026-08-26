@@ -32,6 +32,33 @@ def _zipped_book(path: Path) -> bytes:
     return written
 
 
+def _book_with_metadata(path: Path) -> bytes:
+    """An already-valid epub that declares a title and a sort name."""
+    opf = (
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0"'
+        ' unique-identifier="bid">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"'
+        ' xmlns:opf="http://www.idpf.org/2007/opf">'
+        "<dc:title>A Wizard of Earthsea</dc:title>"
+        '<dc:creator opf:file-as="Le Guin, Ursula K.">Ursula K. Le Guin</dc:creator>'
+        '<dc:identifier id="bid">urn:uuid:1</dc:identifier></metadata>'
+        '<manifest><item id="t" href="text.xhtml"'
+        ' media-type="application/xhtml+xml"/></manifest>'
+        '<spine><itemref idref="t"/></spine></package>'
+    )
+    container = (
+        '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        '<rootfiles><rootfile full-path="content.opf"/></rootfiles></container>'
+    )
+    with ZipFile(path, "w") as opened:
+        opened.writestr("mimetype", "application/epub+zip")
+        opened.writestr("META-INF/container.xml", container)
+        opened.writestr("content.opf", opf)
+        opened.writestr("text.xhtml", "<html/>")
+    written: bytes = path.read_bytes()
+    return written
+
+
 class TestAlreadyValidFilesAreTakenAlong:
     """The point of the run is "get my library out", not "run a converter"."""
 
@@ -165,3 +192,174 @@ class TestOnlyRealFilesAreCopied:
         found = archive.collect_copyable(library)
 
         assert sorted(path.name for path in found) == ["Paper.pdf", "Zipped.epub"]
+
+
+class TestCopiesGoThroughTheNamingPolicy:
+    """
+    Copying wrote `output_dir / source.name`, so a copied file never met the
+    naming layer at all. Under `-p` that put a colon on a shelf bound for a
+    Kindle -- the one thing `-p` exists to prevent -- and under
+    `--name-by author-title` it left half the shelf named the old way.
+
+    The name a copied file gets is now decided in one place, the same place
+    that decides it for a converted book.
+    """
+
+    def test_an_illegal_character_is_sanitised_under_portable_names(
+        self, tmp_path, output_dir
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        _zipped_book(library / "Sapiens: A Brief History.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-p", "-q"])
+
+        assert [path.name for path in output_dir.glob("*.epub")] == [
+            "Sapiens A Brief History.epub"
+        ]
+
+    def test_a_copied_pdf_is_sanitised_too(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Notes: Volume 1.pdf").write_bytes(b"%PDF-1.4\n")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-p", "-q"])
+
+        assert [path.name for path in output_dir.glob("*.pdf")] == [
+            "Notes Volume 1.pdf"
+        ]
+
+    def test_a_copied_epub_is_named_from_its_own_metadata(self, tmp_path, output_dir):
+        # An already-zipped book carries the same dc:title and dc:creator a
+        # package directory does. Ignoring them made the shelf inconsistent.
+        library = tmp_path / "lib"
+        library.mkdir()
+        _book_with_metadata(library / "Earthsea.epub")
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        assert [path.name for path in output_dir.glob("*.epub")] == [
+            "Le Guin, Ursula K. - A Wizard of Earthsea.epub"
+        ]
+
+    def test_a_pdf_keeps_its_name_when_it_has_no_metadata(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Some Paper.pdf").write_bytes(b"%PDF-1.4\n")
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        assert (output_dir / "Some Paper.pdf").is_file()
+
+    def test_an_unreadable_epub_keeps_its_name(self, tmp_path, output_dir):
+        # A file that cannot be parsed still gets copied; it just cannot be
+        # renamed from metadata it does not have.
+        library = tmp_path / "lib"
+        library.mkdir()
+        _zipped_book(library / "Opaque.epub")
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        assert (output_dir / "Opaque.epub").is_file()
+
+    def test_the_default_policy_still_copies_verbatim(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        library.mkdir()
+        original = _zipped_book(library / "Already Valid.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        assert (output_dir / "Already Valid.epub").read_bytes() == original
+
+
+class TestRenamedCopiesStayConsistentWithTheShelf:
+    """The orphan report and the copy have to agree on the name."""
+
+    def test_a_renamed_copy_is_not_reported_as_an_orphan(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Orphan detection is told which names the copies claim. Computing
+        # that separately from the copy itself is what made them disagree.
+        library = tmp_path / "lib"
+        library.mkdir()
+        _book_with_metadata(library / "Earthsea.epub")
+        flags = [
+            "-s",
+            str(library),
+            "-o",
+            str(output_dir),
+            "-m",
+            "0",
+            "--name-by",
+            "author-title",
+            "-q",
+        ]
+        run.main(flags)
+        capsys.readouterr()
+
+        run.main(flags + ["--list"])
+
+        assert "orphan" not in capsys.readouterr().out
+
+    def test_a_renamed_copy_reruns_without_copying_again(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        _book_with_metadata(library / "Earthsea.epub")
+        flags = [
+            "-s",
+            str(library),
+            "-o",
+            str(output_dir),
+            "-m",
+            "0",
+            "--name-by",
+            "author-title",
+            "-q",
+        ]
+        run.main(flags)
+        written = output_dir / "Le Guin, Ursula K. - A Wizard of Earthsea.epub"
+        stamp = written.stat().st_mtime_ns
+        capsys.readouterr()
+
+        run.main(flags)
+
+        assert written.stat().st_mtime_ns == stamp
+        assert "copied" not in capsys.readouterr().out

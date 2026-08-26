@@ -20,7 +20,7 @@ import json
 
 from epubconvert import archive, planning, run
 from epubconvert.naming import PassthroughNaming, StripNaming
-from tests.conftest import make_package, remove_tree
+from tests.conftest import make_metadata_package, make_package, remove_tree
 
 
 class TestOrphansAreFound:
@@ -198,3 +198,110 @@ class TestMatchDoesNotInventOrphans:
         )
 
         assert "orphan" not in capsys.readouterr().out
+
+
+class TestTheListingNamesTheFileItWillWrite:
+    """
+    The listing printed the source package name, so `--list` under a policy
+    that renames showed nothing about the renaming it was asked to preview.
+    The decision already carried the answer in `target`; the renderer read the
+    wrong field.
+
+    Older than `--name-by`: `-p` has diverged since 1.2.0 and listed the wrong
+    name the whole time, because the difference was one character.
+    """
+
+    def test_a_renaming_policy_shows_the_new_name(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library,
+            "Earthsea.epub",
+            title="A Wizard of Earthsea",
+            file_as="Le Guin, Ursula K.",
+        )
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "--list",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        assert (
+            "Le Guin, Ursula K. - A Wizard of Earthsea.epub" in capsys.readouterr().out
+        )
+
+    def test_portable_names_shows_the_sanitised_name(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Sapiens: A Brief History.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "-p", "-q"])
+
+        listing = capsys.readouterr().out
+        assert "Sapiens A Brief History.epub" in listing
+        assert "Sapiens: A Brief History.epub" not in listing
+
+    def test_a_collision_still_names_the_book_that_lost(
+        self, tmp_path, output_dir, capsys
+    ):
+        # A losing book has no target at all, so the source name is both the
+        # only thing available and the right thing to show.
+        library = tmp_path / "lib"
+        make_package(library / "a", "Same.epub")
+        make_package(library / "b", "Same.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
+
+        listing = capsys.readouterr().out
+        assert "collision" in listing
+        assert "Same.epub" in listing
+
+    def test_an_orphan_still_shows_the_file_on_the_shelf(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Keep.epub")
+        make_package(library, "Gone.epub")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        remove_tree(library / "Gone.epub")
+        capsys.readouterr()
+
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
+
+        assert "Gone.epub" in capsys.readouterr().out
+
+    def test_the_json_form_is_unchanged(self, tmp_path, output_dir, capsys):
+        # "name" means the source package there, and that is a contract.
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library,
+            "Earthsea.epub",
+            title="A Wizard of Earthsea",
+            file_as="Le Guin, Ursula K.",
+        )
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "--list",
+                "--json",
+                "--name-by",
+                "author-title",
+                "-q",
+            ]
+        )
+
+        row = json.loads(capsys.readouterr().out)[0]
+        assert row["name"] == "Earthsea.epub"
+        assert row["target"].endswith("Le Guin, Ursula K. - A Wizard of Earthsea.epub")

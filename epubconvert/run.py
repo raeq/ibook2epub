@@ -52,6 +52,7 @@ from .naming import (
 )
 from .planning import (
     PlanOptions,
+    copy_target_name,
     find_orphans,
     orphan_decisions,
     plan_exports,
@@ -111,7 +112,7 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=[path.name for path in copyable],
+            claimed_extra=[copy_target_name(path, policy) for path in copyable],
         )
     )
     print(render_listing(decisions + orphans, args.as_json))
@@ -198,7 +199,7 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=[path.name for path in copyable],
+            claimed_extra=[copy_target_name(path, policy) for path in copyable],
         )
     )
 
@@ -233,7 +234,7 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         pending_before = 0
         try:
             if not args.dry_run:
-                report.copied = _copy_through_all(copyable, args.output_dir)
+                report.copied = _copy_through_all(copyable, args.output_dir, policy)
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
             # a cloud shelf, and a Ctrl-C there produced a raw traceback with
@@ -285,7 +286,9 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
     return None
 
 
-def _copy_through_all(copyable: Sequence[Path], output_dir: Path) -> int:
+def _copy_through_all(
+    copyable: Sequence[Path], output_dir: Path, policy: NamingPolicy
+) -> int:
     """
     Put already-valid books on the shelf without converting them.
 
@@ -295,12 +298,14 @@ def _copy_through_all(copyable: Sequence[Path], output_dir: Path) -> int:
 
     :param copyable: Files found beside the packages.
     :param output_dir: Directory to copy into.
+    :param policy: Naming policy, so a copied file is named the same way a
+        converted one is.
 
     :return: How many were copied this run.
     """
     copied = 0
     for source in copyable:
-        target = output_dir / source.name
+        target = output_dir / copy_target_name(source, policy)
         if target.exists():
             continue
         try:

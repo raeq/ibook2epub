@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+from zipfile import BadZipFile, ZipFile
 
 from .app_logger import logger
 from .display import printable
@@ -28,7 +29,13 @@ from .naming import (
 )
 from .source import inspect_package
 from .spec import PACKAGE_SUFFIX
-from .validate import Package, ValidationError, read_package_dir, usable_identifier
+from .validate import (
+    Package,
+    ValidationError,
+    read_package,
+    read_package_dir,
+    usable_identifier,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
@@ -119,6 +126,22 @@ class Decision:
     status: Status
     target: Path | None = None
     reason: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        """
+        The name to show a person, which is the name that will be written.
+
+        Two fields hold a name and the type did not say which one a reader
+        wants, so the listing printed the source package and showed nothing
+        about a policy that renames. Answered here rather than at each
+        renderer, because there is more than one renderer and they disagreed.
+
+        A book that lost a collision has no target; there the source name is
+        both the only thing available and the right thing to show, since the
+        question is which book lost.
+        """
+        return (self.target or self.package).name
 
 
 def suffixed(filename: str, position: int, max_bytes: int) -> str:
@@ -229,6 +252,42 @@ def _metadata_of(package: Path, wanted: bool) -> Package | None:
         # One package in a surveyed 2,805-book library has no container.xml.
         # A book that cannot describe itself still deserves a name.
         return None
+
+
+def copy_target_name(source: Path, policy: NamingPolicy) -> str:
+    """
+    Name a file that is copied rather than converted.
+
+    Copying used to write ``output_dir / source.name``, so a copied file never
+    met the naming layer: under ``-p`` a colon reached a shelf bound for a
+    Kindle, which is the one thing ``-p`` exists to prevent, and under
+    ``--name-by author-title`` half the shelf kept its old names.
+
+    An already-zipped epub carries the same ``dc:title`` and ``dc:creator`` a
+    package directory does, so a metadata policy can name it from its own
+    contents. A PDF carries neither and keeps its filename, cleaned.
+
+    Lives here rather than beside the copy, because three callers need the
+    answer -- the copy itself and both orphan checks -- and computing it in
+    three places is what let the copy and the orphan report disagree.
+
+    :param source: The file to be copied.
+    :param policy: The naming policy this run is using.
+
+    :return: The filename to write it under.
+    """
+    metadata = None
+    if getattr(policy, "needs_metadata", False) and source.suffix.lower() == (
+        PACKAGE_SUFFIX
+    ):
+        try:
+            with ZipFile(source) as archive:
+                metadata = read_package(archive)
+        except (ValidationError, BadZipFile, OSError):
+            # A file that cannot describe itself still gets copied; it just
+            # cannot be renamed from metadata it does not have.
+            metadata = None
+    return policy.filename(source.name, metadata)
 
 
 def assign_names(
@@ -827,7 +886,7 @@ def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:
 
     width = max(len(decision.status) for decision in decisions)
     lines = [
-        f"{decision.status:<{width}}  {printable(decision.package.name)}"
+        f"{decision.status:<{width}}  {printable(decision.display_name)}"
         + (f"  ({decision.reason})" if decision.reason else "")
         for decision in decisions
     ]
