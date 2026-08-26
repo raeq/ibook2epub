@@ -48,6 +48,15 @@ from epubconvert.validate import Package
 from tests.conftest import make_package, needs_permissions, remove_tree
 from tests.test_export import _cover_package
 
+
+def _inside(tree: ast.Module, node: ast.AST, function: str) -> bool:
+    """Whether *node* lies within the named top-level function of *tree*."""
+    for candidate in ast.walk(tree):
+        if isinstance(candidate, ast.FunctionDef) and candidate.name == function:
+            return any(child is node for child in ast.walk(candidate))
+    return False
+
+
 SURROGATE = "Bad\udce9Name.epub"
 
 
@@ -279,6 +288,46 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
     Sites: ``truncate_bytes``, ``strip_unsafe``, ``PortableNaming.filename``
     and ``planning.suffixed`` -- the last had three plain encodes.
     """
+
+    def test_nothing_encodes_a_name_except_the_encoder(self):
+        # The census of this rule's call sites lived in the docstring above,
+        # and stopped being current the moment three more sites were added --
+        # which is how the truncating half went untested. Derive it instead:
+        # a bare .encode() anywhere is somebody measuring a name without the
+        # surrogate-safe path, which is the traceback this rule exists to
+        # prevent.
+        offenders = []
+        for path in sorted(Path("epubconvert").glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                ):
+                    continue
+                if node.func.attr != "encode":
+                    continue
+                if path.name == "naming.py" and _inside(tree, node, "encode_name"):
+                    continue
+                offenders.append(f"{path}:{node.lineno}")
+
+        assert offenders == [], f"encode a name through encode_name: {offenders}"
+
+    def test_nothing_decodes_bytes_back_except_the_truncator(self):
+        offenders = []
+        for path in sorted(Path("epubconvert").glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not (
+                    isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                ):
+                    continue
+                if node.func.attr != "decode":
+                    continue
+                if path.name == "naming.py" and _inside(tree, node, "truncate_bytes"):
+                    continue
+                offenders.append(f"{path}:{node.lineno}")
+
+        assert offenders == [], f"decode through truncate_bytes: {offenders}"
 
     def test_truncate_bytes_survives(self):
         assert naming.truncate_bytes(SURROGATE, 200) == SURROGATE

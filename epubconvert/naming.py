@@ -274,12 +274,16 @@ def disambiguator(identifier: str) -> str:
     The digest rather than the identifier itself: real values run to 45
     characters and carry ``:`` and ``/``, which a filename cannot.
 
+    Encoded through :func:`encode_name` like every other name measurement,
+    so there is no second way to turn a name into bytes for the next
+    reader to copy.
+
     :param identifier: The book's canonical ``dc:identifier``.
 
     :return: A short alphanumeric marker.
     """
     digest = hashlib.blake2s(
-        identifier.encode("utf-8"), digest_size=DISAMBIGUATOR_CHARS // 2
+        encode_name(identifier), digest_size=DISAMBIGUATOR_CHARS // 2
     )
     return digest.hexdigest()
 
