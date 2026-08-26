@@ -35,15 +35,20 @@ release is additions.
   `dc:creator` is used verbatim when no sort name exists, never rearranged.
   Composes with `--portable-names`, which decides how a name is cleaned rather
   than where it comes from.
-- Long names spend their byte budget on the author, so the title survives
-  whole. Publishers put a book's entire contributor list in one metadata field
-  joined with ` & `, and clamping the composed name trimmed the end of it — the
-  title. A real anthology came out as `... & Wecks, Erik - The Time Travel.epub`
-  with all fourteen contributors intact and "Chronicles" gone. Such a list now
-  collapses to `Peralta, Samuel et al.`, which is what other library tools
-  produce. An author made only of characters that sanitising removes (`..`,
-  `?`) is treated as absent rather than leaving a separator with nothing in
-  front of it.
+- Up to two contributors are named in full; beyond that the list collapses to
+  `Peralta, Samuel et al.`, which is what other library tools produce.
+  Publishers put a book's entire contributor list in one metadata field joined
+  with ` & `, and a twelve-author name is not a usable filename even when it
+  fits inside the byte limit.
+- Neither half of a name can squeeze the other out. Clamping used to trim the
+  end of the composed `Author - Title`, which is the title: an anthology came
+  out as `... & Wecks, Erik - The Time Travel.epub`, keeping fourteen
+  contributors and losing "Chronicles". A book whose `dc:title` is its whole
+  jacket blurb keeps its author prefix and has the title trimmed instead,
+  because a shelf that stops sorting by author defeats the point of the policy.
+- An author made only of characters that sanitising removes (`..`, `?`) is
+  treated as absent rather than leaving a separator with nothing in front of
+  it.
 - Stable collision names. Under `--on-collision suffix`, a book that has to
   share a name is marked with a digest of its own `dc:identifier` rather than
   its position in the colliding group. Adding a book that sorts earlier no

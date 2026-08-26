@@ -236,12 +236,50 @@ class TestTheTitleSurvivesALongAuthorList:
         assert name.startswith("Peralta, Samuel et al.")
         assert len(encode_name(name)) <= MAX_FILENAME_BYTES
 
-    def test_a_short_author_list_is_left_alone(self):
-        # Shortening only happens when the name does not fit. Two authors that
-        # fit keep both names.
+    def test_two_contributors_are_both_named(self):
         name = self._named("Pratchett, Terry & Gaiman, Neil", "Good Omens")
 
         assert name == "Pratchett, Terry & Gaiman, Neil - Good Omens.epub"
+
+    def test_three_contributors_collapse(self):
+        name = self._named("Adams, A & Brown, B & Clark, C", "Short Title")
+
+        assert name == "Adams, A et al. - Short Title.epub"
+
+    def test_a_long_list_collapses_even_when_it_would_fit(self):
+        # The defect: collapsing was conditional on the byte budget, so a
+        # twelve-author list that came to 244 bytes was written out in full.
+        # A 244-byte filename is not a usable filename.
+        authors = (
+            "Peralta, Samuel & Webb, Nick & Weil, Raymond L. & Scott, Jasper T."
+            " & Wells, Jennifer Foehner & Adams, David & Jennsen, G. S."
+            " & DaCosta, Pippa & Thyer, Matthew Alan & Reher, Chris"
+            " & Savage, Felix R. & Wilson, Nicolas"
+        )
+
+        name = self._named(authors, "The Galaxy Chronicles")
+
+        assert name == "Peralta, Samuel et al. - The Galaxy Chronicles.epub"
+
+    def test_the_author_prefix_survives_a_runaway_title(self):
+        # One book's dc:title is its entire jacket blurb. Dropping the author
+        # there defeats the only thing this policy exists to do -- the shelf
+        # stops sorting by author for exactly the books that need it most.
+        blurb = "There are five children in this book: " * 8
+
+        name = self._named("Aung Myo Min", blurb)
+
+        assert name.startswith("Aung Myo Min - ")
+        assert len(encode_name(name)) <= MAX_FILENAME_BYTES
+        assert name.endswith(".epub")
+
+    def test_the_author_never_takes_more_than_its_share(self):
+        # A single enormous author must not squeeze the title out either.
+        name = self._named("Surname" * 60, "A Reasonable Title")
+
+        author_part = name.split(" - ")[0]
+        assert len(encode_name(author_part)) <= MAX_FILENAME_BYTES // 3
+        assert name.endswith(" - A Reasonable Title.epub")
 
     def test_a_single_overlong_author_is_truncated_not_the_title(self):
         name = self._named("Surname" * 60, "A Short Title")

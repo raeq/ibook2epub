@@ -79,9 +79,15 @@ MAX_FILENAME_BYTES = 255
 #: How publishers join a contributor list inside one metadata field.
 AUTHOR_JOINER = " & "
 
-#: Below this, an author fragment says nothing worth the bytes, so the
-#: author is dropped rather than reduced to initials.
-MIN_AUTHOR_BYTES = 8
+#: Contributors named in full before the list collapses to "First et al.".
+#: Two keeps the common co-authored book whole: the surveyed library holds 62
+#: books with two contributors and 16 with more.
+MAX_NAMED_AUTHORS = 2
+
+#: When both halves cannot fit, the author is held to this fraction of the
+#: budget, so neither a runaway title nor a runaway author squeezes the other
+#: out entirely.
+AUTHOR_BUDGET_SHARE = 3
 
 
 class PortableNamesUnavailableError(RuntimeError):
@@ -483,41 +489,48 @@ def compose_metadata_name(
 
 def _fit(author: str, title: str, budget: int) -> str:
     """
-    Spend a tight byte budget on the author, so the title stays whole.
+    Keep both halves of the name present and within the byte budget.
 
-    Clamping used to trim the end of ``Author - Title``, which is the title. A
-    real anthology came out as ``... & Wecks, Erik - The Time Travel.epub``,
-    keeping all fourteen contributors and losing "Chronicles". The title is how
-    a person finds the book, so it is what gets protected.
+    Two failure modes, pulling opposite ways, and both were real.
+
+    A contributor list eats the title. Publishers put a book's whole list in
+    one field joined with " & ", and clamping trims the end of
+    ``Author - Title`` -- which is the title. An anthology came out as
+    ``... & Wecks, Erik - The Time Travel.epub``, keeping fourteen contributors
+    and losing "Chronicles". Beyond :data:`MAX_NAMED_AUTHORS` the list
+    collapses to its first name and "et al.", which is what other library tools
+    produce. That happens on the count, not on whether the bytes happen to fit:
+    a twelve-author list came to 244 bytes, fit inside 255, and was written out
+    in full. A 244-byte filename is not a usable filename.
+
+    A runaway title eats the author. One book's ``dc:title`` is its entire
+    jacket blurb. Dropping the author there defeats the only thing this policy
+    exists to do, so the author keeps its share and the title is trimmed
+    instead.
 
     :param author: The author, already chosen and stripped.
-    :param title: The title, kept whole wherever it fits.
+    :param title: The title.
     :param budget: Bytes available for the stem, or 0 for no clamping.
 
     :return: The stem to write, extension excluded.
     """
+    named = [part.strip() for part in author.split(AUTHOR_JOINER) if part.strip()]
+    if len(named) > MAX_NAMED_AUTHORS:
+        author = f"{named[0]} et al."
+
     stem = f"{author} - {title}"
     if not budget or len(encode_name(stem)) <= budget:
         return stem
 
-    # Publishers put a book's whole contributor list in one field, joined with
-    # " & ". The first name plus "et al." is what a reader expects and what
-    # other library tools produce.
-    if AUTHOR_JOINER in author:
-        shortened = f"{author.split(AUTHOR_JOINER)[0].strip()} et al."
-        stem = f"{shortened} - {title}"
-        if len(encode_name(stem)) <= budget:
-            return stem
-        author = shortened
+    # Neither half may crowd the other out. The author takes the smaller of
+    # what it needs and its share; the title takes everything left.
+    share = budget // AUTHOR_BUDGET_SHARE
+    if len(encode_name(author)) > share:
+        author = truncate_bytes(author, share).rstrip(" .,&") or "_"
 
-    room = budget - len(encode_name(f" - {title}"))
-    if room >= MIN_AUTHOR_BYTES:
-        trimmed = truncate_bytes(author, room).rstrip(" .,&") or "_"
-        return f"{trimmed} - {title}"
-
-    # The title alone does not fit, so there is nothing left to protect. One
-    # book in a real library has its entire jacket blurb as dc:title.
-    return title
+    room = budget - len(encode_name(f"{author} - "))
+    trimmed = truncate_bytes(title, max(room, 1)).rstrip(" .") or "_"
+    return f"{author} - {trimmed}"
 
 
 def build_policy(
