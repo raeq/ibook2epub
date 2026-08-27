@@ -252,10 +252,56 @@ def _element(members: _Members, name: str) -> ElementTree.Element:
 
     :raises ValidationError: If the member is missing or not valid XML.
     """
+    data = members.read(name)
+    if _declares_entities(data):
+        raise ValidationError(f"{name} declares XML entities, which are not allowed")
     try:
-        return ElementTree.fromstring(members.read(name))
+        return ElementTree.fromstring(data)
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{name} is not valid XML: {exc}") from exc
+
+
+def _declares_entities(data: bytes) -> bool:
+    """
+    Report whether a document declares XML entities.
+
+    A package document is attacker-controlled, and an entity declaration lets a
+    small file expand into a large one. :data:`MAX_XML_BYTES` cannot see it: the
+    cap measures the file, and the expansion happens after it is read.
+
+    expat has capped the amplification factor since 2.4, so a current Python
+    already refuses the classic attack. That protection is implicit, silent and
+    version-dependent, and this tool supports Python 3.10 and newer. The rule is
+    stated here so it belongs to the tool rather than to whichever expat the
+    interpreter was built against.
+
+    Only the ``DOCTYPE`` declaration is scanned, because that is the one place
+    an entity may be declared. Scanning the whole document would refuse a book
+    that merely writes about entities in its title.
+
+    :param data: The raw bytes of the document.
+
+    :return: True if a ``DOCTYPE`` internal subset declares any entity.
+    """
+    start = data.find(b"<!DOCTYPE")
+    if start < 0:
+        return False
+
+    # Walk to the declaration's own ">", ignoring any inside the "[...]"
+    # internal subset. An unterminated declaration falls out at end of input
+    # and is treated as declaring whatever it contains, which fails closed.
+    depth = 0
+    index = start
+    while index < len(data):
+        char = data[index : index + 1]
+        if char == b"[":
+            depth += 1
+        elif char == b"]":
+            depth -= 1
+        elif char == b">" and depth <= 0:
+            break
+        index += 1
+    return b"<!ENTITY" in data[start:index]
 
 
 def _opf_path(members: _Members) -> str:

@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A package document is read once per run rather than twice. Planning and
+  orphan detection each named every package, and naming reads a package
+  document per book under `--name-by author-title`, so a real 2,805-book
+  library was parsed 5,610 times for one listing. The two share an assignment
+  when nothing narrowed the selection; under `--match` or `-m` they still name
+  their own sets, because the shelf is judged against the whole library and the
+  run against the subset.
+
+### Security
+
+- XML entity declarations in a package document or container are refused. An
+  entity lets a small file expand into a large one, and the size cap cannot see
+  it — the cap measures the file, the expansion happens after. expat has capped
+  the amplification factor since 2.4, so a current Python already refuses the
+  classic attack; the rule is stated here so it belongs to the tool rather than
+  to whichever expat the interpreter was built against. Of 2,804 package
+  documents in a real library, one carries a `DOCTYPE` and none declares an
+  entity, so nothing real is refused.
+
 ## [2.0.2] - 2026-08-26
 
 ### Fixed
@@ -174,6 +197,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.2...HEAD
 [2.0.2]: https://github.com/raeq/ibook2epub/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/raeq/ibook2epub/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/raeq/ibook2epub/compare/v1.2.1...v2.0.0

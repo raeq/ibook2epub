@@ -14,11 +14,20 @@ really be written.
 
 import asyncio
 import os
+from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
-from epubconvert import archive, convert, inspect_output, planning, run, source
+from epubconvert import (
+    archive,
+    convert,
+    inspect_output,
+    planning,
+    run,
+    source,
+    validate,
+)
 from epubconvert.naming import PassthroughNaming
-from tests.conftest import make_package
+from tests.conftest import make_metadata_package, make_package
 
 
 class TestCompressionLevelIsActuallyApplied:
@@ -213,3 +222,77 @@ class TestTheProductionSeamIsCovered:
         report = asyncio.run(convert.export_packages(packages, output_dir))
 
         assert report.exported == 1
+
+
+class TestThePackageDocumentIsReadOnce:
+    """
+    ``find_orphans`` and ``plan_exports`` each named every package, so a
+    metadata policy parsed every package document twice. Measured on a real
+    2,805-book library: 5,610 reads, exactly 2.00x, about half of a 2.42s
+    listing.
+
+    The two callers see the same list on a full run and different lists under
+    ``--match`` or ``-m``, so the work is shared only when the lists agree.
+    """
+
+    @staticmethod
+    def _reads(monkeypatch, library: Path, output_dir: Path, *extra: str) -> list[Path]:
+        seen: list[Path] = []
+        original = validate.read_package_dir
+
+        def counting(package: Path):
+            seen.append(package)
+            return original(package)
+
+        monkeypatch.setattr(planning, "read_package_dir", counting)
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q", *extra])
+        return seen
+
+    def test_a_full_run_reads_each_package_once(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        for index in range(4):
+            make_metadata_package(library, f"Book {index}.epub", title=f"Book {index}")
+
+        seen = self._reads(
+            monkeypatch, library, output_dir, "--name-by", "author-title"
+        )
+
+        assert len(seen) == 4
+        assert len(set(seen)) == 4
+
+    def test_the_default_policy_still_reads_nothing(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        for index in range(4):
+            make_metadata_package(library, f"Book {index}.epub", title=f"Book {index}")
+
+        assert self._reads(monkeypatch, library, output_dir) == []
+
+    def test_a_filtered_run_still_names_the_whole_library_for_orphans(
+        self, tmp_path, output_dir, capsys
+    ):
+        # --match narrows the run, not the library: the books it excludes must
+        # not be reported as abandoned. Sharing must not break that.
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Dune.epub", title="Dune")
+        make_metadata_package(library, "Hobbit.epub", title="The Hobbit")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        capsys.readouterr()
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "--match",
+                "dune",
+                "--list",
+                "-q",
+            ]
+        )
+
+        assert "orphan" not in capsys.readouterr().out

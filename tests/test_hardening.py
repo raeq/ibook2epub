@@ -13,6 +13,7 @@ them cost something.
 
 import errno
 import logging
+from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -290,3 +291,123 @@ class TestPlatformsWithoutStatFlags:
         source.dataless_detection_available.cache_clear()
 
         assert source.has_dataless_files(package) is False
+
+
+class TestEntityDeclarationsAreRefused:
+    """
+    A package document is attacker-controlled data. XML entity declarations
+    let a small file expand into a large one -- the billion-laughs attack --
+    and the size cap cannot see it, because the cap measures the file and the
+    expansion happens after.
+
+    expat has capped the amplification factor since 2.4, so this is already
+    refused on a current Python. That protection is implicit, version-
+    dependent and silent, and this tool supports Python 3.10+. The guard makes
+    the rule the tool's own, and testable.
+
+    Safe to enforce: of 2,804 package documents in a real library, one carries
+    a DOCTYPE and none declares an entity.
+    """
+
+    @staticmethod
+    def _package(tmp_path: Path, opf: str) -> Path:
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "container.xml").write_text(
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="c.opf"/></rootfiles></container>',
+            encoding="utf-8",
+        )
+        (package / "c.opf").write_text(opf, encoding="utf-8")
+        return package
+
+    def test_an_expanding_entity_is_refused(self, tmp_path):
+        opf = (
+            '<?xml version="1.0"?>\n<!DOCTYPE package [\n'
+            '<!ENTITY a "aaaaaaaaaa">\n'
+            '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">\n]>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>&b;</dc:title></metadata><manifest/><spine/></package>"
+        )
+
+        with pytest.raises(validate.ValidationError, match="entities"):
+            validate.read_package_dir(self._package(tmp_path, opf))
+
+    def test_a_parameter_entity_is_refused(self, tmp_path):
+        opf = (
+            '<?xml version="1.0"?>\n<!DOCTYPE package [<!ENTITY % a "x">]>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata/>'
+            "<manifest/><spine/></package>"
+        )
+
+        with pytest.raises(validate.ValidationError, match="entities"):
+            validate.read_package_dir(self._package(tmp_path, opf))
+
+    def test_a_doctype_without_entities_is_allowed(self, tmp_path):
+        # One real book in a 2,804-package library has a bare DOCTYPE.
+        opf = (
+            '<?xml version="1.0"?>\n<!DOCTYPE package>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>Real Book</dc:title></metadata>"
+            '<manifest><item id="t" href="t.xhtml" media-type="text/html"/></manifest>'
+            '<spine><itemref idref="t"/></spine></package>'
+        )
+
+        assert validate.read_package_dir(self._package(tmp_path, opf)).title == (
+            "Real Book"
+        )
+
+    def test_entity_like_text_in_the_body_is_not_a_declaration(self, tmp_path):
+        # The guard reads the DOCTYPE declaration, not the whole document, so
+        # a book that merely writes about entities still parses.
+        opf = (
+            '<?xml version="1.0"?>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>On &lt;!ENTITY a&gt; and other XML</dc:title></metadata>"
+            '<manifest><item id="t" href="t.xhtml" media-type="text/html"/></manifest>'
+            '<spine><itemref idref="t"/></spine></package>'
+        )
+
+        assert validate.read_package_dir(self._package(tmp_path, opf)).title == (
+            "On <!ENTITY a> and other XML"
+        )
+
+    def test_the_container_is_guarded_too(self, tmp_path):
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "container.xml").write_text(
+            '<?xml version="1.0"?>\n<!DOCTYPE container [<!ENTITY a "x">]>\n'
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="c.opf"/></rootfiles></container>',
+            encoding="utf-8",
+        )
+
+        with pytest.raises(validate.ValidationError, match="entities"):
+            validate.read_package_dir(package)
+
+    def test_an_archive_is_guarded_the_same_way(self, tmp_path):
+        # Both readers go through the same member-reading path, so the guard
+        # must not need writing twice.
+        opf = (
+            '<?xml version="1.0"?>\n<!DOCTYPE package [<!ENTITY a "x">]>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata/>'
+            "<manifest/><spine/></package>"
+        )
+        path = tmp_path / "Book.epub"
+        with ZipFile(path, "w") as opened:
+            opened.writestr("mimetype", "application/epub+zip")
+            opened.writestr(
+                "META-INF/container.xml",
+                '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+                '<rootfiles><rootfile full-path="c.opf"/></rootfiles></container>',
+            )
+            opened.writestr("c.opf", opf)
+
+        with (
+            ZipFile(path) as archive_file,
+            pytest.raises(validate.ValidationError, match="entities"),
+        ):
+            validate.read_package(archive_file)

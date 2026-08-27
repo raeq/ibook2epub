@@ -505,7 +505,9 @@ def find_orphans(
     policy: NamingPolicy,
     packages: Sequence[Path],
     on_collision: CollisionMode = SKIP,
+    *,
     claimed_extra: Sequence[str] = (),
+    assigned: Sequence[Assignment] | None = None,
 ) -> list[Path]:
     """
     Find archives on the shelf that no book in the library claims.
@@ -532,11 +534,9 @@ def find_orphans(
 
     :return: Archives no book accounts for, sorted by path.
     """
-    claimed = {
-        filesystem_key(item.identity)
-        for item in assign_names(packages, policy, on_collision)
-        if item.filename
-    }
+    if assigned is None:
+        assigned = assign_names(packages, policy, on_collision)
+    claimed = {filesystem_key(item.identity) for item in assigned if item.filename}
     claimed |= {filesystem_key(policy.identity(name)) for name in claimed_extra}
 
     return sorted(
@@ -566,6 +566,7 @@ def plan_exports(
     output_dir: Path,
     policy: NamingPolicy,
     options: PlanOptions | None = None,
+    assigned: Sequence[Assignment] | None = None,
 ) -> list[Decision]:
     """
     Decide what to do with every package, without doing any of it.
@@ -598,7 +599,9 @@ def plan_exports(
         for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
         if found.is_file()
     }
-    assignments = assign_names(packages, policy, settings.on_collision)
+    if assigned is None:
+        assigned = assign_names(packages, policy, settings.on_collision)
+    assignments = assigned
     # Neither is a failure, and both change what the shelf looks like. A run
     # that says nothing leaves the only way to notice as looking afterwards
     # and wondering.

@@ -51,7 +51,10 @@ from .naming import (
     build_policy,
 )
 from .planning import (
+    Assignment,
+    CollisionMode,
     PlanOptions,
+    assign_names,
     copy_target_name,
     find_orphans,
     orphan_decisions,
@@ -90,6 +93,39 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
         )
 
 
+def _shared_names(
+    packages: Sequence[Path],
+    discovered: Sequence[Path],
+    policy: NamingPolicy,
+    on_collision: CollisionMode,
+) -> list[Assignment] | None:
+    """
+    Name every package once, when both callers want the same answer.
+
+    Planning and orphan detection each name a set of packages, and naming reads
+    a package document per book under a metadata policy -- so computing it in
+    both places read every book twice. Measured on a real 2,805-book library:
+    5,610 reads for one listing.
+
+    They want different sets whenever ``--match`` or ``-m`` narrows the
+    selection: the shelf is judged against the whole library, the run against
+    the subset. Sharing only when the two lists agree keeps that distinction,
+    at the cost of the saving on a filtered run, which is the smaller run
+    anyway.
+
+    :param packages: What this run will convert.
+    :param discovered: Every package in the library.
+    :param policy: The naming policy in force.
+    :param on_collision: The collision mode in force.
+
+    :return: The shared assignment, or None when the callers disagree and each
+        must name its own set.
+    """
+    if list(packages) != list(discovered):
+        return None
+    return assign_names(discovered, policy, on_collision)
+
+
 def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     """
     Render the plan without converting anything.
@@ -102,7 +138,10 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     discovered = collect_package_dirs(args.source_dir)
     copyable = [] if args.no_copy_through else collect_copyable(args.source_dir)
     packages = filter_packages(discovered, args.match)
-    decisions = plan_exports(packages, args.output_dir, policy, _plan_options(args))
+    shared = _shared_names(packages, discovered, policy, args.on_collision)
+    decisions = plan_exports(
+        packages, args.output_dir, policy, _plan_options(args), assigned=shared
+    )
     # Orphans come from the whole library, not this run's filtered subset:
     # --match narrows a run, not the shelf. Files copied through claim their
     # names too, or the shelf would report what this run just put there.
@@ -113,6 +152,7 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             discovered,
             args.on_collision,
             claimed_extra=[copy_target_name(path, policy) for path in copyable],
+            assigned=shared,
         )
     )
     print(render_listing(decisions + orphans, args.as_json))
@@ -193,6 +233,7 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
     report = Report()
     copyable = [] if args.no_copy_through else collect_copyable(args.source_dir)
     report.ignored = count_ignored(args.source_dir, discovered) - len(copyable)
+    shared = _shared_names(packages, discovered, policy, args.on_collision)
     report.orphaned = len(
         find_orphans(
             args.output_dir,
@@ -200,6 +241,7 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
             discovered,
             args.on_collision,
             claimed_extra=[copy_target_name(path, policy) for path in copyable],
+            assigned=shared,
         )
     )
 
@@ -239,7 +281,9 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
             # walks every package in the library, which is minutes of work on
             # a cloud shelf, and a Ctrl-C there produced a raw traceback with
             # no summary and no 130.
-            decisions = plan_exports(packages, args.output_dir, policy, options.plan)
+            decisions = plan_exports(
+                packages, args.output_dir, policy, options.plan, assigned=shared
+            )
             pending_before = count_pending_decisions(decisions)
             selected = cap_exports(
                 decisions, args.max_export_files, randomise=not args.no_shuffle

@@ -186,6 +186,41 @@ class TestInterrupt:
 
 
 class TestDiskFloor:
+    def test_a_later_book_is_stopped_when_space_runs_out_mid_run(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # The pre-export check catches a volume that is already full. This is
+        # the other half of the rule: the volume fills up *during* the run, and
+        # the sampled mid-export check has to stop the rest. Only the first
+        # half had a test, so convert.py's mid-export branch never ran.
+        library = tmp_path / "lib"
+        for index in range(4):
+            make_package(library, f"Book {index}.epub")
+
+        # One worker means the sampling interval is already one book, so
+        # every book re-measures: the first sees room, the rest do not.
+        readings = iter([10_000] + [1] * 20)
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: next(readings, 1))
+
+        code = run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--min-free",
+                "100",
+                "-w",
+                "1",
+                "-q",
+            ]
+        )
+
+        assert code == 1
+        assert len(list(output_dir.glob("*.epub"))) < 4
+
     def test_export_stops_when_space_is_short(self, tmp_path, output_dir, monkeypatch):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
