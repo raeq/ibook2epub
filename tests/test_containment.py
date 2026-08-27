@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import contained, source, validate
+from epubconvert import contained, inspect_output, source, validate
 from tests.conftest import make_package
 
 OUTSIDE_OPF = """<package xmlns="http://www.idpf.org/2007/opf"
@@ -240,3 +240,55 @@ class TestTheRuleFailsClosed:
         monkeypatch.setattr(Path, "resolve", unresolvable)
 
         assert contained.contains(package, member, resolved_root=resolved) is False
+
+
+class TestTheCoverIsReadThroughTheRule:
+    """
+    Cover extraction resolved its source through the rule and then reopened it
+    with ``shutil.copyfile``, which follows symlinks. That is the check-then-
+    open window ``open_contained``'s O_NOFOLLOW exists to close, reopened by
+    the one reader that did not use it.
+    """
+
+    def test_no_module_copies_a_file_outside_the_rule(self):
+        # Derived rather than remembered: shutil.copyfile opens its source with
+        # a plain open(), so a package member must never be read that way. The
+        # census is taken from the source, not from a list in a docstring.
+        offenders = []
+        for path in sorted(Path("epubconvert").glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr in {
+                    "copyfile",
+                    "copy",
+                    "copy2",
+                }:
+                    offenders.append(f"{path}:{node.lineno}")
+
+        assert offenders == [], f"read through open_contained instead: {offenders}"
+
+    def test_a_symlinked_cover_is_not_extracted(self, tmp_path):
+        secret = tmp_path / "secret.jpg"
+        secret.write_bytes(b"not the cover")
+        package = tmp_path / "Book.epub"
+        (package / "OEBPS").mkdir(parents=True)
+        (package / "OEBPS" / "cover.jpg").symlink_to(secret)
+        (package / "META-INF").mkdir()
+        (package / "META-INF" / "container.xml").write_text(
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OEBPS/c.opf"/></rootfiles></container>',
+            encoding="utf-8",
+        )
+        (package / "OEBPS" / "c.opf").write_text(
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata/>'
+            '<manifest><item id="cover" href="cover.jpg" media-type="image/jpeg"'
+            ' properties="cover-image"/></manifest>'
+            '<spine><itemref idref="cover"/></spine></package>',
+            encoding="utf-8",
+        )
+        archive_path = tmp_path / "out" / "Book.epub"
+        archive_path.parent.mkdir()
+        archive_path.write_bytes(b"stand-in")
+
+        assert inspect_output.extract_cover(package, archive_path) is None
+        assert not (tmp_path / "out" / "Book.jpg").exists()

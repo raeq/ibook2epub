@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import unquote, urldefrag
 from xml.etree import ElementTree
+from xml.parsers import expat
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
 from .app_logger import logger
@@ -275,33 +276,27 @@ def _declares_entities(data: bytes) -> bool:
     stated here so it belongs to the tool rather than to whichever expat the
     interpreter was built against.
 
-    Only the ``DOCTYPE`` declaration is scanned, because that is the one place
-    an entity may be declared. Scanning the whole document would refuse a book
-    that merely writes about entities in its title.
+    Asked of the parser rather than worked out by reading the bytes. Two
+    hand-written scans of the ``DOCTYPE`` declaration were defeated in turn --
+    first by a ``SYSTEM`` identifier containing ``>``, then by a comment holding
+    a decoy ``<!DOCTYPE`` -- because each had to re-derive where the declaration
+    starts and ends. expat already knows, so it is asked.
+
+    A malformed document is left alone here and refused by the parse that
+    follows, which reports it better.
 
     :param data: The raw bytes of the document.
 
-    :return: True if a ``DOCTYPE`` internal subset declares any entity.
+    :return: True if the document declares any entity.
     """
-    start = data.find(b"<!DOCTYPE")
-    if start < 0:
+    parser = expat.ParserCreate()
+    declared: list[int] = []
+    parser.EntityDeclHandler = lambda *_args: declared.append(1)
+    try:
+        parser.Parse(data, True)
+    except expat.ExpatError:
         return False
-
-    # Walk to the declaration's own ">", ignoring any inside the "[...]"
-    # internal subset. An unterminated declaration falls out at end of input
-    # and is treated as declaring whatever it contains, which fails closed.
-    depth = 0
-    index = start
-    while index < len(data):
-        char = data[index : index + 1]
-        if char == b"[":
-            depth += 1
-        elif char == b"]":
-            depth -= 1
-        elif char == b">" and depth <= 0:
-            break
-        index += 1
-    return b"<!ENTITY" in data[start:index]
+    return bool(declared)
 
 
 def _opf_path(members: _Members) -> str:

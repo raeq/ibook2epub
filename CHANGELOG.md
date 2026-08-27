@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Encryption is judged per block rather than per document. A book declaring one
+  font-obfuscation block and one block naming no algorithm passed as
+  unprotected, because the check counted blocks and collected algorithms as two
+  flat totals and only fired when *no* block anywhere named one. Such a book
+  exported as an archive that will not open and was recorded as finished work,
+  which rerun safety then skips for ever — the exact failure the per-document
+  check had been written to prevent.
+- A copy interrupted part-way through is counted. `--no-copy-through`'s
+  counterpart returned a total assigned only once the whole loop finished, so a
+  Ctrl-C reported nothing copied while the files were already on disk.
+
+### Security
+
+- Cover extraction reads through `open_contained` like every other reader.
+  `shutil.copyfile` opens its source with a plain `open()`, which follows a
+  symlink, so resolving the path and then copying it reopened the
+  check-then-open window `O_NOFOLLOW` exists to close. A test now fails the
+  build if any module copies a file that way.
+- The entity-declaration guard asks the parser instead of reading the bytes.
+  Two hand-written scans of the `DOCTYPE` declaration were defeated in turn —
+  first by a `SYSTEM` identifier containing `>`, then by a comment holding a
+  decoy `<!DOCTYPE` — because each had to re-derive where the declaration
+  begins and ends. expat already knows, so it is asked.
+
 ## [2.0.3] - 2026-08-27
 
 ### Fixed
@@ -197,6 +225,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.3...HEAD
 [2.0.3]: https://github.com/raeq/ibook2epub/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/raeq/ibook2epub/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/raeq/ibook2epub/compare/v2.0.0...v2.0.1

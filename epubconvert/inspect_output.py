@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .app_logger import logger
-from .contained import is_free, resolve
+from .contained import is_free, open_contained, resolve
 from .display import printable
 from .spec import PACKAGE_SUFFIX
 from .validate import ValidationError, ValidationOptions, read_package_dir
@@ -113,8 +113,15 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
 
         # Streamed rather than read whole: one copy per worker, and the pool
         # is now sized for blocking work, so a 5 MB cover at 64 workers is a
-        # 320 MB transient this does not need. On APFS this may also clone.
-        shutil.copyfile(source, cover)
+        # 320 MB transient this does not need.
+        #
+        # Through open_contained like every other reader. shutil.copyfile opens
+        # its source with a plain open(), which follows a symlink -- so
+        # resolving the path and then copying it reopened the check-then-open
+        # window O_NOFOLLOW exists to close, in the one reader that did not use
+        # it.
+        with open_contained(source) as reading, cover.open("wb") as writing:
+            shutil.copyfileobj(reading, writing)
     except (OSError, ValueError, ValidationError) as exc:
         logger.debug("No cover for %s: %s", printable(target_archive.name), exc)
         return None

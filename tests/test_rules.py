@@ -822,3 +822,81 @@ class TestBothReadersReportTheSameFault:
             validate.read_package_dir(package)
 
         assert "META-INF/container.xml" in str(raised.value)
+
+
+class TestRuleEveryEncryptedBlockNamesItsAlgorithm:
+    """
+    Encryption is judged per block, not per document.
+
+    A block that names no algorithm is still a declaration that something is
+    encrypted -- XML Encryption lets the algorithm travel out of band -- and
+    the rule is that an unreadable encryption state fails closed.
+
+    The check counted blocks and collected algorithms as two flat,
+    document-wide totals, so it only fired when *no* block anywhere named an
+    algorithm. A book with one font-obfuscation block and one block naming
+    nothing passed as unprotected, exported as an archive that will not open,
+    and was recorded as finished work that rerun safety then skips for ever.
+    """
+
+    NS = 'xmlns="http://www.w3.org/2001/04/xmlenc#"'
+    FONT = "http://www.idpf.org/2008/embedding"
+
+    def _package(self, tmp_path, encryption: str):
+        package = tmp_path / "Book.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "encryption.xml").write_text(
+            encryption, encoding="utf-8"
+        )
+        return package
+
+    def test_a_lone_block_naming_nothing_fails_closed(self, tmp_path):
+        package = self._package(
+            tmp_path,
+            f"<encryption {self.NS}><EncryptedData><CipherData/>"
+            "</EncryptedData></encryption>",
+        )
+
+        protected, _reason = source.has_drm(package)
+
+        assert protected is True
+
+    def test_font_obfuscation_alone_is_not_protection(self, tmp_path):
+        package = self._package(
+            tmp_path,
+            f"<encryption {self.NS}><EncryptedData>"
+            f'<EncryptionMethod Algorithm="{self.FONT}"/>'
+            "</EncryptedData></encryption>",
+        )
+
+        assert source.has_drm(package)[0] is False
+
+    def test_one_silent_block_beside_a_named_one_still_fails_closed(self, tmp_path):
+        # The gap: the document as a whole named an algorithm, so the guard
+        # never fired, and the silent block went unnoticed.
+        package = self._package(
+            tmp_path,
+            f"<encryption {self.NS}>"
+            f"<EncryptedData><EncryptionMethod"
+            f' Algorithm="{self.FONT}"/></EncryptedData>'
+            "<EncryptedData><CipherData/></EncryptedData>"
+            "</encryption>",
+        )
+
+        protected, reason = source.has_drm(package)
+
+        assert protected is True
+        assert reason is not None
+
+    def test_several_named_blocks_are_judged_on_their_algorithms(self, tmp_path):
+        package = self._package(
+            tmp_path,
+            f"<encryption {self.NS}>"
+            f"<EncryptedData><EncryptionMethod"
+            f' Algorithm="{self.FONT}"/></EncryptedData>'
+            "<EncryptedData><EncryptionMethod"
+            ' Algorithm="urn:fairplay"/></EncryptedData>'
+            "</encryption>",
+        )
+
+        assert source.has_drm(package)[0] is True

@@ -363,3 +363,38 @@ class TestRenamedCopiesStayConsistentWithTheShelf:
 
         assert written.stat().st_mtime_ns == stamp
         assert "copied" not in capsys.readouterr().out
+
+
+class TestAnInterruptedCopyStillCounts:
+    """
+    ``convert``'s docstring promises a Ctrl-C cannot leave the summary
+    disagreeing with the directory. Copy-through returned a total that was
+    assigned only once the whole loop finished, so an interrupt part-way
+    through reported nothing copied while the files were already on disk --
+    written through the same atomic replace as everything else.
+    """
+
+    def test_files_copied_before_an_interrupt_are_reported(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        for index in range(4):
+            _zipped_book(library / f"Book {index}.epub")
+
+        real = archive.copy_through
+        done = {"n": 0}
+
+        def stop_after_two(source, target):
+            if done["n"] >= 2:
+                raise KeyboardInterrupt
+            done["n"] += 1
+            return real(source, target)
+
+        monkeypatch.setattr(run, "copy_through", stop_after_two)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        assert code == 130
+        assert len(list(output_dir.glob("*.epub"))) == 2
+        assert "2 copied" in capsys.readouterr().out

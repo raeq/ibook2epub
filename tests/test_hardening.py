@@ -344,6 +344,32 @@ class TestEntityDeclarationsAreRefused:
         with pytest.raises(validate.ValidationError, match="entities"):
             validate.read_package_dir(self._package(tmp_path, opf))
 
+    def test_a_quoted_angle_bracket_does_not_end_the_scan(self, tmp_path):
+        # A SYSTEM identifier may contain ">". Walking to the first unbracketed
+        # ">" stopped inside the quotes and missed the declaration that
+        # followed, while expat parsed the document perfectly happily.
+        opf = (
+            '<?xml version="1.0"?>\n'
+            '<!DOCTYPE package SYSTEM "a>b" [<!ENTITY x "yyy">]>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>&x;</dc:title></metadata><manifest/><spine/></package>"
+        )
+
+        with pytest.raises(validate.ValidationError, match="entities"):
+            validate.read_package_dir(self._package(tmp_path, opf))
+
+    def test_a_single_quoted_angle_bracket_is_handled_too(self, tmp_path):
+        opf = (
+            '<?xml version="1.0"?>\n'
+            "<!DOCTYPE package SYSTEM 'a>b' [<!ENTITY x \"yyy\">]>\n"
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata/>'
+            "<manifest/><spine/></package>"
+        )
+
+        with pytest.raises(validate.ValidationError, match="entities"):
+            validate.read_package_dir(self._package(tmp_path, opf))
+
     def test_a_doctype_without_entities_is_allowed(self, tmp_path):
         # One real book in a 2,804-package library has a bare DOCTYPE.
         opf = (
@@ -411,3 +437,30 @@ class TestEntityDeclarationsAreRefused:
             pytest.raises(validate.ValidationError, match="entities"),
         ):
             validate.read_package(archive_file)
+
+    def test_a_comment_holding_a_decoy_doctype_does_not_hide_a_declaration(
+        self, tmp_path
+    ):
+        # The second bypass of a hand-written scan: the scan found the decoy
+        # inside the comment, stopped at the comment's own ">", and never
+        # reached the real declaration. expat is not fooled, so it is asked.
+        opf = (
+            "<!--decoy <!DOCTYPE z -->\n"
+            '<!DOCTYPE package [<!ENTITY x "PAYLOAD">]>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>&x;</dc:title></metadata><manifest/><spine/></package>"
+        )
+
+        with pytest.raises(validate.ValidationError, match="entities"):
+            validate.read_package_dir(self._package(tmp_path, opf))
+
+    def test_an_external_entity_is_refused_as_a_declaration(self, tmp_path):
+        opf = (
+            '<!DOCTYPE package [<!ENTITY x SYSTEM "file:///etc/passwd">]>\n'
+            '<package xmlns="http://www.idpf.org/2007/opf"><metadata/>'
+            "<manifest/><spine/></package>"
+        )
+
+        with pytest.raises(validate.ValidationError, match="entities"):
+            validate.read_package_dir(self._package(tmp_path, opf))

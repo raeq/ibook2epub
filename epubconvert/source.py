@@ -113,27 +113,30 @@ def encryption_algorithms(package: Path) -> set[str]:
     except ElementTree.ParseError as exc:
         raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not valid XML") from exc
 
+    # Judged per block, not per document. A block that names no algorithm is
+    # still a declaration that something is encrypted -- XML Encryption allows
+    # the algorithm to travel out of band -- and the book would export as an
+    # archive that will not open, recorded as finished work that rerun safety
+    # then skips for ever. Every other unreadable state here fails closed.
+    #
+    # Counting blocks and algorithms as two flat totals only caught the case
+    # where *no* block anywhere named one: a book with one font-obfuscation
+    # block and one silent block passed as unprotected.
     algorithms: set[str] = set()
-    blocks = 0
-    for element in root.iter():
-        local = element.tag.rpartition("}")[2]
-        if local == ENCRYPTED_DATA:
-            blocks += 1
-        if local != ENCRYPTION_METHOD:
+    for block in root.iter():
+        if block.tag.rpartition("}")[2] != ENCRYPTED_DATA:
             continue
-        algorithm = element.get("Algorithm")
-        if algorithm:
-            algorithms.add(algorithm)
-
-    # A block that names no algorithm is still a declaration that something is
-    # encrypted; XML Encryption allows the algorithm to travel out of band.
-    # Returning an empty set read as "no protection", so the book exported as
-    # an unopenable archive and was recorded as finished work. Every other
-    # unreadable state here fails closed; this one failed open.
-    if blocks and not algorithms:
-        raise UnreadableEncryptionError(
-            f"{ENCRYPTION_PATH} declares encryption but names no algorithm"
-        )
+        named = {
+            method.get("Algorithm")
+            for method in block.iter()
+            if method.tag.rpartition("}")[2] == ENCRYPTION_METHOD
+            and method.get("Algorithm")
+        }
+        if not named:
+            raise UnreadableEncryptionError(
+                f"{ENCRYPTION_PATH} declares encryption but names no algorithm"
+            )
+        algorithms |= {name for name in named if name}
     return algorithms
 
 

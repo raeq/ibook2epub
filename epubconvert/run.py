@@ -276,7 +276,7 @@ def _run_export(args: argparse.Namespace, policy: NamingPolicy) -> tuple[Report,
         pending_before = 0
         try:
             if not args.dry_run:
-                report.copied = _copy_through_all(copyable, args.output_dir, policy)
+                _copy_through_all(copyable, args.output_dir, policy, report)
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
             # a cloud shelf, and a Ctrl-C there produced a raw traceback with
@@ -331,8 +331,8 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
 
 
 def _copy_through_all(
-    copyable: Sequence[Path], output_dir: Path, policy: NamingPolicy
-) -> int:
+    copyable: Sequence[Path], output_dir: Path, policy: NamingPolicy, report: Report
+) -> None:
     """
     Put already-valid books on the shelf without converting them.
 
@@ -344,10 +344,10 @@ def _copy_through_all(
     :param output_dir: Directory to copy into.
     :param policy: Naming policy, so a copied file is named the same way a
         converted one is.
-
-    :return: How many were copied this run.
+    :param report: Counted into as each file lands, rather than totalled and
+        returned at the end. A Ctrl-C part-way through left the summary saying
+        nothing was copied while the files were already on disk.
     """
-    copied = 0
     for source in copyable:
         target = output_dir / copy_target_name(source, policy)
         if target.exists():
@@ -357,9 +357,8 @@ def _copy_through_all(
         except OSError as exc:
             logger.error("Could not copy %s: %s", printable(source.name), exc)
             continue
-        copied += 1
+        report.copied += 1
         logger.info("Copied %s", printable(source.name))
-    return copied
 
 
 def _check_environment(args: argparse.Namespace) -> int | None:
