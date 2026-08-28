@@ -11,6 +11,9 @@ itself before it is cut.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import os
+import subprocess
+import sys
 from importlib import metadata
 from pathlib import Path
 
@@ -139,3 +142,56 @@ class TestTheCoverageGateActuallyFailsTheBuild:
 
         assert results.should_fail_under(96.92, 97, 0) is False  # what shipped
         assert results.should_fail_under(96.92, 97, 2) is True  # configured
+
+
+class TestTheReadmeQuotesTheRealHelp:
+    """
+    The README pastes ``--help`` into a fenced block, and a paste goes stale
+    the moment a flag is added. It has twice: once when the annotation flags
+    landed, and again when ``--annotations-format`` did, each time leaving the
+    README describing a command line that no longer existed.
+
+    Derived rather than eyeballed, so adding a flag without regenerating the
+    block fails here.
+    """
+
+    def _quoted(self) -> str:
+        lines = (ROOT / "README.md").read_text(encoding="utf-8").split("\n")
+        start = next(
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == "```text" and lines[index + 1].startswith("usage:")
+        )
+        end = next(
+            index
+            for index, line in enumerate(lines)
+            if line.strip() == "```" and index > start
+        )
+        return "\n".join(lines[start + 1 : end])
+
+    def _real(self) -> str:
+        # The width matters: argparse wraps to COLUMNS, so a block generated at
+        # a different width differs everywhere and says nothing useful.
+        return subprocess.run(
+            [sys.executable, "-m", "epubconvert", "--help"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=ROOT,
+            env={**os.environ, "COLUMNS": "79"},
+        ).stdout.rstrip()
+
+    def test_the_block_is_what_the_program_prints(self):
+        assert self._quoted() == self._real()
+
+    def test_every_flag_the_parser_takes_is_in_the_block(self):
+        # A second question the exact match already answers, kept because it
+        # names what went wrong when it fails.
+        quoted = self._quoted()
+        missing = [
+            action
+            for action in ("--annotations-format", "-ao", "-ad", "-ae", "-ar", "-an")
+            if action not in quoted
+        ]
+
+        assert missing == []

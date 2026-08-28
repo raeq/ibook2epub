@@ -172,7 +172,8 @@ killed run is inert and needs no cleanup.
 usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
                   [--version] [-f] [--match PATTERN] [-w N] [-p [MODE]]
                   [--list] [--json] [--refresh] [--skip-incomplete] [-an]
-                  [-ae] [-ad [FILE]] [-ao [FILE]] [-ar]
+                  [-ae] [-ad [FILE]] [-ao [FILE]]
+                  [--annotations-format {json,markdown}] [-ar]
                   [--name-by {passthrough,author-title}]
                   [--on-collision {skip,suffix}] [--min-free MB]
                   [--no-copy-through] [--covers] [--validate] [--epubcheck]
@@ -314,6 +315,13 @@ Your highlights and notes:
                         conversion, no shelf. For somebody who wants their
                         highlights and not three thousand epub files. With no
                         FILE, or with '-', it goes to standard output.
+  --annotations-format {json,markdown}
+                        Shape of the detached export. 'json' is the
+                        standards-shaped document the schema describes.
+                        'markdown' writes one note per book into a directory,
+                        for an Obsidian or Logseq vault; with it, the
+                        argument to -ad and -ao names a DIRECTORY rather than
+                        a file. Embedded annotations (-ae) are always JSON.
   -ar, --annotations-refresh
                         Update annotations for books already converted, and
                         convert nothing. A library is converted once and
