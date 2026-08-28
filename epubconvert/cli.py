@@ -224,6 +224,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     annotations.add_argument(
+        "--annotations-format",
+        choices=("json", "markdown"),
+        default="json",
+        help=(
+            "Shape of the detached export. 'json' is the standards-shaped "
+            "document the schema describes. 'markdown' writes one note per "
+            "book into a directory, for an Obsidian or Logseq vault; with it, "
+            "the argument to -ad and -ao names a DIRECTORY rather than a file. "
+            "Embedded annotations (-ae) are always JSON."
+        ),
+    )
+    annotations.add_argument(
         "-ar",
         "--annotations-refresh",
         action="store_true",
@@ -351,6 +363,23 @@ def _check_annotation_flags(
     :param parser: The parser, for reporting the refusal.
     :param args: The parsed arguments.
     """
+    if args.annotations_format == "markdown":
+        if not (args.annotations_detached or args.annotations_only):
+            # The format governs detached output. With no detached destination
+            # there is nothing for it to govern, so the run would convert
+            # normally and write no notes without saying so -- a plausible
+            # first attempt, failing the way this project refuses to fail.
+            parser.error(
+                "--annotations-format markdown needs somewhere to write: pass "
+                "--annotations-detached DIR, or --annotations-only DIR to skip "
+                "converting"
+            )
+        if STDOUT in (args.annotations_detached, args.annotations_only):
+            parser.error(
+                "--annotations-format markdown writes one file per book, so it "
+                "cannot go to standard output; name a directory"
+            )
+
     # An empty FILE is falsy, so every check below it and every use of it read
     # as "not asked for": "-ad ''" silently ran an ordinary conversion.
     for flag in ("annotations_detached", "annotations_only"):

@@ -655,3 +655,33 @@ def replace_annotations(
         partial.unlink(missing_ok=True)
         raise
     return True
+
+
+def write_atomically(target: Path, text: str) -> None:
+    """
+    Replace a file's contents, or leave the old contents alone.
+
+    ``write_text`` truncates before it writes, so a failure partway through --
+    a full disk, a Ctrl-C -- left the export as a prefix of itself, which is
+    neither the old file nor the new one. It is also not valid JSON, so every
+    later run then refused to write to that path at all. The export is the
+    artifact the merge machinery exists to protect; this is the same
+    temporary-then-replace path :func:`~epubconvert.archive.zip_package` uses.
+
+    :param target: The file to replace.
+    :param text: What it should hold.
+
+    :raises OSError: If it could not be written. The old file survives.
+    """
+    handle, temporary = tempfile.mkstemp(
+        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
+    )
+    os.close(handle)
+    partial = Path(temporary)
+    try:
+        partial.chmod(file_mode())
+        partial.write_text(text, encoding="utf-8")
+        partial.replace(target)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
