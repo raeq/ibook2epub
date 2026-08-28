@@ -20,7 +20,7 @@ import pytest
 
 from epubconvert import annotations, cli, notes
 from epubconvert.run import main
-from tests.conftest import make_metadata_package
+from tests.conftest import make_metadata_package, needs_permissions
 from tests.test_annotations import highlight, library_row, make_databases
 
 
@@ -366,6 +366,7 @@ class TestTheSecondRun:
 
 
 class TestWhenTheVaultCannotBeWritten:
+    @needs_permissions
     def test_a_directory_that_cannot_be_created_is_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -388,6 +389,7 @@ class TestWhenTheVaultCannotBeWritten:
         blocked.chmod(0o700)
         assert code != 0
 
+    @needs_permissions
     def test_a_note_that_cannot_be_read_is_left_alone(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):

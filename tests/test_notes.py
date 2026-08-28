@@ -20,6 +20,9 @@ could otherwise forge the marker that ends the tool's own region.
 # restate them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
+# Several rules live in private helpers, and the defect being pinned is in
+# the helper rather than in what the public function does with it.
+# pylint: disable=protected-access
 
 import os
 import signal
@@ -28,7 +31,9 @@ from typing import Any
 
 import pytest
 
-from epubconvert import notes
+from epubconvert import app_logger, notes
+from epubconvert.archive import write_atomically
+from epubconvert.planning import Assignment
 
 # ------------------------------------------------------------------ rendering
 
@@ -496,3 +501,125 @@ class TestTheSidecarCannotTakeAnotherBooksName:
         # Whatever it is called, it must not be picked up as some book's
         # primary note on a later run.
         assert not notes.sidecar_for(Path("Foo.md")).name.endswith(".new.md")
+
+
+class TestFailuresThatDoNotNeedAPermissionBit:
+    """
+    The same failures, driven without ``chmod``.
+
+    CI runs as root, where permission bits are ignored, so every test that
+    reaches these branches by making a file unwritable skips there -- which is
+    how the branches that handle a failed write went uncovered on the machine
+    that gates the build.
+    """
+
+    def _annotations(self) -> list[dict[str, Any]]:
+        return [_annotation()]
+
+    def test_a_write_that_fails_costs_one_note_not_the_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        def refuse(*_args: object, **_kwargs: object) -> None:
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(notes, "write_atomically", refuse)
+
+        assert notes._write_one(tmp_path / "N.md", self._annotations()) == "failed"
+
+    def test_a_read_that_fails_is_not_called_somebody_elses_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        target = tmp_path / "N.md"
+        target.write_text(notes.compose(self._annotations()), encoding="utf-8")
+
+        def refuse(*_args: object, **_kwargs: object) -> str:
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(Path, "read_text", refuse)
+
+        assert notes._write_one(target, self._annotations()) == "unreadable"
+
+    def test_a_path_that_cannot_be_stat_ed_is_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        target = tmp_path / "N.md"
+        target.write_text("x", encoding="utf-8")
+
+        def refuse(*_args: object, **_kwargs: object) -> None:
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(Path, "stat", refuse)
+
+        assert notes.readable(target) is False
+
+    def test_an_unwritable_sidecar_is_reported_as_blocked_not_kept(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # The reader is told their highlights are in a file beside the note.
+        # If that file could not be written, saying so is a false promise.
+        target = tmp_path / "N.md"
+        target.write_text(
+            notes.compose(self._annotations()).replace("> Summary", "> edited"),
+            encoding="utf-8",
+        )
+
+        def refuse_the_sidecar(path: Path, text: str) -> None:
+            if path.name.endswith(notes.SIDECAR_SUFFIX):
+                raise OSError(28, "No space left on device")
+            write_atomically(path, text)
+
+        monkeypatch.setattr(notes, "write_atomically", refuse_the_sidecar)
+
+        assert notes._write_one(target, self._annotations()) == "blocked"
+
+    def test_an_oversized_file_is_skipped_with_a_message(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        app_logger.configure(verbosity=1)
+        target = tmp_path / "Big.md"
+        target.write_text("x" * (notes.MAX_NOTE_BYTES + 1), encoding="utf-8")
+
+        assert notes._write_one(target, self._annotations()) == "unreadable"
+        assert "not a readable note" in capsys.readouterr().err
+
+    def test_a_directory_where_a_note_should_be_is_skipped(self, tmp_path: Path):
+        (tmp_path / "D.md").mkdir()
+
+        assert notes._write_one(tmp_path / "D.md", self._annotations()) == "unreadable"
+
+    def test_a_vault_directory_that_cannot_be_created_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        def refuse(*_args: object, **_kwargs: object) -> None:
+            raise OSError(13, "Permission denied")
+
+        monkeypatch.setattr(Path, "mkdir", refuse)
+
+        assert notes.write_vault(self._annotations(), str(tmp_path / "v"), []) != 0
+
+    def test_the_run_reports_a_failed_write(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        # The package logger does not propagate, so it has to be attached to a
+        # handler for the message to reach stderr the way a real run does.
+        app_logger.configure(verbosity=1)
+
+        def refuse(*_args: object, **_kwargs: object) -> None:
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(notes, "write_atomically", refuse)
+        named = [
+            Assignment(
+                package=Path("Leviathan Wakes.epub"),
+                filename="Leviathan Wakes.epub",
+                identity="Leviathan Wakes.epub",
+            )
+        ]
+
+        code = notes.write_vault(self._annotations(), str(tmp_path / "v"), named)
+
+        assert code != 0
+        assert "could not be written" in capsys.readouterr().err
