@@ -49,8 +49,11 @@ jobs:
       run: |
         python -m pip install --upgrade build
         python -m build
+    # v5 defaulted to Node 20, which GitHub now forces onto Node 24 with a
+    # deprecation warning on every run. v7 targets Node 24 itself; its new
+    # `archive` parameter is opt-in, so this step behaves as before.
     - name: Store distributions
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v7
       with:
         name: dist
         path: dist/
@@ -65,8 +68,11 @@ jobs:
     permissions:
       id-token: write
     steps:
+    # Paired with the upload above. v8 also makes a hash mismatch an error
+    # rather than a warning, which is worth having on the one job that holds
+    # id-token: write.
     - name: Download distributions
-      uses: actions/download-artifact@v6
+      uses: actions/download-artifact@v8
       with:
         name: dist
         path: dist/

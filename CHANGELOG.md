@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The release workflow's artifact actions move to `actions/upload-artifact@v7`
+  and `actions/download-artifact@v8`. v5 defaulted to Node 20, which GitHub now
+  forces onto Node 24 with a deprecation warning on every run. Both new majors
+  target Node 24 themselves, their new parameters are opt-in, and v8 makes a
+  hash mismatch on download an error rather than a warning — worth having on
+  the one job that holds `id-token: write`.
+
 ## [2.2.0] - 2026-08-28
 
 ### Added
