@@ -21,6 +21,9 @@ could otherwise forge the marker that ends the tool's own region.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import os
+import signal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -412,3 +415,84 @@ class TestThingsThatGoWrong:
     def test_a_note_with_no_end_marker_is_not_ours(self):
         note = notes.compose([_annotation()])
         assert notes.split(note.replace(notes.END_MARKER, "")) is None
+
+
+class TestOutcomesTheCallerCanTrust:
+    """
+    ``write_vault`` counts what ``_write_one`` returns and tells the reader
+    what happened. Every one of those sentences has to be true, because the
+    reader acts on them: "your new highlights are in a .new.md beside it" is
+    a promise that something exists.
+    """
+
+    def test_a_note_missing_only_its_end_marker_is_ours_and_kept(self, tmp_path):
+        # split() returning None conflated "not written by this tool" with
+        # "written by it and since edited", so the sidecar was never written
+        # and the reader was told the file was somebody else's.
+        target = tmp_path / "Book.md"
+        target.write_text(
+            notes.compose([_annotation()]).replace(notes.END_MARKER, ""),
+            encoding="utf-8",
+        )
+
+        assert notes.wrote_it(target.read_text(encoding="utf-8")) is True
+
+    def test_a_file_this_tool_never_wrote_is_not_claimed(self):
+        assert notes.wrote_it("# my own note\n") is False
+
+    def test_a_fifo_is_not_read(self, tmp_path):
+        # read_text on a FIFO blocks until a writer appears, which is never.
+        # One of those in a vault froze the whole run.
+        fifo = tmp_path / "F.md"
+        os.mkfifo(fifo)
+
+        def blocked(*_):
+            raise AssertionError("the read blocked")
+
+        signal.signal(signal.SIGALRM, blocked)
+        signal.alarm(3)
+        try:
+            assert notes.readable(fifo) is False
+        finally:
+            signal.alarm(0)
+
+    def test_a_directory_named_like_a_note_is_not_read(self, tmp_path):
+        (tmp_path / "D.md").mkdir()
+        assert notes.readable(tmp_path / "D.md") is False
+
+    def test_an_ordinary_note_is_readable(self, tmp_path):
+        target = tmp_path / "N.md"
+        target.write_text("hello\n", encoding="utf-8")
+        assert notes.readable(target) is True
+
+    def test_a_note_larger_than_the_cap_is_not_read(self, tmp_path):
+        # No cap meant a planted or runaway file was read whole every run.
+        target = tmp_path / "Big.md"
+        target.write_text("x" * (notes.MAX_NOTE_BYTES + 1), encoding="utf-8")
+
+        assert notes.readable(target) is False
+
+    def test_a_note_at_the_cap_is_still_read(self, tmp_path):
+        target = tmp_path / "AtCap.md"
+        target.write_text("x" * notes.MAX_NOTE_BYTES, encoding="utf-8")
+
+        assert notes.readable(target) is True
+
+
+class TestTheSidecarCannotTakeAnotherBooksName:
+    def test_the_sidecar_name_is_one_no_book_can_claim(self):
+        # A book titled "Foo.new" is named "Foo.new.md", which was exactly the
+        # sidecar name for a book titled "Foo" -- so writing one book's
+        # sidecar overwrote a different book's note with the wrong content.
+        assert notes.sidecar_for(Path("Foo.md")).name != "Foo.new.md"
+
+    def test_two_different_books_cannot_share_a_sidecar(self):
+        first = notes.sidecar_for(Path("Foo.md"))
+        second = notes.sidecar_for(Path("Foo.new.md"))
+
+        assert first != second
+
+    def test_a_sidecar_is_not_a_markdown_note_the_next_run_will_adopt(self):
+        # Whatever it is called, it must not be picked up as some book's
+        # primary note on a later run.
+        assert not notes.sidecar_for(Path("Foo.md")).name.endswith(".new.md")

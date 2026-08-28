@@ -202,6 +202,32 @@ def _gather_annotations(
         return None
 
 
+def _write_export(
+    args: argparse.Namespace,
+    found: list[dict[str, Any]],
+    destination: str,
+    named: Sequence[Assignment],
+) -> int:
+    """
+    Write the detached export, in whichever shape this run asked for.
+
+    The one place that decides between a vault of notes and a single JSON
+    document. It was decided at three separate call sites, so a fourth route
+    could have been added without anyone seeing the other three as precedent --
+    the shape of defect this project has shipped four times.
+
+    :param args: Parsed command line arguments.
+    :param found: Every annotation this run read.
+    :param destination: The file or directory named on the command line.
+    :param named: The names this run gave every book.
+
+    :return: A process exit code.
+    """
+    if args.annotations_format == "markdown":
+        return notes.write_vault(found, destination, named)
+    return _write_detached(found, destination)
+
+
 def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
     """
     Write the one-file-per-library export.
@@ -337,11 +363,7 @@ def _annotations_after_export(
     if args.annotations_refresh and found is not None:
         code = _embed_in_shelf(args, policy, found, True, named)
     if code == exits.SUCCESS and args.annotations_detached and found is not None:
-        code = (
-            notes.write_vault(found, args.annotations_detached, named)
-            if args.annotations_format == "markdown"
-            else _write_detached(found, args.annotations_detached)
-        )
+        code = _write_export(args, found, args.annotations_detached, named)
     if args.annotations_embedded and not args.annotations_detached and found:
         _warn_about_stranded(args, found, named)
     return None if code == exits.SUCCESS else code
@@ -424,11 +446,11 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     except AnnotationsUnavailableError as exc:
         logger.critical("Could not read annotations: %s", exc)
         return exits.NO_SOURCE
-    if args.annotations_format == "markdown":
-        # -ao reads Apple's container and nothing else, but a note's filename
-        # comes from the naming policy, so the library still has to be named.
-        return notes.write_vault(found, args.annotations_only, _named(args, policy))
-    return _write_detached(found, args.annotations_only)
+    # -ao reads Apple's container and nothing else, but a note's filename comes
+    # from the naming policy, so the library still has to be named. Naming is
+    # cheap under the default policy and only reached for markdown.
+    named = _named(args, policy) if args.annotations_format == "markdown" else []
+    return _write_export(args, found, args.annotations_only, named)
 
 
 def _apply_annotations(
@@ -476,20 +498,18 @@ def _apply_annotations(
         # when it had been found and used.
         return exits.SUCCESS if converted else exits.NO_SOURCE
 
+    # Named once, here, and passed to everything that needs it. Under a
+    # metadata policy naming re-parses every package document, and computing it
+    # in two places is the 2x read this project has already fixed twice.
+    assignments = list(named) if named is not None else _named(args, policy)
+
     if args.annotations_embedded:
-        code = _embed_in_shelf(args, policy, found, converted, named)
+        code = _embed_in_shelf(args, policy, found, converted, assignments)
         if code != exits.SUCCESS:
             return code
 
     if args.annotations_detached:
-        if args.annotations_format == "markdown":
-            # A note's filename comes from the naming policy, so this route
-            # needs the names too. Reuse the export's assignment when there was
-            # one rather than naming the library a second time.
-            return notes.write_vault(
-                found, args.annotations_detached, named or _named(args, policy)
-            )
-        return _write_detached(found, args.annotations_detached)
+        return _write_export(args, found, args.annotations_detached, assignments)
     return exits.SUCCESS
 
 
@@ -532,13 +552,7 @@ def _embed_in_shelf(
         logger.critical("Output directory does not exist: %s", args.output_dir)
         return exits.NO_OUTPUT
 
-    assignments = (
-        list(named)
-        if named is not None
-        else assign_names(
-            collect_package_dirs(args.source_dir), policy, args.on_collision
-        )
-    )
+    assignments = list(named) if named is not None else _named(args, policy)
     index = index_annotations(found)
     ambiguous = _ambiguous_names(assignments)
 

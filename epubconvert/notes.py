@@ -52,6 +52,20 @@ END_PATTERN = re.compile(r"^<!-- ibook2epub end")
 START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
 START_PATTERN = re.compile(r"^<!-- ibook2epub sha256=([0-9a-f]{16,64}) -->$")
 
+#: Largest note this will read back. A note of a few hundred highlights is
+#: tens of kilobytes; anything past this is a runaway or a planted file, and
+#: reading it whole every run costs twice its size in memory. Mirrors
+#: ``run.MAX_EXPORT_BYTES``, which bounds the JSON export for the same reason.
+MAX_NOTE_BYTES = 8 * 1024 * 1024
+
+#: Suffix for the copy written when a reader has edited the note itself. Not
+#: ``.new.md``: a book titled "Foo.new" is named ``Foo.new.md``, which was
+#: exactly the sidecar name for a book titled "Foo", so one book's sidecar
+#: overwrote another book's note. This suffix ends in ``.md.new`` instead, so
+#: it is not a name any naming policy can produce and not a file a later run
+#: will adopt as some book's note.
+SIDECAR_SUFFIX = ".md.new"
+
 #: How much of the digest to write. Enough that a collision is not a practical
 #: concern and short enough to read.
 DIGEST_LENGTH = 16
@@ -308,6 +322,62 @@ def digest_of(generated: str) -> str:
     return hashlib.sha256(encode_name(generated)).hexdigest()[:DIGEST_LENGTH]
 
 
+def sidecar_for(target: Path) -> Path:
+    """
+    Name the copy written when the reader has edited the note itself.
+
+    :param target: The note that is being left alone.
+
+    :return: A path beside it that no book can be named.
+    """
+    return target.with_name(target.name + SIDECAR_SUFFIX[len(".md") :])
+
+
+def readable(target: Path) -> bool:
+    """
+    Whether this path is a note that can safely be read back.
+
+    Two hazards a plain ``exists()`` misses. A FIFO left in the vault blocks
+    ``read_text`` until a writer appears, which is never, and froze the whole
+    run; ``is_file`` is False for one. And a file far larger than any real note
+    costs twice its size in memory to read, so it is refused rather than read.
+
+    :param target: The path about to be read.
+
+    :return: True when it is an ordinary file of a plausible size.
+    """
+    try:
+        if not target.is_file():
+            return False
+        return target.stat().st_size <= MAX_NOTE_BYTES
+    except OSError:
+        return False
+
+
+def wrote_it(existing: str) -> bool:
+    """
+    Whether this tool wrote a note, however much the reader has since changed.
+
+    Distinct from :func:`is_ours`, which asks the narrower question of whether
+    the generated region is still untouched. Conflating the two told a reader
+    that a note this tool had written "was not written by ibook2epub", and
+    denied it the sidecar its edits had earned.
+
+    :param existing: The note as it stands.
+
+    :return: True when it carries this tool's start marker.
+    """
+    lines = normalise(existing).split("\n")
+    if not lines or lines[0].rstrip() != "---":
+        return False
+    for index in range(1, len(lines)):
+        if lines[index].rstrip() == "---":
+            return index + 1 < len(lines) and bool(
+                START_PATTERN.match(lines[index + 1].rstrip())
+            )
+    return False
+
+
 def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
     """
     Render a whole note.
@@ -391,7 +461,7 @@ def write_vault(
         return exits.NO_OUTPUT
 
     index = index_by_book(found)
-    written = kept = foreign = 0
+    tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
     for item in named:
         if not item.filename:
             continue
@@ -399,58 +469,135 @@ def write_vault(
         if not mine:
             continue
         target = directory / (Path(item.filename).stem + ".md")
-        outcome = _write_one(target, mine)
-        written += outcome == "written"
-        kept += outcome == "kept"
-        foreign += outcome == "foreign"
+        tally[_write_one(target, mine)].append(target.name)
 
-    logger.info("Wrote %d note(s) to %s.", written, printable(str(directory)))
-    if kept:
-        logger.warning(
-            "%d note(s) you have edited were left alone; their new highlights "
-            "are in *.new.md beside them.",
-            kept,
-        )
-    if foreign:
-        logger.warning(
-            "%d file(s) were not written by ibook2epub and were left alone.",
-            foreign,
-        )
-    return exits.SUCCESS
+    logger.info(
+        "Wrote %d note(s) to %s.", len(tally["written"]), printable(str(directory))
+    )
+    for outcome, sentence in REPORTS.items():
+        if tally[outcome]:
+            logger.warning(sentence, len(tally[outcome]), _naming(tally[outcome]))
+    return exits.FAILED if tally["failed"] or tally["blocked"] else exits.SUCCESS
 
 
-def _write_one(target: Path, mine: list[dict[str, Any]]) -> str:
+#: Everything :func:`_write_one` can report, so the tally cannot be typo'd into
+#: silently dropping a case.
+OUTCOMES = (
+    "written",
+    "unchanged",
+    "kept",
+    "foreign",
+    "unreadable",
+    "blocked",
+    "failed",
+)
+
+#: What the reader is told about each outcome worth mentioning. Every sentence
+#: has to be true of every file it counts: "not written by ibook2epub" was
+#: being said about notes this tool wrote but could not read.
+REPORTS = {
+    "kept": "%d note(s) you have edited were left alone; their new highlights "
+    "are in a file beside each one: %s",
+    "blocked": "%d note(s) you have edited were left alone, and their new "
+    "highlights could not be written beside them either: %s",
+    "unreadable": "%d file(s) could not be read and were left alone; see the "
+    "errors above: %s",
+    "foreign": "%d file(s) were not written by ibook2epub and were left alone: %s",
+    "failed": "%d note(s) could not be written: %s",
+}
+
+
+def _naming(names: list[str]) -> str:
+    """
+    Render a handful of filenames for a summary line.
+
+    Named rather than counted, because a reader with several edited notes in a
+    large vault would otherwise have to glob for them. The same shape
+    ``run._warn_about_stranded`` uses.
+
+    :param names: The files this outcome applies to.
+
+    :return: Up to three of them, and how many more there are.
+    """
+    shown = ", ".join(printable(name) for name in sorted(names)[:3])
+    return shown + (f", and {len(names) - 3} more" if len(names) > 3 else "")
+
+
+def _write_one(  # pylint: disable=too-many-return-statements
+    target: Path, mine: list[dict[str, Any]]
+) -> str:
     """
     Put one book's note in place, without touching what the reader wrote.
+
+    Every outcome here becomes a sentence the reader is told, and they act on
+    it, so none of them may be a guess. "Your new highlights are in a file
+    beside it" is a promise that a file exists.
 
     :param target: The note's path.
     :param mine: This book's annotations, in reading order.
 
-    :return: ``written``, ``kept`` (the reader edited it), ``foreign`` (not
-        ours), or ``unchanged``.
+    Each branch returns rather than threading one variable through, because
+    every one of them is a different thing to tell the reader and collapsing
+    them into a single exit obscured which case produced which sentence.
+
+    :return: One of :data:`OUTCOMES`.
     """
+    if target.exists() and not readable(target):
+        # A FIFO blocks read_text until a writer appears, which is never; an
+        # oversized file costs twice its size to read. Neither is a note.
+        logger.error(
+            "Skipped %s: not a readable note of a plausible size.",
+            printable(target.name),
+        )
+        return "unreadable"
     try:
         existing = target.read_text(encoding="utf-8-sig") if target.exists() else None
     except OSError as exc:
+        # Not "foreign": this may well be a note this tool wrote. All that is
+        # known is that it could not be checked, and saying otherwise put a
+        # false sentence in the summary.
         logger.error("Could not read %s: %s", printable(target.name), exc)
-        return "foreign"
+        return "unreadable"
 
     if existing is None:
-        write_atomically(target, compose(mine))
-        return "written"
+        return _put(target, compose(mine))
 
-    if split(existing) is None:
+    if not wrote_it(existing):
         return "foreign"
     if not is_ours(existing):
-        # Edited inside the generated region, so it is left exactly as it is.
-        # The sidecar is a note like any other and gets the same treatment one
-        # level down, so a sidecar the reader has partly merged into survives
-        # too -- the rule that protects the note protects its sidecar.
-        _write_one(target.with_name(target.stem + ".new.md"), mine)
-        return "kept"
+        # Edited inside the generated region, or missing the end marker, which
+        # is treated as an edit. Either way the note is left exactly as it is
+        # and the new highlights go beside it. The sidecar is a note like any
+        # other and gets the same treatment one level down, so one the reader
+        # has partly merged into survives too.
+        if _write_one(sidecar_for(target), mine) in ("written", "unchanged"):
+            return "kept"
+        # The sidecar could not be written either, so nothing was saved and
+        # the reader must not be told otherwise.
+        return "blocked"
 
     rewritten = rewrite(existing, mine)
     if rewritten == normalise(existing):
         return "unchanged"
-    write_atomically(target, rewritten)
+    return _put(target, rewritten)
+
+
+def _put(target: Path, text: str) -> str:
+    """
+    Write one note, letting one failure cost one note rather than the run.
+
+    Every other per-file failure in this project is logged and stepped over --
+    a damaged archive, an unreadable database row. An unguarded write here took
+    the whole vault and its summary with it.
+
+    :param target: The note's path.
+    :param text: Its contents.
+
+    :return: ``written`` or ``failed``.
+    """
+    try:
+        write_atomically(target, text)
+    except OSError as exc:
+        logger.error("Could not write %s: %s", printable(target.name), exc)
+        return "failed"
     return "written"

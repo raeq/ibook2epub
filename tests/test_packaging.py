@@ -116,9 +116,15 @@ class TestTheCoverageGateActuallyFailsTheBuild:
         )
 
     def test_the_comparison_precision_is_pinned(self):
-        # Read as text rather than parsed: tomllib is 3.11+ and this package
-        # supports 3.10, so importing it would fail the oldest job in CI.
-        assert "precision = 2" in self._config()
+        # Asked of the config coverage itself builds, not grepped out of the
+        # file: "precision = 2" under [tool.coverage.html] satisfies a
+        # substring check and leaves the gate exactly as broken as it was.
+        config = pytest.importorskip("coverage.config")
+        held = config.CoverageConfig()
+        held.from_file(str(ROOT / "pyproject.toml"), warn=lambda _: None, our_file=True)
+
+        assert held.precision == 2
+        assert held.fail_under == 97
 
     def test_the_threshold_is_still_declared(self):
         assert "fail_under = 97" in self._config()

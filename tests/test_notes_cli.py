@@ -289,7 +289,7 @@ class TestTheSecondRun:
         after = note.read_text(encoding="utf-8")
         assert "a second one" in after
         assert "- fantasy" in after
-        assert not list(vault.glob("*.new.md"))
+        assert not list(vault.glob("*.md.new"))
 
     def test_an_edited_body_is_left_alone_and_sidecarred(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -308,7 +308,7 @@ class TestTheSecondRun:
         )
 
         assert note.read_text(encoding="utf-8") == edited
-        sidecar = vault / "Leviathan Wakes.new.md"
+        sidecar = notes.sidecar_for(note)
         assert sidecar.is_file()
         assert "a second one" in sidecar.read_text(encoding="utf-8")
 
@@ -362,7 +362,7 @@ class TestTheSecondRun:
 
         reported = capsys.readouterr().err
         assert "left alone" in reported
-        assert ".new.md" in reported
+        assert "Leviathan Wakes.md" in reported  # named, not just counted
 
 
 class TestWhenTheVaultCannotBeWritten:
