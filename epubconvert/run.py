@@ -371,7 +371,67 @@ def _annotations_after_export(
         code = _embed_in_shelf(args, policy, found, True, named)
     if code == exits.SUCCESS and args.annotations_detached and found is not None:
         code = _write_detached(found, args.annotations_detached)
+    if args.annotations_embedded and not args.annotations_detached and found:
+        _warn_about_stranded(args, found, named)
     return None if code == exits.SUCCESS else code
+
+
+def _warn_about_stranded(
+    args: argparse.Namespace,
+    found: list[dict[str, Any]],
+    named: Sequence[Assignment],
+) -> None:
+    """
+    Say so when highlights had nowhere to go.
+
+    ``-ae`` puts a book's highlights inside the book, which needs the book to
+    be on the shelf. A book that was not converted has no archive to put them
+    in, so its highlights are read out of Apple's database and then reach
+    nothing at all.
+
+    A DRM-protected book is the permanent case, and the one that matters most.
+    Its file cannot be opened, so no rerun will ever produce an archive to
+    embed into -- and it is exactly the book the reader cannot take with them,
+    which makes the highlights the only part they can keep. Saying nothing left
+    them believing the export had covered everything.
+
+    Not called when ``-ad`` is also in force: those highlights are already in a
+    file, so there is nothing to warn about.
+
+    :param args: Parsed command line arguments.
+    :param found: Every annotation this run read.
+    :param named: The names the export used, which is the only place that knows
+        what each book's archive would be called.
+    """
+    index = index_annotations(found)
+    stranded_books: list[str] = []
+    stranded = 0
+    for item in named:
+        target = args.output_dir / item.filename if item.filename else None
+        if target is not None and target.is_file():
+            continue
+        mine = annotations_for_book(item.package.name, index)
+        if mine:
+            stranded_books.append(item.package.name)
+            stranded += len(mine)
+
+    if not stranded:
+        return
+
+    shown = ", ".join(printable(name) for name in sorted(stranded_books)[:3])
+    if len(stranded_books) > 3:
+        shown += f", and {len(stranded_books) - 3} more"
+    logger.warning(
+        "%d annotation(s) from %d book(s) reached no file: %s. Those books are "
+        "not on the shelf, so there was nothing to embed them in -- a "
+        "DRM-protected book can never be converted, and its highlights are the "
+        "only part of it you can keep. Run again with --annotations-detached "
+        "FILE to write them to a file of their own, or --annotations-only FILE "
+        "to do that without converting anything.",
+        stranded,
+        len(stranded_books),
+        shown,
+    )
 
 
 def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:

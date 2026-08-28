@@ -28,6 +28,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   them, and the shelf of books that cannot be converted is exactly where
   taking the highlights with you matters most.
 
+### Added
+
+- A run says so when highlights had nowhere to go. `-ae` puts a book's
+  highlights inside the book, which needs the book to be on the shelf; a book
+  that was never converted has no archive to embed into, so its highlights
+  were read out of Apple's database and then reached nothing at all, silently.
+  With a DRM-protected book that is permanent, since no rerun will ever open
+  its file. The warning names the count and the books, and recommends
+  `--annotations-detached FILE` or `--annotations-only FILE`. It stays quiet
+  when `-ad` is already in force, because then the highlights are in a file
+  and there is nothing to report.
+
 ## [2.1.0] - 2026-08-28
 
 ### Added
