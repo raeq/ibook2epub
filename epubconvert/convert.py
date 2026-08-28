@@ -28,6 +28,7 @@ from random import shuffle
 from typing import TextIO
 
 from . import exits
+from .annotations import for_book as annotations_for_book
 from .app_logger import logger
 from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from .display import printable
@@ -64,6 +65,11 @@ class ExportOptions:
     min_free_mb: int = 0
     validation: ValidationOptions | None = None
     plan: PlanOptions | None = None
+    #: Annotations to store inside each book, keyed the way
+    #: :func:`~epubconvert.annotations.for_book` looks them up. Embedding
+    #: during the one write the conversion already does; rebuilding the
+    #: finished archive afterwards serialised every book twice.
+    annotations: dict[str, list[dict[str, object]]] | None = None
 
 
 class OutputLockedError(RuntimeError):
@@ -167,7 +173,12 @@ def _zip_and_record(
         return
 
     try:
-        file_count = zip_package(package, target, run.validation)
+        file_count = zip_package(
+            package,
+            target,
+            run.validation,
+            annotations_for_book(package.name, run.annotations or {}),
+        )
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         with _REPORT_LOCK:
             report.failed += 1

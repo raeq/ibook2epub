@@ -5,14 +5,150 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.0] - 2026-08-28
 
 ### Added
 
+- Highlights and notes come out of Apple Books. Five flags cover three
+  decisions: `-an` gather none, `-ae` put them inside each book at
+  `META-INF/annotations.json`, `-ad FILE` write one file for the library,
+  `-ao FILE` write that file and convert nothing, `-ar` go back over books an
+  earlier run converted. `-ad` and `-ao` write to standard output with no
+  FILE. The shape is documented by `epubconvert/annotations.schema.json`,
+  shipped inside the package.
+
+  Modelled on the direction of the W3C EPUB Annotations work rather than its
+  current draft, which still has T.B.D. sections. The locator is a URL text
+  fragment, which is what that work is converging on; the EPUB CFI Apple
+  records is kept in its own field because the group has ruled CFI out but it
+  is the only locator that survives text which is ambiguous or must not be
+  reproduced.
+- Each annotation records its book's own `dc:identifier`, resolved through the
+  package document's `unique-identifier`. Every other field naming the book is
+  a name that can change, so this is the only key that still matches an
+  annotation to its book after a rename or a re-download. Values that identify
+  nothing are left out: `none` is the identifier for 92 books in a real
+  2,805-book library.
+
+  It is recorded canonically, since a key is only a key if the same book always
+  yields the same string. That library writes one ISBN six ways -- bare,
+  `urn:isbn:`, `URN:ISBN:`, hyphenated, `ISBN 978...` and `urn:ean:` -- and one
+  UUID two ways. A verifiable ISBN becomes `urn:isbn:` and thirteen digits, an
+  ISBN-10 becomes the ISBN-13 naming the same book, and a UUID becomes
+  lowercase `urn:uuid:`; 2,328 of 2,703 identifiers there are rewritten.
+  Recognition is by check digit rather than by length, because 68 identifiers
+  in that library are ten or thirteen digits and fail it. Anything
+  unrecognised passes through untouched, and the original is kept as
+  `declaredIdentifier` whenever canonicalising changed it.
+
+  Shelf naming is deliberately not affected: `planning.py` still compares
+  identifiers as declared, because changing that would move filenames on
+  shelves that already exist.
 - A Homebrew tap: `brew install raeq/tap/ibook2epub`. The formula lives in
   [raeq/homebrew-tap](https://github.com/raeq/homebrew-tap) rather than
   homebrew-core, which weighs how widely used a project is. It brings its own
   Python and installs the same distribution PyPI serves.
+
+### Fixed
+
+- The detached export is written to a temporary file and moved into place.
+  `write_text` truncates before it writes, so a failure part-way through — a
+  full disk, a Ctrl-C — left the export as a prefix of itself: not valid JSON,
+  and therefore refused by every later run, which could no longer write to
+  that path at all. Reproduced with 400 annotations and 408,646 valid bytes
+  replaced by 40,000 unparsable ones.
+- `--dry-run` is enforced inside the function that writes, not at one of the
+  two routes into it. `--dry-run -ae -ar` rewrote every archive on the shelf.
+- A refresh no longer deletes an annotation set it did not write. A book that
+  arrived carrying `META-INF/annotations.json` lost it silently when this run
+  had no annotations for that book, and the shelf is the only record there is.
+- An export file that is valid JSON of the wrong shape is refused rather than
+  silently replaced. Only malformed JSON was refused; a file holding a JSON
+  list fell through to "nothing to merge into" and was overwritten.
+- One unusable database row costs one annotation rather than the whole export.
+  Apple's columns are untyped and its schema is undocumented, and `collect`
+  built the list in a single comprehension, so a creation date holding a
+  string, a style holding a colour name or selected text holding a BLOB took
+  every good row with it.
+- Long text with no word boundary is quoted whole. Both ends of a
+  `textStart,textEnd` pair take their first word unconditionally, so Japanese,
+  Thai or a long URL produced a range whose two ends were the same string,
+  which selects nothing — a 95-character highlight became a 1,719-character
+  locator that matched nothing at all.
+- A damaged archive on the shelf is skipped rather than aborting the refresh.
+  `zipfile.BadZipFile` is not an `OSError`, so one damaged book stopped every
+  book after it from being reached.
+- An embedded annotation set carries no generation stamp, so an archive
+  holding one is still byte-reproducible. Exporting the same library twice
+  produced different bytes, which stops a backup deduplicating and makes two
+  outputs incomparable by hash.
+- A run that converts every book but cannot read the annotations exits 0. It
+  exited 4, which means "the source directory does not exist" — a path a
+  scheduled run would then be told to go and fix, having just used it.
+- Annotations are applied under the output directory lock, and their temporary
+  files can no longer be swept away by a concurrent run.
+- `-ao` no longer requires the library to be present. Its own docstring says it
+  reads Apple's container and nothing else, but the source-directory check ran
+  first, so a reader whose books are on another disk could not get their
+  highlights out at all.
+- `-ar` against an output directory that does not exist reports the mistake
+  instead of "refreshed 0 books" and success.
+- A book's shelf name comes from the export that wrote it. Naming the library
+  again disagreed with the export under `--match` with a collision suffix, so
+  the refresh looked for an archive that was never written.
+- `-ad ''` and `-ao ''` are refused. An empty filename is falsy, so every later
+  check read as "not asked for" and the run quietly converted instead.
+- `-ao - | head` exits cleanly instead of printing a `BrokenPipeError`
+  traceback, which is how that flag's own help text says to use it.
+- Two package directories with the same name no longer share each other's
+  highlights. An annotation records its book's name rather than its path, so
+  the run now detects the ambiguity where it is visible and skips those books
+  rather than guessing.
+- `_newest` survives a dangling symlink among the database candidates. Books
+  leaves old files in that directory across upgrades, which is why the glob
+  exists.
+
+### Security
+
+- The read-only database URI is built by `Path.as_uri()` rather than by string
+  concatenation. A filename containing `?` appended its own parameters ahead of
+  `mode=ro`, so a read path could open Apple's database writable; one
+  containing `%` failed to open at all. Demonstrated by planting a file that
+  matched the glob and watching a read create a file inside the container.
+- A manifest href that climbs out of its package is not published as an
+  annotation's `href`. The field is described as a path within the book and a
+  consumer will join it onto a book root; the same containment rule already
+  guarded `container.xml` and not the manifest.
+- A package path recorded by the library database is checked before it is
+  published. A `ZPATH` ending in `..` produced `"source": ".."`.
+- Nothing below the top level of an existing export is trusted. A hand-edited
+  or hostile file raised `AttributeError`, `KeyError`, `TypeError` or
+  `RecursionError` out of the merge, and the file being read is one the reader
+  named.
+
+### Changed
+
+- `schema_problems` derives its checks from the shipped schema instead of
+  restating part of it. The nested `book` object was never validated, so an
+  annotation carrying a book with no title at all passed the tool's own
+  validator.
+- `generated` is optional in the schema. A detached export carries it; a set
+  embedded in an archive does not, because that stamp would move on every run.
+
+### Performance
+
+- A book is written once under `-ae`. Its annotations go in as the archive is
+  built rather than by rebuilding the finished archive, which serialised every
+  annotated book twice: measured over 200 books, 1.09s against 0.62s.
+- Annotations are indexed once per run instead of scanned once per book.
+  Measured over 3,620 books: 1.60s to 0.003s at 20,000 annotations, 623x.
+- A refresh that changes nothing no longer decompresses the whole archive to
+  find that out. It read every member into memory before the comparison that
+  only looks at one small one: peak allocation on a no-op drops from 7.86 MB to
+  0.09 MB on a 6.4 MB book.
+- The annotation run reads Apple's databases once. Naming the library a second
+  time also re-parsed every package document under a metadata naming policy,
+  the 2.00x read this project had already fixed once elsewhere.
 
 ## [2.0.4] - 2026-08-27
 
@@ -234,7 +370,8 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
-[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.4...HEAD
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/raeq/ibook2epub/compare/v2.0.4...v2.1.0
 [2.0.4]: https://github.com/raeq/ibook2epub/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/raeq/ibook2epub/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/raeq/ibook2epub/compare/v2.0.1...v2.0.2

@@ -10,6 +10,7 @@ concurrency -- :mod:`epubconvert.convert` supplies those.
 from __future__ import annotations
 
 import errno
+import json
 import os
 import shutil
 import tempfile
@@ -17,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
+from .annotations import EMBEDDED_PATH, embedded_json
 from .app_logger import logger
 from .contained import contains, open_contained
 from .display import printable
@@ -334,10 +336,42 @@ def compression_for(arcname: str) -> int:
     return ZIP_DEFLATED
 
 
+def _embed_annotations(
+    archive: ZipFile,
+    annotations: Sequence[dict[str, object]] | None,
+    stored: set[str],
+) -> int:
+    """
+    Store this book's annotations inside the archive, if it has any.
+
+    The W3C work puts an embedded annotation set at
+    :data:`~epubconvert.annotations.EMBEDDED_PATH` and requires no entry for it
+    in ``container.xml`` or the package manifest: the location is the contract.
+
+    Written after the members rather than before, so it cannot displace the
+    mimetype entry, which must come first and stored.
+
+    :param archive: The archive being assembled.
+    :param annotations: This book's annotations, or None.
+    :param stored: Names written so far, added to in place.
+
+    :return: How many members were added, which is one or none.
+    """
+    if not annotations:
+        return 0
+    archive.writestr(
+        entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)),
+        embedded_json(list(annotations)),
+    )
+    stored.add(EMBEDDED_PATH)
+    return 1
+
+
 def zip_package(
     source_dir: Path,
     target_archive: Path,
     validation: ValidationOptions | None = None,
+    annotations: Sequence[dict[str, object]] | None = None,
 ) -> int:
     """
     Write a single package directory out as a spec-valid epub archive.
@@ -354,8 +388,13 @@ def zip_package(
     :param source_dir: The ``*.epub/`` package directory to compress.
     :param target_archive: The path of the epub file to create.
     :param validation: Checks to run before the archive is moved into place.
+    :param annotations: This book's annotations, stored in the same pass, or
+        None. Embedding here rather than rebuilding the finished archive
+        afterwards halves the writing: the archive was being serialised once
+        without them and once with.
 
-    :return: The number of package files stored, excluding ``mimetype``.
+    :return: The number of members stored, excluding ``mimetype``. Counts the
+        embedded annotation set, which is not a package file.
 
     :raises ArchiveInvalidError: If validation was requested and failed.
     """
@@ -391,14 +430,17 @@ def zip_package(
                     logger.trace("Excluded from archive: %s", path.name)
                     continue
                 arcname = path.relative_to(source_dir).as_posix()
-                member = entry(arcname, compression_for(arcname))
                 with (
                     open_contained(path) as source,
-                    archive.open(member, "w") as target,
+                    archive.open(
+                        entry(arcname, compression_for(arcname)), "w"
+                    ) as target,
                 ):
                     shutil.copyfileobj(source, target)
                 stored.add(arcname)
                 file_count += 1
+
+            file_count += _embed_annotations(archive, annotations, stored)
 
         assert_is_a_book(target_archive.name, stored)
 
@@ -517,3 +559,99 @@ def _members(source_dir: Path) -> list[Path]:
 
     found.sort()
     return found
+
+
+def _same_annotations(
+    held: bytes | None, annotations: Sequence[dict[str, object]]
+) -> bool:
+    """
+    Whether an archive already carries exactly these annotations.
+
+    :param held: The embedded document as it stands, or None if there is none.
+    :param annotations: What it should carry.
+
+    :return: True if a rewrite would change nothing.
+    """
+    if held is None:
+        return not annotations
+    try:
+        loaded = json.loads(held)
+    except (ValueError, RecursionError):
+        # Unreadable, so replacing it is the point rather than a no-op. The
+        # member comes from a package directory that arrived from Apple or a
+        # sideload, so it is not assumed to be JSON, let alone an object:
+        # deeply nested input raises RecursionError, which is not a ValueError.
+        return False
+    stored = loaded.get("annotations") if isinstance(loaded, dict) else None
+    return bool(stored == list(annotations))
+
+
+def replace_annotations(
+    target_archive: Path, annotations: Sequence[dict[str, object]]
+) -> bool:
+    """
+    Swap the embedded annotation set of an archive already on the shelf.
+
+    A zip member cannot be replaced in place, so the archive is rebuilt beside
+    itself and moved over the original -- the same temporary-then-replace path
+    a conversion uses, so an interrupted refresh leaves the old archive intact
+    rather than a half-written one.
+
+    Every other member is copied across verbatim, and ``mimetype`` keeps its
+    place and its lack of compression: it is the one member whose position the
+    specification fixes.
+
+    :param target_archive: The archive to refresh.
+    :param annotations: The annotations this book should now carry.
+
+    :return: True if the archive was rewritten, False if it already said this.
+    """
+    # An empty set is not an instruction to delete. A package that arrived
+    # carrying its own annotations lost them silently when this run happened
+    # to have none for that book, and the shelf is the only record there is.
+    if not annotations:
+        return False
+
+    with ZipFile(target_archive) as reading:
+        names = reading.namelist()
+        held = reading.read(EMBEDDED_PATH) if EMBEDDED_PATH in names else None
+
+        # Compared before the members are read, not after. Every member was
+        # being decompressed into memory to reach a comparison that only
+        # looks at this one small blob: 7.86 MB of peak allocation on a 6.4 MB
+        # book, to decide against rewriting it.
+        if _same_annotations(held, annotations):
+            return False
+
+        members = [
+            (info, reading.read(info.filename))
+            for info in reading.infolist()
+            if info.filename != EMBEDDED_PATH
+        ]
+
+    wanted = embedded_json(list(annotations))
+
+    handle, temporary = tempfile.mkstemp(
+        dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
+    )
+    os.close(handle)
+    partial = Path(temporary)
+    try:
+        partial.chmod(file_mode())
+        with ZipFile(
+            partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL
+        ) as writing:
+            for info, content in members:
+                writing.writestr(entry(info.filename, info.compress_type), content)
+            writing.writestr(
+                entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), wanted
+            )
+        assert_is_a_book(
+            target_archive.name,
+            {info.filename for info, _ in members} | {EMBEDDED_PATH},
+        )
+        partial.replace(target_archive)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return True

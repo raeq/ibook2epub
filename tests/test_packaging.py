@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 import epubconvert
+from epubconvert import annotations
 from tests.conftest import needs_permissions
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -64,3 +65,31 @@ class TestPermissionsAreMeaningfulForThisUser:
                 (blocked / "file.txt").write_text("x", encoding="utf-8")
         finally:
             blocked.chmod(0o755)
+
+
+class TestTheSchemaIsShipped:
+    """
+    `annotations.schema_problems` reads the schema at runtime, and the schema
+    is the contract a consumer builds against. Both need it inside the
+    installed package, not merely beside the source.
+    """
+
+    def test_the_schema_file_is_installed_beside_the_module(self):
+        assert annotations.SCHEMA_PATH.is_file()
+
+    def test_the_schema_is_declared_as_package_data(self):
+        # A test that reads the file from the source tree passes whether or not
+        # the wheel carries it, so the declaration is what gets asserted.
+        # Read as text rather than parsed: tomllib is 3.11+ and this package
+        # supports 3.10, so importing it would fail the oldest job in CI.
+        config = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+
+        assert "[tool.setuptools.package-data]" in config
+        assert 'epubconvert = ["annotations.schema.json"]' in config
+
+    def test_validating_a_document_does_not_need_the_source_tree(self):
+        document = annotations.build_document([])
+
+        assert not annotations.schema_problems(document)

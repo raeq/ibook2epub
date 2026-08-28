@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/raeq/ibook2epub/main/epubconvert/annotations.schema.json",
+  "title": "ibook2epub annotation export",
+  "description": "Highlights and notes taken out of Apple Books, shaped so that each one stands on its own. Modelled on the direction of the W3C EPUB Annotations work rather than on the current draft: that draft's normative dependency on URL text fragments has not yet landed in HTML, so this is deliberately ahead of it and does not claim conformance. See w3c/epub-specs#2763.",
+  "type": "object",
+  "required": [
+    "generator",
+    "annotations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer back to this schema."
+    },
+    "generator": {
+      "type": "object",
+      "description": "What produced the file. Present so a consumer can tell an export made by an old version from one made by a new one.",
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "ibook2epub"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+.*$",
+          "description": "The version of ibook2epub that wrote the file."
+        }
+      }
+    },
+    "generated": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "When the file was written, UTC, seconds precision, always ending in Z. Present in a detached export. Omitted from a set embedded in an archive: that stamp moves on every run, and an archive whose bytes move with the clock stops deduplicating in a backup and can no longer be compared by hash."
+    },
+    "annotations": {
+      "type": "array",
+      "description": "Every annotation found, in reading order within a book and by book title across the library. Self-contained: an entry carries enough about its book to stay useful once the book itself is gone, which is the requirement the W3C work opens with.",
+      "items": {
+        "$ref": "#/$defs/annotation"
+      }
+    }
+  },
+  "$defs": {
+    "annotation": {
+      "type": "object",
+      "required": [
+        "id",
+        "book",
+        "text",
+        "created"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Apple's UUID for the annotation, stable across syncs. What a rerun matches an entry on, so an export can be added to rather than rewritten."
+        },
+        "book": {
+          "$ref": "#/$defs/book"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The highlighted text, verbatim."
+        },
+        "note": {
+          "type": "string",
+          "description": "What the reader wrote against the highlight. Absent when they wrote nothing."
+        },
+        "chapter": {
+          "type": "string",
+          "description": "The chapter or section heading Apple recorded, e.g. 'Chapter Fifteen: Holden'."
+        },
+        "href": {
+          "type": "string",
+          "description": "Path of the document within the book, e.g. 'OEBPS/Text/chapter15.xhtml', resolved by looking the CFI's ID assertion up in the book's manifest. That assertion is the spine item's id, not its href, so it is resolved rather than passed through; when the book cannot be read or the id is in no manifest the field is absent and the raw assertion remains in 'cfi'."
+        },
+        "locator": {
+          "type": "string",
+          "pattern": "^:~:text=.+",
+          "description": "A URL text fragment for the highlighted text. This is the locator the W3C work is converging on: web-native, and resolvable by any browser. A short highlight is quoted whole; a long one is quoted as 'textStart,textEnd' on word boundaries, because a fragment that quotes hundreds of characters has to match a rendered DOM exactly and will not. Whitespace is collapsed first, as the DOM will have collapsed it. Percent-encoded."
+        },
+        "cfi": {
+          "type": "string",
+          "pattern": "^epubcfi\\(",
+          "description": "The EPUB CFI Apple recorded, kept verbatim. Not the primary locator -- the W3C work is explicitly moving away from CFI, which is bound to XHTML -- but retained because it is the only locator that still works when the highlighted text is ambiguous or must not be reproduced, as for a DRM-protected book."
+        },
+        "style": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Apple's highlight style number. Carried opaquely: the colour it maps to is undocumented and has changed between releases, so it is not translated into a colour name here."
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+          "description": "When the annotation was made, UTC."
+        },
+        "modified": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+          "description": "When it was last changed, UTC. Absent when it never was."
+        }
+      }
+    },
+    "book": {
+      "type": "object",
+      "description": "Enough of the publication to cite the annotation without it.",
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "author": {
+          "type": "string"
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The publication's own dc:identifier, as the package document declares it through its unique-identifier IDREF, rendered canonically. The one key here that is neither Apple's nor the converting run's: a title, a package name and a shelf filename can all change, and after any of them an annotation can still be matched to its book by this. A verifiable ISBN becomes 'urn:isbn:' followed by thirteen digits, and an ISBN-10 becomes the ISBN-13 meaning the same book; a UUID becomes lowercase 'urn:uuid:'. Anything else is left exactly as declared, because this field is opaque and reshaping an opaque string is a claim about it. Recognition is by check digit rather than by shape: 68 identifiers in a surveyed 2,805-book library are 10 or 13 digits and fail it. Absent when the book declares nothing, or declares something that identifies nothing -- 'none' is the identifier for 92 books in that library. Not guaranteed unique: 21 identifiers there are shared by more than one book."
+        },
+        "declaredIdentifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The identifier exactly as the package document declared it, present only when canonicalising changed it. A book that wrote '978-1-78883-568-8' records that here and 'urn:isbn:9781788835688' as its identifier, so a consumer matching on the canonical form loses nothing about what the book actually said."
+        },
+        "language": {
+          "type": "string",
+          "description": "As Apple recorded it, unnormalised."
+        },
+        "year": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string",
+          "description": "Name of the package directory the book was read from, e.g. 'Leviathan Wakes.epub'. The path is deliberately not recorded: it names the reader's home directory."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Name of the file on the shelf, under the naming policy the run was using. Not the same as 'source' whenever a policy renames: a book read from 'Leviathan Wakes.epub' is written as 'Corey, James S.A. - Leviathan Wakes.epub'. Absent when the run named no policy, because the name belongs to the policy and is not guessed here."
+        },
+        "assetId": {
+          "type": "string",
+          "description": "Apple's identifier for the book, which is what joins an annotation to it. Stable across a re-export, so a consumer can merge two exports."
+        }
+      }
+    }
+  }
+}

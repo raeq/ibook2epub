@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
+from .annotations import STDOUT
 from .defaults import (
     DEFAULT_MAX_EXPORT_FILES,
     DEFAULT_MIN_FREE_MB,
@@ -48,6 +49,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     logging = parser.add_argument_group(
         "Output and logging", "How much the run says, and where."
+    )
+    # Their own group. They are four independent choices about one subject,
+    # and reading them next to --portable-names would suggest they interact.
+    annotations = parser.add_argument_group(
+        "Your highlights and notes",
+        "Taking annotations out of Apple Books. Any of these needs Full Disk "
+        "Access on macOS. None is the default: a conversion touches Apple's "
+        "container only when asked to.",
     )
     selection.add_argument(
         "-m",
@@ -170,6 +179,61 @@ def build_parser() -> argparse.ArgumentParser:
             "slow on a cloud library, so it is off by default."
         ),
     )
+    annotations.add_argument(
+        "-an",
+        "--annotations-none",
+        action="store_true",
+        help=(
+            "Do not touch annotations. The default, stated so a script can be "
+            "explicit about it."
+        ),
+    )
+    annotations.add_argument(
+        "-ae",
+        "--annotations-embedded",
+        action="store_true",
+        help=(
+            "Write each book's annotations into it at META-INF/annotations.json, "
+            "so they travel with the book to whatever reads it next."
+        ),
+    )
+    annotations.add_argument(
+        "-ad",
+        "--annotations-detached",
+        nargs="?",
+        const=STDOUT,
+        metavar="FILE",
+        help=(
+            "Write one file for the whole library. Survives losing the books, "
+            "which is what taking them with you means. A rerun merges into it "
+            "rather than replacing it. With no FILE, or with '-', it goes to "
+            "standard output and everything else goes to standard error."
+        ),
+    )
+    annotations.add_argument(
+        "-ao",
+        "--annotations-only",
+        nargs="?",
+        const=STDOUT,
+        metavar="FILE",
+        help=(
+            "Write the detached file and nothing else: no conversion, no "
+            "shelf. For somebody who wants their highlights and not three "
+            "thousand epub files. With no FILE, or with '-', it goes to "
+            "standard output."
+        ),
+    )
+    annotations.add_argument(
+        "-ar",
+        "--annotations-refresh",
+        action="store_true",
+        help=(
+            "Update annotations for books already converted, and convert "
+            "nothing. A library is converted once and annotated for years "
+            "afterwards; this picks up new highlights without rewriting every "
+            "archive."
+        ),
+    )
     output.add_argument(
         "--name-by",
         choices=NAME_SOURCES,
@@ -278,6 +342,43 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _check_annotation_flags(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """
+    Refuse annotation flags that contradict each other, or say nothing.
+
+    :param parser: The parser, for reporting the refusal.
+    :param args: The parsed arguments.
+    """
+    # An empty FILE is falsy, so every check below it and every use of it read
+    # as "not asked for": "-ad ''" silently ran an ordinary conversion.
+    for flag in ("annotations_detached", "annotations_only"):
+        if getattr(args, flag) == "":
+            spelled = "--" + flag.replace("_", "-")
+            parser.error(f"{spelled} needs a filename, or - for standard output")
+
+    if args.annotations_only and (
+        args.annotations_embedded or args.annotations_detached
+    ):
+        parser.error(
+            "--annotations-only writes the detached file instead of converting; "
+            "it cannot be combined with --annotations-embedded or "
+            "--annotations-detached"
+        )
+    if args.annotations_none and (
+        args.annotations_embedded or args.annotations_detached or args.annotations_only
+    ):
+        parser.error("--annotations-none contradicts the other annotation flags")
+    if args.annotations_refresh and not args.annotations_embedded:
+        # -ar walks the shelf. With only -ad it never touches it, which is what
+        # -ao already means, so the pair would be two spellings of one thing.
+        parser.error(
+            "--annotations-refresh needs --annotations-embedded; to write only "
+            "the detached file use --annotations-only"
+        )
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """
     Parse and validate command line arguments.
@@ -308,6 +409,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     if args.epubcheck:
         args.validate = True
+
+    _check_annotation_flags(parser, args)
 
     args.source_auto = args.source_dir is None
     if args.source_auto:

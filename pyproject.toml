@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ibook2epub"
-version = "2.0.4"
+version = "2.1.0"
 description = "Convert Apple iBooks epub packages to zipped epub files."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -58,6 +58,12 @@ exclude_also = [
     # Typing-only imports never execute.
     "if TYPE_CHECKING:",
 ]
+
+[tool.setuptools.package-data]
+# The annotation schema is read at runtime by `annotations.schema_problems`
+# and is the contract a consumer builds against, so it has to be inside the
+# installed package rather than only beside the source.
+epubconvert = ["annotations.schema.json"]
 
 [project.urls]
 Homepage = "https://github.com/raeq/ibook2epub"

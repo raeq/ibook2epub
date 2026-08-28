@@ -171,7 +171,8 @@ killed run is inert and needs no cleanup.
 ```text
 usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
                   [--version] [-f] [--match PATTERN] [-w N] [-p [MODE]]
-                  [--list] [--json] [--refresh] [--skip-incomplete]
+                  [--list] [--json] [--refresh] [--skip-incomplete] [-an]
+                  [-ae] [-ad [FILE]] [-ao [FILE]] [-ar]
                   [--name-by {passthrough,author-title}]
                   [--on-collision {skip,suffix}] [--min-free MB]
                   [--no-copy-through] [--covers] [--validate] [--epubcheck]
@@ -289,6 +290,35 @@ Output and logging:
   -v, --verbose         Increase log verbosity; -v for debug, -vv for trace.
   -q, --quiet           Only log warnings and errors.
   --log-file PATH       Also write log records to this file.
+
+Your highlights and notes:
+  Taking annotations out of Apple Books. Any of these needs Full Disk
+  Access on macOS. None is the default: a conversion touches Apple's
+  container only when asked to.
+
+  -an, --annotations-none
+                        Do not touch annotations. The default, stated so a
+                        script can be explicit about it.
+  -ae, --annotations-embedded
+                        Write each book's annotations into it at META-
+                        INF/annotations.json, so they travel with the book to
+                        whatever reads it next.
+  -ad, --annotations-detached [FILE]
+                        Write one file for the whole library. Survives losing
+                        the books, which is what taking them with you means.
+                        A rerun merges into it rather than replacing it. With
+                        no FILE, or with '-', it goes to standard output and
+                        everything else goes to standard error.
+  -ao, --annotations-only [FILE]
+                        Write the detached file and nothing else: no
+                        conversion, no shelf. For somebody who wants their
+                        highlights and not three thousand epub files. With no
+                        FILE, or with '-', it goes to standard output.
+  -ar, --annotations-refresh
+                        Update annotations for books already converted, and
+                        convert nothing. A library is converted once and
+                        annotated for years afterwards; this picks up new
+                        highlights without rewriting every archive.
 ```
 
 The source directory is searched recursively, so books stored in subfolders are
@@ -522,6 +552,139 @@ came out distinct, and two independent runs produced identical results.
 One thing the marker cannot fix: a book *entering* a collision gains its marker,
 which is a rename. That happens once, when the second copy shows up, instead of
 every time the group changes.
+
+### Taking your highlights with you
+
+Apple keeps your highlights and notes in its own database, not in the books. So
+converting a library gets you the books and leaves the reading behind. Five
+flags cover three separate decisions: whether to gather them at all, where they
+should go, and whether to do that without converting anything.
+
+```bash
+ibook2epub -ao ~/highlights.json          # just the highlights, no conversion
+ibook2epub -ae                            # convert, and put them inside each book
+ibook2epub -ad ~/highlights.json          # convert, and write one file as well
+ibook2epub -ae -ar                        # refresh books already on the shelf
+ibook2epub -ao                            # to stdout, for piping
+```
+
+| Flag | |
+|---|---|
+| `-an`, `--annotations-none` | the default, stated so a script can be explicit |
+| `-ae`, `--annotations-embedded` | into each book, at `META-INF/annotations.json` |
+| `-ad`, `--annotations-detached [FILE]` | one file for the whole library |
+| `-ao`, `--annotations-only [FILE]` | that file and nothing else — no conversion |
+| `-ar`, `--annotations-refresh` | go back over books converted by an earlier run |
+
+`-ae` puts the highlights in as each book is written, which is why it costs
+almost nothing: the archive is built once, not built and then rebuilt. A book
+that was already on the shelf is not rewritten by a run that had nothing else
+to do with it, so bringing an older shelf up to date is what `-ar` is for.
+
+`-ad` and `-ao` write to standard output when given no filename, so
+`ibook2epub -ao \| jq '.annotations[].text'` works. Everything else then goes to
+standard error, because a run summary in the middle of the JSON would make it
+unparsable.
+
+**On macOS this needs Full Disk Access.** The databases live inside Apple's
+container. Without it you get exit code 4 and a message saying so, not a
+traceback.
+
+#### Why two places
+
+The [W3C EPUB Annotations work][anno] defines both and prefers neither.
+Detached annotations "can be shared independently of the publication"; embedded
+ones are "always available to users". They answer different questions: a
+library-wide file survives losing the books, an embedded set travels with the
+book to whatever reads it next. `-ae -ad FILE` does both.
+
+#### What an annotation looks like
+
+```json
+{
+  "id": "644526A1-C87C-447A-AC0B-72F9092668FC",
+  "book": {
+    "title": "Leviathan Wakes",
+    "author": "James S. A. Corey",
+    "identifier": "urn:isbn:9781449340360",
+    "source": "Leviathan Wakes.epub",
+    "filename": "Corey, James S.A. - Leviathan Wakes.epub"
+  },
+  "text": "Summary roadside justice",
+  "chapter": "Chapter Fifteen: Holden",
+  "href": "OEBPS/Text/dummy_split_083.html",
+  "locator": ":~:text=Summary%20roadside%20justice",
+  "cfi": "epubcfi(/6/46[dummy_split_083.html]!/4,/80/2/1:25,/82/2/1:25)",
+  "created": "2018-12-25T22:44:28Z"
+}
+```
+
+Each one carries enough of its book to be cited without it, which is the
+requirement that work opens with. `source` is where the book came from;
+`filename` is what it is called on your shelf, which differs whenever a naming
+policy renames.
+
+`identifier` is the book's own `dc:identifier`, the one the package document
+names through its `unique-identifier`. Every other field there is a name that
+can change — a title Apple recorded, a directory name, a filename this tool
+chose — so it is the only key that still matches an annotation to its book
+after a rename, a re-download, or a move to somebody else's reader. Books that
+declare nothing usable leave it out; `none` is the identifier for 92 books in
+my library, which is to say it identifies none of them.
+
+It is written canonically, because a key only works if the same book always
+produces the same string, and books do not cooperate. My 2,805 packages write
+one ISBN six ways — bare, `urn:isbn:`, `URN:ISBN:`, hyphenated, `ISBN 978...`
+and `urn:ean:` — and one UUID two ways. A verifiable ISBN becomes `urn:isbn:`
+and thirteen digits, an ISBN-10 becomes the ISBN-13 meaning the same book, and
+a UUID becomes lowercase `urn:uuid:`. That rewrote 2,328 of 2,703.
+
+Recognition is by check digit, never by counting digits. 68 identifiers in that
+library are ten or thirteen digits and fail their check, so a rule that went by
+length would have relabelled every one of them as an ISBN it is not. Anything
+unrecognised is passed through exactly as declared, and whenever
+canonicalising changed something the original is kept alongside as
+`declaredIdentifier`, so nothing the book said is lost.
+
+The schema is [`epubconvert/annotations.schema.json`][schema], shipped inside
+the package.
+
+#### The locator, and why the CFI is kept anyway
+
+`locator` is a [URL text fragment][frag] — the locator the W3C work is
+converging on, because it is web-native and any browser can act on it. A long
+highlight is quoted as `textStart,textEnd` rather than whole: a
+249-character fragment has to match a rendered DOM exactly, and will not.
+
+Apple records an EPUB CFI, and that is kept verbatim in `cfi` rather than used
+as the locator. The group has explicitly ruled CFI out — *"which will rule out
+epubcfi (which, b.t.w., is bound to XHTML...)"* — but it is the only locator
+that still points at the right place when the highlighted text appears more
+than once, or must not be reproduced at all, as for a DRM-protected book.
+
+**This is ahead of the specification, not conformant to it.** That draft still
+has sections marked T.B.D., and its dependency on text fragments has not yet
+landed in HTML. The shape here is meant to become conformant without the data
+being gathered again.
+
+#### Re-running
+
+A rerun merges rather than replaces. Annotations are matched on the UUID Apple
+gives them, so a file you have been adding to is added to again:
+
+```text
+3 added, 1 updated, 214 unchanged, 2 kept (no longer in Books)
+```
+
+An annotation you deleted in Books is **kept**: taking them with you is the
+point, and losing one because Apple lost it would defeat that. An export
+written by a different version of this tool is regenerated rather than trusted,
+because the locator is ahead of a moving draft and an old entry may not say
+what a current one would.
+
+[anno]: https://w3c.github.io/epub-specs/epub34/annotations/
+[frag]: https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments
+[schema]: epubconvert/annotations.schema.json
 
 ### Tracking what's been converted
 
