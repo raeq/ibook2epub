@@ -7,6 +7,11 @@ recursive-include tests *.py
 include CONTRIBUTING.md
 include CHANGELOG.md
 
+# RELEASING.md is deliberately not shipped: it tells a maintainer how to
+# push to PyPI, which is of no use to somebody who has just installed from
+# it.
+exclude RELEASING.md
+
 # Review artefacts and editor tooling are working files, not part of the
 # distribution. Named explicitly so a new one does not start shipping.
 exclude hai-sdlc-review-*.md

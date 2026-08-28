@@ -96,3 +96,10 @@ Docstrings explain *why*, and often cite the defect that motivated a decision.
 That is intentional and worth keeping. When you move code, re-read the
 docstrings that moved with it — four of them were left pointing at functions
 that had relocated.
+
+## Releasing
+
+See [RELEASING.md](RELEASING.md). The short version: bump both version files,
+promote the changelog, tag, and create a GitHub Release — that last step is what
+publishes to PyPI, and it cannot be undone. Homebrew needs nothing; the tap
+updates itself.
