@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.1] - 2026-08-28
 
 ### Fixed
 
@@ -405,7 +405,8 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
-[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.1.1...HEAD
+[2.1.1]: https://github.com/raeq/ibook2epub/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/raeq/ibook2epub/compare/v2.0.4...v2.1.0
 [2.0.4]: https://github.com/raeq/ibook2epub/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/raeq/ibook2epub/compare/v2.0.2...v2.0.3
