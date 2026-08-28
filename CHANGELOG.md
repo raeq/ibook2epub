@@ -5,6 +5,86 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Annotations can be written as Markdown, one note per book, for Obsidian and
+  anything else that reads Markdown with YAML frontmatter.
+  `--annotations-format markdown` turns the detached export into a directory of
+  notes, so `-ad` and `-ao` name a directory rather than a file. `-ae` stays
+  JSON: Markdown inside a zip serves nobody.
+
+  A vault note is a file the reader writes in too, which is the whole reason
+  for putting them there, so the file is four regions with an owner each. The
+  frontmatter belongs to the reader and to Obsidian, which rewrites it whenever
+  anyone adds a tag. The highlights between the two markers belong to this
+  tool. Everything below the end marker belongs to the reader again. Only the
+  middle region is hashed and only it is ever replaced, so tagging a note or
+  writing three paragraphs underneath never stops it being updated.
+
+  A note edited *inside* the generated region is left exactly as it is, and its
+  new highlights go to a `.md.new` beside it, so nobody has to choose between
+  keeping their edits and getting their highlights. That sidecar is itself a
+  note and gets the same treatment, so one partly merged by hand survives too.
+  A file this tool did not write is never touched. A rerun that finds nothing
+  new writes nothing at all, so a vault kept in git stays quiet.
+
+  The frontmatter is written once and never rewritten, because it is the
+  reader's from the moment it lands. A title corrected upstream will not
+  propagate into an existing note; deleting the note is the refresh.
+
+  Notes are named from the library named once with `.epub`, with the suffix
+  swapped on the result, so a note and its epub always share a stem. Naming
+  again with `.md` would clamp long titles against a budget two bytes larger:
+  swept across title lengths 180-339, 101 of them came out different.
+
+### Fixed
+
+- A note the reader had edited could have its new highlights written nowhere
+  while the run said otherwise. Five faults in one path, all found by a review
+  of the branch and all reproduced before fixing:
+
+  The sidecar was named `NAME.new.md`, which is a name a book can hold: a book
+  titled "Foo.new" is written as `Foo.new.md`, exactly the sidecar name for a
+  book titled "Foo", so one book's sidecar overwrote another book's note with
+  the wrong content. It is now `NAME.md.new`, which no naming policy can
+  produce and no later run will adopt as a note.
+
+  The sidecar write's result was discarded, so a run whose sidecar path was
+  occupied still reported "your new highlights are in a file beside it" with
+  nothing written. A note carrying this tool's start marker but no end marker
+  was reported as "not written by ibook2epub" and given no sidecar at all,
+  though its digest was ours. Both sentences are now true of every file they
+  count.
+
+  An `OSError` from writing one note escaped the loop and ended the run with a
+  traceback, where every other per-file failure in this project is logged and
+  stepped over. A file that could not be *read* was counted as one this tool
+  had never written, which it had no way of knowing.
+
+- A FIFO or an oversized file in the vault is no longer read. `read_text` on a
+  FIFO blocks until a writer appears, which froze the whole run; an 8 MB cap
+  now bounds what is read back, mirroring the cap already on the JSON export.
+
+- Naming happens once per run. `_embed_in_shelf` computed the assignment
+  locally without returning it, so the markdown route named the library a
+  second time — under a metadata policy that re-parses every package document,
+  measured at 2.10x. The dispatch between the markdown and JSON exports also
+  moves to one function from three call sites.
+
+- The coverage gate reported a failure and passed the build.
+  `coverage.results.should_fail_under` is `round(total, precision) <
+  fail_under`, and the precision defaults to 0 — so 96.92% rounded to 97,
+  compared equal to the threshold of 97, and exited 0 while the report printed
+  "FAIL ... not reached" from its own unrounded comparison. Anything from 96.5%
+  upwards slipped through, which is a real coverage regression reaching main
+  behind a green tick. `precision = 2` makes the exit code agree with the
+  report, and a test pins both the setting and the arithmetic behind it — by
+  asking coverage to parse the file, since `precision = 2` under
+  `[tool.coverage.html]` satisfies a substring check while leaving the gate
+  exactly as broken as it was.
+
 ## [2.1.1] - 2026-08-28
 
 ### Fixed

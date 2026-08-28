@@ -590,6 +590,66 @@ unparsable.
 container. Without it you get exit code 4 and a message saying so, not a
 traceback.
 
+#### Straight into an Obsidian vault
+
+`--annotations-format markdown` turns the detached export into one note per
+book, with YAML frontmatter and the highlights as blockquotes. With it, `-ad`
+and `-ao` name a **directory** rather than a file.
+
+```bash
+ibook2epub -ao ~/vault/Books --annotations-format markdown   # just the notes
+ibook2epub -ad ~/vault/Books --annotations-format markdown   # convert too
+```
+
+```markdown
+---
+title: "Leviathan Wakes"
+author: "James S.A. Corey"
+identifier: "urn:isbn:9780316129084"
+isbn: "9780316129084"
+category: book
+tags: [books]
+source: ibook2epub
+---
+<!-- ibook2epub sha256=351e6dffa048ee4a -->
+# Leviathan Wakes
+*James S.A. Corey*
+
+## Chapter Fifteen: Holden
+
+> Summary roadside justice
+
+**Note:** the bit where Miller stops being a cop.
+<!-- ibook2epub end — your notes below this line are never modified -->
+```
+
+`-ae` stays JSON: Markdown inside a zip serves nobody.
+
+#### Your notes are yours
+
+A vault note is a file you write in too, which is the whole point of putting
+them there. So the file has four parts, and the tool owns exactly one of them:
+
+| | |
+|---|---|
+| the frontmatter | yours, and Obsidian's — add tags and aliases freely |
+| the marker line | the tool's |
+| the highlights between the markers | the tool's |
+| everything below the end marker | yours |
+
+Only the middle part is ever rewritten. Tag a note, add an alias, write three
+paragraphs underneath — the next run still adds your new highlights and leaves
+all of it alone. Edit *inside* the highlights and the tool stops touching that
+note entirely, putting the new ones in a `.md.new` beside it so you never have
+to choose between keeping your edits and getting your highlights.
+
+A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
+
+One consequence worth knowing: the frontmatter is written once and never
+rewritten, because it is yours from the moment it lands. If a title was wrong
+and you fix it upstream, the note keeps the old one — delete the note and it
+comes back correct.
+
 #### Why two places
 
 The [W3C EPUB Annotations work][anno] defines both and prefers neither.

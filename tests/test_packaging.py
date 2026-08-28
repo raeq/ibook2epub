@@ -93,3 +93,49 @@ class TestTheSchemaIsShipped:
         document = annotations.build_document([])
 
         assert not annotations.schema_problems(document)
+
+
+class TestTheCoverageGateActuallyFailsTheBuild:
+    """
+    The gate reported a failure and passed the build.
+
+    ``coverage.results.should_fail_under`` is ``round(total, precision) <
+    fail_under``, and the precision defaults to 0. So 96.92% rounded to 97,
+    compared equal to a ``fail_under`` of 97, and exited 0 -- while the report
+    printed "FAIL ... not reached" from its own unrounded comparison. Anything
+    from 96.5 upwards slipped through, which is a real regression landing on
+    main behind a green tick.
+
+    RELEASING.md says to judge every gate by its exit code. This is the gate
+    where reading the output was the only way to know.
+    """
+
+    def _config(self) -> str:
+        return (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_comparison_precision_is_pinned(self):
+        # Asked of the config coverage itself builds, not grepped out of the
+        # file: "precision = 2" under [tool.coverage.html] satisfies a
+        # substring check and leaves the gate exactly as broken as it was.
+        config = pytest.importorskip("coverage.config")
+        held = config.CoverageConfig()
+        held.from_file(str(ROOT / "pyproject.toml"), warn=lambda _: None, our_file=True)
+
+        assert held.precision == 2
+        assert held.fail_under == 97
+
+    def test_the_threshold_is_still_declared(self):
+        assert "fail_under = 97" in self._config()
+
+    def test_rounding_no_longer_hides_a_regression(self):
+        # Asked for at call time, not imported at the top: the default install
+        # is pure standard library and the test-minimal job has no coverage
+        # package at all, so a module-level import made the whole file
+        # unimportable there. importorskip states that dependency where it is
+        # actually needed, and skips rather than fails without it.
+        results = pytest.importorskip("coverage.results")
+
+        assert results.should_fail_under(96.92, 97, 0) is False  # what shipped
+        assert results.should_fail_under(96.92, 97, 2) is True  # configured

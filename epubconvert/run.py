@@ -17,14 +17,13 @@ import json
 import os
 import shlex
 import sys
-import tempfile
 from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile
 
-from . import app_logger, exits
+from . import app_logger, exits, notes
 from .annotations import (
     STDOUT,
     AnnotationsUnavailableError,
@@ -36,14 +35,12 @@ from .annotations import index_by_book as index_annotations
 from .annotations import merge as merge_annotations
 from .app_logger import logger
 from .archive import (
-    PARTIAL_PREFIX,
-    PARTIAL_SUFFIX,
     collect_copyable,
     collect_package_dirs,
     copy_through,
     count_ignored,
-    file_mode,
     replace_annotations,
+    write_atomically,
 )
 from .cli import parse_args
 from .convert import (
@@ -205,6 +202,32 @@ def _gather_annotations(
         return None
 
 
+def _write_export(
+    args: argparse.Namespace,
+    found: list[dict[str, Any]],
+    destination: str,
+    named: Sequence[Assignment],
+) -> int:
+    """
+    Write the detached export, in whichever shape this run asked for.
+
+    The one place that decides between a vault of notes and a single JSON
+    document. It was decided at three separate call sites, so a fourth route
+    could have been added without anyone seeing the other three as precedent --
+    the shape of defect this project has shipped four times.
+
+    :param args: Parsed command line arguments.
+    :param found: Every annotation this run read.
+    :param destination: The file or directory named on the command line.
+    :param named: The names this run gave every book.
+
+    :return: A process exit code.
+    """
+    if args.annotations_format == "markdown":
+        return notes.write_vault(found, destination, named)
+    return _write_detached(found, destination)
+
+
 def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
     """
     Write the one-file-per-library export.
@@ -241,7 +264,7 @@ def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
 
     merged, tally = merge_annotations(existing, found)
     try:
-        _write_atomically(
+        write_atomically(
             target,
             json.dumps(build_annotation_document(merged), indent=2, ensure_ascii=False)
             + "\n",
@@ -260,36 +283,6 @@ def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
             tally["kept"],
         )
     return exits.SUCCESS
-
-
-def _write_atomically(target: Path, text: str) -> None:
-    """
-    Replace a file's contents, or leave the old contents alone.
-
-    ``write_text`` truncates before it writes, so a failure partway through --
-    a full disk, a Ctrl-C -- left the export as a prefix of itself, which is
-    neither the old file nor the new one. It is also not valid JSON, so every
-    later run then refused to write to that path at all. The export is the
-    artifact the merge machinery exists to protect; this is the same
-    temporary-then-replace path :func:`~epubconvert.archive.zip_package` uses.
-
-    :param target: The file to replace.
-    :param text: What it should hold.
-
-    :raises OSError: If it could not be written. The old file survives.
-    """
-    handle, temporary = tempfile.mkstemp(
-        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-    )
-    os.close(handle)
-    partial = Path(temporary)
-    try:
-        partial.chmod(file_mode())
-        partial.write_text(text, encoding="utf-8")
-        partial.replace(target)
-    except BaseException:
-        partial.unlink(missing_ok=True)
-        raise
 
 
 def _existing_annotations(target: Path) -> dict[str, Any] | None:
@@ -370,7 +363,7 @@ def _annotations_after_export(
     if args.annotations_refresh and found is not None:
         code = _embed_in_shelf(args, policy, found, True, named)
     if code == exits.SUCCESS and args.annotations_detached and found is not None:
-        code = _write_detached(found, args.annotations_detached)
+        code = _write_export(args, found, args.annotations_detached, named)
     if args.annotations_embedded and not args.annotations_detached and found:
         _warn_about_stranded(args, found, named)
     return None if code == exits.SUCCESS else code
@@ -453,7 +446,11 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     except AnnotationsUnavailableError as exc:
         logger.critical("Could not read annotations: %s", exc)
         return exits.NO_SOURCE
-    return _write_detached(found, args.annotations_only)
+    # -ao reads Apple's container and nothing else, but a note's filename comes
+    # from the naming policy, so the library still has to be named. Naming is
+    # cheap under the default policy and only reached for markdown.
+    named = _named(args, policy) if args.annotations_format == "markdown" else []
+    return _write_export(args, found, args.annotations_only, named)
 
 
 def _apply_annotations(
@@ -501,14 +498,33 @@ def _apply_annotations(
         # when it had been found and used.
         return exits.SUCCESS if converted else exits.NO_SOURCE
 
+    # Named once, here, and passed to everything that needs it. Under a
+    # metadata policy naming re-parses every package document, and computing it
+    # in two places is the 2x read this project has already fixed twice.
+    assignments = list(named) if named is not None else _named(args, policy)
+
     if args.annotations_embedded:
-        code = _embed_in_shelf(args, policy, found, converted, named)
+        code = _embed_in_shelf(args, policy, found, converted, assignments)
         if code != exits.SUCCESS:
             return code
 
     if args.annotations_detached:
-        return _write_detached(found, args.annotations_detached)
+        return _write_export(args, found, args.annotations_detached, assignments)
     return exits.SUCCESS
+
+
+def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
+    """
+    Name every book in the library, once.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+
+    :return: One assignment per package.
+    """
+    return assign_names(
+        collect_package_dirs(args.source_dir), policy, args.on_collision
+    )
 
 
 def _embed_in_shelf(
@@ -536,13 +552,7 @@ def _embed_in_shelf(
         logger.critical("Output directory does not exist: %s", args.output_dir)
         return exits.NO_OUTPUT
 
-    assignments = (
-        list(named)
-        if named is not None
-        else assign_names(
-            collect_package_dirs(args.source_dir), policy, args.on_collision
-        )
-    )
+    assignments = list(named) if named is not None else _named(args, policy)
     index = index_annotations(found)
     ambiguous = _ambiguous_names(assignments)
 
