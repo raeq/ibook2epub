@@ -21,8 +21,16 @@ become conformant later without the data being re-gathered.
 
 The CFI is kept in its own field rather than thrown away. It is the only
 locator that still points at the right place when the highlighted text appears
-more than once, or when the text must not be reproduced at all -- a live
-question for DRM-protected books, still unsettled in that same thread.
+more than once in a book, which a text fragment cannot disambiguate.
+
+**An annotation is the reader's own work.** Their selection, and their note
+beside it. That holds for a DRM-protected book exactly as for any other: the
+annotation was never inside the protected file. Apple keeps it in a separate
+database, and the licensing of the book says nothing about who owns the
+sentence somebody chose to mark. A book whose file cannot be converted is
+skipped by the converter, and its highlights still come out in full. That is
+the case where taking them with you matters most, because the book is the one
+thing that cannot come with them.
 """
 
 from __future__ import annotations

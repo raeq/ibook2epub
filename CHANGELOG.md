@@ -5,6 +5,29 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Documentation said an annotation's text "must not be reproduced" for a
+  DRM-protected book. That was wrong, and it was the stated justification for
+  keeping the `cfi` field. An annotation is the reader's own work -- their
+  selection and their note -- and it was never inside the protected file:
+  Apple keeps it in a separate database, and the licensing of a book says
+  nothing about who owns the sentence somebody chose to mark. The behaviour
+  was already correct, so nothing about the export changes; the claim is
+  removed from the module, the schema and the README. The `cfi` field's real
+  reason stands on its own, which is that a text fragment cannot tell apart a
+  phrase appearing more than once in one book.
+
+  A test now pins it. A DRM-protected book is skipped by the converter because
+  its file cannot be opened, and its highlights still come out in full, with
+  their text intact. There is also a guard asserting that nothing in the
+  annotations module reaches for encryption state at all -- consulting it
+  would be the first step towards withholding a reader's own writing from
+  them, and the shelf of books that cannot be converted is exactly where
+  taking the highlights with you matters most.
+
 ## [2.1.0] - 2026-08-28
 
 ### Added

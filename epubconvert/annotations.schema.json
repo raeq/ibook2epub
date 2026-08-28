@@ -70,7 +70,7 @@
         "text": {
           "type": "string",
           "minLength": 1,
-          "description": "The highlighted text, verbatim."
+          "description": "The highlighted text, verbatim. The reader's own selection, and exported in full whatever the licensing of the book it came from: an annotation is not part of the publication, and a DRM-protected book is the case where taking it with you matters most."
         },
         "note": {
           "type": "string",
@@ -92,7 +92,7 @@
         "cfi": {
           "type": "string",
           "pattern": "^epubcfi\\(",
-          "description": "The EPUB CFI Apple recorded, kept verbatim. Not the primary locator -- the W3C work is explicitly moving away from CFI, which is bound to XHTML -- but retained because it is the only locator that still works when the highlighted text is ambiguous or must not be reproduced, as for a DRM-protected book."
+          "description": "The EPUB CFI Apple recorded, kept verbatim. Not the primary locator -- the W3C work is explicitly moving away from CFI, which is bound to XHTML -- but retained because it is the only locator that still resolves when the highlighted text appears more than once in a book, which a text fragment cannot disambiguate."
         },
         "style": {
           "type": "integer",

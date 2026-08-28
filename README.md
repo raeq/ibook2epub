@@ -660,7 +660,19 @@ Apple records an EPUB CFI, and that is kept verbatim in `cfi` rather than used
 as the locator. The group has explicitly ruled CFI out — *"which will rule out
 epubcfi (which, b.t.w., is bound to XHTML...)"* — but it is the only locator
 that still points at the right place when the highlighted text appears more
-than once, or must not be reproduced at all, as for a DRM-protected book.
+than once in a book, which a text fragment cannot tell apart.
+
+#### Your highlights from books you cannot convert
+
+A DRM-protected book is skipped by the converter, because its file cannot be
+opened. Its highlights still come out in full.
+
+An annotation is not part of the publication. It is your selection and your
+note, and Apple keeps it in a separate database from the book. Nothing about a
+book's licensing makes the sentence you chose to mark somebody else's to
+withhold. This is the case where taking them with you matters most, since the
+book is the one thing that cannot come along — so `-ao` on a shelf of locked
+books still gets you everything you wrote.
 
 **This is ahead of the specification, not conformant to it.** That draft still
 has sections marked T.B.D., and its dependency on text fragments has not yet
