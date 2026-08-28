@@ -24,7 +24,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   writing three paragraphs underneath never stops it being updated.
 
   A note edited *inside* the generated region is left exactly as it is, and its
-  new highlights go to a `.new.md` beside it, so nobody has to choose between
+  new highlights go to a `.md.new` beside it, so nobody has to choose between
   keeping their edits and getting their highlights. That sidecar is itself a
   note and gets the same treatment, so one partly merged by hand survives too.
   A file this tool did not write is never touched. A rerun that finds nothing

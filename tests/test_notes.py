@@ -426,7 +426,7 @@ class TestOutcomesTheCallerCanTrust:
     """
     ``write_vault`` counts what ``_write_one`` returns and tells the reader
     what happened. Every one of those sentences has to be true, because the
-    reader acts on them: "your new highlights are in a .new.md beside it" is
+    reader acts on them: "your new highlights are in a .md.new beside it" is
     a promise that something exists.
     """
 
@@ -623,3 +623,39 @@ class TestFailuresThatDoNotNeedAPermissionBit:
 
         assert code != 0
         assert "could not be written" in capsys.readouterr().err
+
+
+class TestTheDocumentedSidecarNameIsTheRealOne:
+    """
+    The suffix is defined once in code and described in prose in three places,
+    which is how the two drifted apart: the sidecar was renamed and the README
+    went on naming the old one, sending readers to look for a file that is
+    never written.
+
+    Derived rather than restated, so a future rename fails here instead of
+    going quiet.
+    """
+
+    def _readme(self) -> str:
+        return (Path(__file__).resolve().parent.parent / "README.md").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_readme_names_the_suffix_the_code_defines(self):
+        assert notes.SIDECAR_SUFFIX in self._readme()
+
+    def test_the_readme_names_no_other_sidecar_suffix(self):
+        # The README describes only current behaviour -- it has no section
+        # explaining what the sidecar used to be called, unlike the changelog.
+        # ".new" alone is a substring of the real suffix, so the check names
+        # the shape a sidecar could plausibly be called instead.
+        stale = {
+            candidate
+            for candidate in (".new.md", ".md.old", ".sidecar.md")
+            if candidate != notes.SIDECAR_SUFFIX and candidate in self._readme()
+        }
+
+        assert stale == set()
+
+    def test_the_suffix_is_what_sidecar_for_actually_appends(self):
+        assert notes.sidecar_for(Path("Book.md")).name == "Book" + notes.SIDECAR_SUFFIX

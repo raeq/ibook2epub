@@ -640,7 +640,7 @@ them there. So the file has four parts, and the tool owns exactly one of them:
 Only the middle part is ever rewritten. Tag a note, add an alias, write three
 paragraphs underneath — the next run still adds your new highlights and leaves
 all of it alone. Edit *inside* the highlights and the tool stops touching that
-note entirely, putting the new ones in a `.new.md` beside it so you never have
+note entirely, putting the new ones in a `.md.new` beside it so you never have
 to choose between keeping your edits and getting your highlights.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
