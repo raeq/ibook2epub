@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 import epubconvert
-from epubconvert import annotations
+from epubconvert import annotations, cli
 from tests.conftest import needs_permissions
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,17 +181,30 @@ class TestTheReadmeQuotesTheRealHelp:
             env={**os.environ, "COLUMNS": "79"},
         ).stdout.rstrip()
 
+    @pytest.mark.skipif(
+        sys.version_info < (3, 13),
+        reason="argparse stopped repeating the metavar for short options in "
+        "3.13, so the same parser renders '-w, --workers N' there and "
+        "'-w N, --workers N' before it; the block can only match one of them",
+    )
     def test_the_block_is_what_the_program_prints(self):
+        # Exact, on the versions that render the way the block was generated.
+        # The weaker check below runs everywhere, which is what catches a flag
+        # added without regenerating -- the failure this exists for.
         assert self._quoted() == self._real()
 
     def test_every_flag_the_parser_takes_is_in_the_block(self):
-        # A second question the exact match already answers, kept because it
-        # names what went wrong when it fails.
+        # Asked of the parser rather than a hand-written list, so a flag added
+        # tomorrow is covered without anyone remembering this test. Runs on
+        # every version, because option *strings* are stable across them even
+        # though their rendering is not.
         quoted = self._quoted()
-        missing = [
-            action
-            for action in ("--annotations-format", "-ao", "-ad", "-ae", "-ar", "-an")
-            if action not in quoted
-        ]
+        parser = cli.build_parser()
+        # argparse exposes no public way to enumerate its actions, and asking
+        # it is the whole point: a hand-written list of flags is the thing that
+        # goes stale, which is the defect this test exists for.
+        actions = parser._actions  # pylint: disable=protected-access
+        wanted = {option for action in actions for option in action.option_strings}
+        missing = sorted(option for option in wanted if option not in quoted)
 
         assert missing == []
