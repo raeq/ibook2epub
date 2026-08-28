@@ -51,11 +51,18 @@ the standard library. The optional `portable` extra adds
 ## Installation
 
 ```bash
-pip install ibook2epub
+brew install raeq/tap/ibook2epub    # macOS
+pip install ibook2epub              # anywhere
 ```
 
 That is the whole thing: no compiled wheel, no third-party package, nothing to
 pull in at runtime. It installs an `ibook2epub` command.
+
+The Homebrew formula lives in [raeq/homebrew-tap][tap] rather than
+homebrew-core, and brings its own Python, so it does not care which one you
+have. It is the same distribution PyPI serves.
+
+[tap]: https://github.com/raeq/homebrew-tap
 
 ### With the portable extra
 

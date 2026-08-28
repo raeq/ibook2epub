@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A Homebrew tap: `brew install raeq/tap/ibook2epub`. The formula lives in
+  [raeq/homebrew-tap](https://github.com/raeq/homebrew-tap) rather than
+  homebrew-core, which weighs how widely used a project is. It brings its own
+  Python and installs the same distribution PyPI serves.
+
 ## [2.0.4] - 2026-08-27
 
 ### Fixed
@@ -225,6 +234,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[Unreleased]: https://github.com/raeq/ibook2epub/compare/v2.0.4...HEAD
 [2.0.4]: https://github.com/raeq/ibook2epub/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/raeq/ibook2epub/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/raeq/ibook2epub/compare/v2.0.1...v2.0.2
