@@ -15,7 +15,6 @@ from importlib import metadata
 from pathlib import Path
 
 import pytest
-from coverage.results import should_fail_under
 
 import epubconvert
 from epubconvert import annotations
@@ -125,5 +124,12 @@ class TestTheCoverageGateActuallyFailsTheBuild:
         assert "fail_under = 97" in self._config()
 
     def test_rounding_no_longer_hides_a_regression(self):
-        assert should_fail_under(96.92, 97, 0) is False  # what shipped
-        assert should_fail_under(96.92, 97, 2) is True  # what is configured
+        # Asked for at call time, not imported at the top: the default install
+        # is pure standard library and the test-minimal job has no coverage
+        # package at all, so a module-level import made the whole file
+        # unimportable there. importorskip states that dependency where it is
+        # actually needed, and skips rather than fails without it.
+        results = pytest.importorskip("coverage.results")
+
+        assert results.should_fail_under(96.92, 97, 0) is False  # what shipped
+        assert results.should_fail_under(96.92, 97, 2) is True  # configured
