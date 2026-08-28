@@ -15,6 +15,7 @@ from importlib import metadata
 from pathlib import Path
 
 import pytest
+from coverage.results import should_fail_under
 
 import epubconvert
 from epubconvert import annotations
@@ -93,3 +94,36 @@ class TestTheSchemaIsShipped:
         document = annotations.build_document([])
 
         assert not annotations.schema_problems(document)
+
+
+class TestTheCoverageGateActuallyFailsTheBuild:
+    """
+    The gate reported a failure and passed the build.
+
+    ``coverage.results.should_fail_under`` is ``round(total, precision) <
+    fail_under``, and the precision defaults to 0. So 96.92% rounded to 97,
+    compared equal to a ``fail_under`` of 97, and exited 0 -- while the report
+    printed "FAIL ... not reached" from its own unrounded comparison. Anything
+    from 96.5 upwards slipped through, which is a real regression landing on
+    main behind a green tick.
+
+    RELEASING.md says to judge every gate by its exit code. This is the gate
+    where reading the output was the only way to know.
+    """
+
+    def _config(self) -> str:
+        return (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_comparison_precision_is_pinned(self):
+        # Read as text rather than parsed: tomllib is 3.11+ and this package
+        # supports 3.10, so importing it would fail the oldest job in CI.
+        assert "precision = 2" in self._config()
+
+    def test_the_threshold_is_still_declared(self):
+        assert "fail_under = 97" in self._config()
+
+    def test_rounding_no_longer_hides_a_regression(self):
+        assert should_fail_under(96.92, 97, 0) is False  # what shipped
+        assert should_fail_under(96.92, 97, 2) is True  # what is configured

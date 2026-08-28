@@ -52,6 +52,13 @@ branch = true
 # renegotiated every commit. Raise it when the real figure moves up, never
 # lower it to make a build pass.
 fail_under = 97
+# Compared at two decimals, because the comparison rounds before it compares:
+# coverage's should_fail_under is `round(total, precision) < fail_under`, and
+# the default precision of 0 rounded 96.92% up to 97 and passed the build while
+# the report printed "FAIL ... not reached". Anything from 96.5 upwards slipped
+# through, so a real regression could land on main with a red message and a
+# green tick. Two decimals makes the exit code agree with the report.
+precision = 2
 show_missing = true
 skip_covered = true
 exclude_also = [
