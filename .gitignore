@@ -168,3 +168,10 @@ CLAUDE.md
 # Claude Code workspace settings: local tooling config, not project source.
 # Was tracked until the history rewrite that removed it.
 .claude/
+
+# The uv lock file. Nothing consumes it: every CI job installs with pip, and
+# MANIFEST.in already keeps it out of the sdist, so it pinned nothing and
+# drifted unnoticed -- it still named version 2.0.2 at 2.2.0. A library with
+# no runtime dependencies has nothing to lock. If it ever earns its place,
+# it will be because CI runs `uv sync --frozen`, and it can come back then.
+uv.lock
