@@ -30,14 +30,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from . import exits
-from .annotations import for_book, index_by_book
-from .app_logger import logger
+from ..extract.annotations import for_book, index_by_book
+from ..extract.validate import isbn13_of
+from ..utils import exits
+from ..utils.app_logger import logger
+from ..utils.display import collapse, printable
+from ..utils.policy import Assignment
 from .archive import write_atomically
-from .display import collapse, printable
 from .naming import encode_name
-from .policy import Assignment
-from .validate import isbn13_of
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
 #: copied through untouched. Written from the first run even when there is

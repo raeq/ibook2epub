@@ -27,13 +27,15 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import annotations, archive, coredata, run
-from epubconvert.naming import (
+from epubconvert.export import archive
+from epubconvert.export.naming import (
     MetadataNaming,
     PassthroughNaming,
     StripNaming,
 )
-from epubconvert.policy import NamingPolicy
+from epubconvert.extract import annotations, coredata
+from epubconvert.run import run
+from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_metadata_package
 from tests.test_annotations import (
     highlight,
@@ -227,7 +229,7 @@ class TestTheCommandLineMode:
         library = tmp_path / "empty"
         library.mkdir(exist_ok=True)
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -277,7 +279,7 @@ class TestTheCommandLineMode:
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "absent", policy),
         )
 
@@ -340,7 +342,7 @@ class TestRefreshingAnnotationsWithoutConverting:
             books=[library_row(path="/x/Leviathan Wakes.epub")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -440,7 +442,7 @@ class TestAnnotationsOnly:
         library = tmp_path / "lib"
         make_metadata_package(library, "Leviathan Wakes.epub", title="Leviathan Wakes")
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -511,7 +513,7 @@ class TestWritingToStandardOutput:
         library = tmp_path / "lib"
         make_metadata_package(library, "Leviathan Wakes.epub", title="Leviathan Wakes")
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library

@@ -18,7 +18,8 @@ epub stays byte-identical and a PDF stays a PDF.
 from pathlib import Path
 from zipfile import ZipFile
 
-from epubconvert import archive, run
+from epubconvert.export import archive
+from epubconvert.run import run
 from tests.conftest import make_package
 
 

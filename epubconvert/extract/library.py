@@ -36,8 +36,11 @@ from pathlib import Path
 from sqlite3 import Row
 from typing import Any
 
-from .app_logger import logger
-from .contained import escapes
+from ..utils.app_logger import logger
+from ..utils.contained import escapes
+from ..utils.display import printable
+from ..utils.policy import NamingPolicy
+from ..utils.spec import PACKAGE_SUFFIX
 from .coredata import (
     ContainerUnavailableError,
     container_directory,
@@ -46,9 +49,6 @@ from .coredata import (
     newest,
     rows,
 )
-from .display import printable
-from .policy import NamingPolicy
-from .spec import PACKAGE_SUFFIX
 from .validate import (
     Package,
     ValidationError,

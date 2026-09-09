@@ -35,10 +35,13 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import __version__, annotations, archive, cli, coredata
-from epubconvert.library import describe_book
-from epubconvert.run import main
-from epubconvert.validate import Package, canonical_identifier
+from epubconvert import __version__
+from epubconvert.export import archive
+from epubconvert.extract import annotations, coredata
+from epubconvert.extract.library import describe_book
+from epubconvert.extract.validate import Package, canonical_identifier
+from epubconvert.run import cli
+from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -494,7 +497,7 @@ class TestNothingAlreadyWrittenIsDestroyed:
             books=[library_row(path="/x/Leviathan Wakes.epub")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -595,7 +598,7 @@ class TestNothingAlreadyWrittenIsDestroyed:
         library = self._library(tmp_path, monkeypatch)
         target = tmp_path / "notes.json"
         target.write_text('{"annotations": []}', encoding="utf-8")
-        monkeypatch.setattr("epubconvert.detached.MAX_EXPORT_BYTES", 4)
+        monkeypatch.setattr("epubconvert.export.detached.MAX_EXPORT_BYTES", 4)
 
         assert main(["-s", str(library), "-ao", str(target), "-q"]) == 5
         assert target.read_text(encoding="utf-8") == '{"annotations": []}'
@@ -636,7 +639,7 @@ class TestADryRunWritesNothing:
             books=[library_row(path="/x/Leviathan Wakes.epub")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         target = output_dir / "Leviathan Wakes.epub"
@@ -656,7 +659,7 @@ class TestADryRunWritesNothing:
         make_metadata_package(library, "One.epub", title="One")
         make_databases(tmp_path / "container")
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         target = tmp_path / "export.json"
@@ -678,7 +681,7 @@ class TestExitCodesMeanOneThing:
         library = tmp_path / "lib"
         make_metadata_package(library, "One.epub", title="One")
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             _unreadable,
         )
 
@@ -691,7 +694,7 @@ class TestExitCodesMeanOneThing:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             _unreadable,
         )
 
@@ -706,7 +709,7 @@ class TestExitCodesMeanOneThing:
         make_metadata_package(library, "One.epub", title="One")
         make_databases(tmp_path / "container")
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
 
@@ -727,7 +730,7 @@ class TestGettingHighlightsOutWithoutTheBooks:
         # another disk could not get their highlights out at all.
         make_databases(tmp_path / "container")
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         target = tmp_path / "out.json"

@@ -13,14 +13,14 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import convert, planning, run
-from epubconvert.archive import (
+from epubconvert.export.archive import (
     PARTIAL_PREFIX,
     PARTIAL_SUFFIX,
     collect_package_dirs,
     is_excluded,
     zip_package,
 )
+from epubconvert.run import convert, planning, run
 from tests.conftest import EXPECTED_MEMBERS, make_package
 
 
@@ -217,7 +217,7 @@ class TestZipPackage:
         def boom(_name, **_kwargs):
             raise OSError("disk fell over")
 
-        monkeypatch.setattr("epubconvert.archive.is_excluded", boom)
+        monkeypatch.setattr("epubconvert.export.archive.is_excluded", boom)
 
         with pytest.raises(OSError):
             zip_package(library / "Book One.epub", target)
@@ -282,7 +282,7 @@ class TestExportPackages:
         def boom(_name, **_kwargs):
             raise OSError("disk fell over")
 
-        monkeypatch.setattr("epubconvert.archive.is_excluded", boom)
+        monkeypatch.setattr("epubconvert.export.archive.is_excluded", boom)
         packages = collect_package_dirs(library)
 
         report = export(packages, output_dir)

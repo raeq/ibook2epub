@@ -31,12 +31,12 @@ import hashlib
 import unicodedata
 from typing import TYPE_CHECKING, Literal
 
-from .policy import NamingPolicy
-from .spec import PACKAGE_SUFFIX
-from .validate import usable_title
+from ..extract.validate import usable_title
+from ..utils.policy import NamingPolicy
+from ..utils.spec import PACKAGE_SUFFIX
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .validate import Package
+    from ..extract.validate import Package
 
 try:
     import disarm

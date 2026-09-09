@@ -31,9 +31,10 @@ from typing import Any
 
 import pytest
 
-from epubconvert import app_logger, notes
-from epubconvert.archive import write_atomically
-from epubconvert.policy import Assignment
+from epubconvert.export import notes
+from epubconvert.export.archive import write_atomically
+from epubconvert.utils import app_logger
+from epubconvert.utils.policy import Assignment
 
 # ------------------------------------------------------------------ rendering
 

@@ -14,7 +14,7 @@ source directory can go unmentioned.
 
 import pytest
 
-from epubconvert import cli, run
+from epubconvert.run import cli, run
 from tests.conftest import make_package
 
 
@@ -194,7 +194,7 @@ class TestFirstContactOrients:
     ):
         # Auto-discovery: both known homes probed, neither holding books.
         monkeypatch.setattr(
-            "epubconvert.cli.discover_source", lambda: tmp_path / "nowhere"
+            "epubconvert.run.cli.discover_source", lambda: tmp_path / "nowhere"
         )
 
         run.main(["-o", str(tmp_path / "out")])
@@ -213,8 +213,10 @@ class TestTheLibraryNotFoundListingLinesUp:
 
     def test_every_candidate_is_indented_the_same(self, tmp_path, monkeypatch, capsys):
         candidates = (tmp_path / "one", tmp_path / "two")
-        monkeypatch.setattr("epubconvert.run.SOURCE_CANDIDATES", candidates)
-        monkeypatch.setattr("epubconvert.cli.discover_source", lambda: candidates[0])
+        monkeypatch.setattr("epubconvert.run.run.SOURCE_CANDIDATES", candidates)
+        monkeypatch.setattr(
+            "epubconvert.run.cli.discover_source", lambda: candidates[0]
+        )
 
         run.main(["-o", str(tmp_path / "out"), "-q"])
 

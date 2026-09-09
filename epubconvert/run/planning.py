@@ -17,25 +17,25 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from zipfile import BadZipFile, ZipFile
 
-from .app_logger import logger
-from .display import printable
-from .naming import (
+from ..export.naming import (
     disambiguator,
     encode_name,
     filesystem_key,
     split_extension,
     truncate_bytes,
 )
-from .policy import Assignment, NamingPolicy
-from .source import inspect_package
-from .spec import PACKAGE_SUFFIX
-from .validate import (
+from ..extract.source import inspect_package
+from ..extract.validate import (
     Package,
     ValidationError,
     read_package,
     read_package_dir,
     usable_identifier,
 )
+from ..utils.app_logger import logger
+from ..utils.display import printable
+from ..utils.policy import Assignment, NamingPolicy
+from ..utils.spec import PACKAGE_SUFFIX
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report

@@ -17,14 +17,15 @@ from zipfile import ZipFile
 
 import pytest
 
-from epubconvert import cli, inspect_output, planning, run
-from epubconvert.archive import (
+from epubconvert.export import inspect_output
+from epubconvert.export.archive import (
     PARTIAL_PREFIX,
     PARTIAL_SUFFIX,
     zip_package,
 )
-from epubconvert.naming import PortableNaming, StripNaming
-from epubconvert.validate import ArchiveInvalidError
+from epubconvert.export.naming import PortableNaming, StripNaming
+from epubconvert.extract.validate import ArchiveInvalidError
+from epubconvert.run import cli, planning, run
 from tests.conftest import make_package, needs_permissions
 
 disarm = pytest.importorskip("disarm", reason="portable naming needs the disarm extra")

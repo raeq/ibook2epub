@@ -19,7 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import contained, inspect_output, source, validate
+from epubconvert.export import inspect_output
+from epubconvert.extract import source, validate
+from epubconvert.utils import contained
 from tests.conftest import make_package
 
 OUTSIDE_OPF = """<package xmlns="http://www.idpf.org/2007/opf"
@@ -136,7 +138,7 @@ class TestNoSecondImplementation:
         # has started another implementation -- on the read side (is a member
         # safe to open) or the write side (is this name free to create).
         offenders = []
-        for path in sorted(Path("epubconvert").glob("*.py")):
+        for path in sorted(Path("epubconvert").rglob("*.py")):
             if path.name == "contained.py":
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -147,10 +149,15 @@ class TestNoSecondImplementation:
         assert offenders == []
 
     def test_every_package_reader_imports_the_rule(self):
-        readers = ["archive.py", "validate.py", "source.py", "inspect_output.py"]
+        readers = [
+            "export/archive.py",
+            "extract/validate.py",
+            "extract/source.py",
+            "export/inspect_output.py",
+        ]
         for name in readers:
             text = (Path("epubconvert") / name).read_text(encoding="utf-8")
-            assert "from .contained import" in text, name
+            assert "contained import" in text, name
 
 
 class TestOpeningRefusesToFollow:
@@ -255,7 +262,7 @@ class TestTheCoverIsReadThroughTheRule:
         # a plain open(), so a package member must never be read that way. The
         # census is taken from the source, not from a list in a docstring.
         offenders = []
-        for path in sorted(Path("epubconvert").glob("*.py")):
+        for path in sorted(Path("epubconvert").rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Attribute) and node.attr in {

@@ -19,9 +19,9 @@ from functools import lru_cache
 from pathlib import Path
 from xml.etree import ElementTree
 
-from .app_logger import logger
-from .contained import contains, open_contained, resolve
-from .display import printable
+from ..utils.app_logger import logger
+from ..utils.contained import contains, open_contained, resolve
+from ..utils.display import printable
 
 ENCRYPTION_PATH = "META-INF/encryption.xml"
 SINF_PATH = "META-INF/sinf.xml"

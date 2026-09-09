@@ -26,8 +26,8 @@ from zipfile import ZipFile
 
 import pytest
 
-from epubconvert import annotations
-from epubconvert.run import main
+from epubconvert.extract import annotations
+from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -66,7 +66,7 @@ class TestAnnotationsAreTheReadersOwnWork:
             books=[library_row(path=str(package), title="Locked Book")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -168,7 +168,7 @@ class TestHighlightsThatReachedNoFileAreReported:
             ],
         )
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -259,7 +259,7 @@ class TestHighlightsThatReachedNoFileAreReported:
             ],
         )
         monkeypatch.setattr(
-            "epubconvert.run.collect_annotations",
+            "epubconvert.run.run.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
 

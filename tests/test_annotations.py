@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import annotations, coredata
+from epubconvert.extract import annotations, coredata
 
 #: Core Data counts seconds from 2001-01-01, not from the Unix epoch.
 APPLE_EPOCH_OFFSET = 978307200

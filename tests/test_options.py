@@ -10,10 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import __version__, cli, convert, planning, run
-from epubconvert.archive import collect_package_dirs
-from epubconvert.naming import PassthroughNaming
-from epubconvert.policy import NamingPolicy
+from epubconvert import __version__
+from epubconvert.export.archive import collect_package_dirs
+from epubconvert.export.naming import PassthroughNaming
+from epubconvert.run import cli, convert, planning, run
+from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_package
 
 

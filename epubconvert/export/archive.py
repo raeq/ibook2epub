@@ -18,12 +18,12 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
-from .annotations import EMBEDDED_PATH, embedded_json
-from .app_logger import logger
-from .contained import contains, open_contained
-from .display import printable
-from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
-from .validate import ArchiveInvalidError, ValidationOptions
+from ..extract.annotations import EMBEDDED_PATH, embedded_json
+from ..extract.validate import ArchiveInvalidError, ValidationOptions
+from ..utils.app_logger import logger
+from ..utils.contained import contains, open_contained
+from ..utils.display import printable
+from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
 
 # Zip cannot represent a timestamp before 1980; using its floor keeps every
 # export byte-identical regardless of when it ran.

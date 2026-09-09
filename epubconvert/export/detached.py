@@ -23,18 +23,19 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from . import catalogue, exits, notes
-from .annotations import STDOUT
-from .annotations import build_document as build_annotation_document
-from .annotations import merge as merge_annotations
-from .app_logger import logger
+from ..extract.annotations import STDOUT
+from ..extract.annotations import build_document as build_annotation_document
+from ..extract.annotations import merge as merge_annotations
+from ..extract.coredata import ContainerUnavailableError
+from ..extract.library import collect as collect_library
+from ..utils import exits
+from ..utils.app_logger import logger
+from ..utils.contained import is_free
+from ..utils.display import printable
+from ..utils.policy import Assignment, NamingPolicy
+from . import catalogue, notes
 from .archive import write_atomically
-from .contained import is_free
-from .coredata import ContainerUnavailableError
-from .display import printable
-from .library import collect as collect_library
 from .notes import SIDECAR_SUFFIX
-from .policy import Assignment, NamingPolicy
 
 
 def write_export(

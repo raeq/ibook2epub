@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import run, source
+from epubconvert.extract import source
+from epubconvert.run import run
 from tests.conftest import make_package
 
 FONT_ENCRYPTION = """<?xml version="1.0"?>

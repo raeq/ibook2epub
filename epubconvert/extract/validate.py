@@ -30,10 +30,10 @@ from xml.etree import ElementTree
 from xml.parsers import expat
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
-from .app_logger import logger
-from .contained import escapes as escapes_archive
-from .contained import is_remote, open_contained, resolve
-from .spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
+from ..utils.app_logger import logger
+from ..utils.contained import escapes as escapes_archive
+from ..utils.contained import is_remote, open_contained, resolve
+from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"

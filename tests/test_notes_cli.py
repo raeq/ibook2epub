@@ -18,8 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import annotations, cli, notes
-from epubconvert.run import main
+from epubconvert.export import notes
+from epubconvert.extract import annotations
+from epubconvert.run import cli
+from epubconvert.run.run import main
 from tests.conftest import make_metadata_package, needs_permissions
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -42,7 +44,7 @@ def _library(
         else [library_row(path=str(package), title="Leviathan Wakes")],
     )
     monkeypatch.setattr(
-        "epubconvert.run.collect_annotations",
+        "epubconvert.run.run.collect_annotations",
         lambda policy=None: annotations.collect(tmp_path / "container", policy),
     )
     return library

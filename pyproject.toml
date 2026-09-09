@@ -71,7 +71,8 @@ exclude_also = [
 # `catalogue.schema_problems`, and each is the contract a consumer builds
 # against, so they have to be inside the installed package rather than only
 # beside the source.
-epubconvert = ["annotations.schema.json", "library.schema.json"]
+"epubconvert.extract" = ["annotations.schema.json"]
+"epubconvert.export" = ["library.schema.json"]
 
 [project.urls]
 Homepage = "https://github.com/raeq/ibook2epub"
@@ -81,8 +82,11 @@ Changelog = "https://github.com/raeq/ibook2epub/blob/main/CHANGELOG.md"
 [project.scripts]
 ibook2epub = "epubconvert.run:main"
 
-[tool.setuptools]
-packages = ["epubconvert"]
+[tool.setuptools.packages.find]
+# Named by a find directive rather than one by one: the package is four
+# layers now, and a new module in any of them must ship without anyone
+# remembering to add it here.
+include = ["epubconvert*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

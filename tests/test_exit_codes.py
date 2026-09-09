@@ -17,7 +17,9 @@ from zipfile import ZipFile
 
 import pytest
 
-from epubconvert import convert, exits, naming, run
+from epubconvert.export import naming
+from epubconvert.run import convert, run
+from epubconvert.utils import exits
 from tests.conftest import make_package
 
 
@@ -86,7 +88,7 @@ class TestEachFailureHasItsOwnCode:
         assert code == exits.MISSING_TOOL
 
     def test_a_missing_external_tool_has_its_own_code(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("epubconvert.run.epubcheck_available", lambda: False)
+        monkeypatch.setattr("epubconvert.run.run.epubcheck_available", lambda: False)
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
 

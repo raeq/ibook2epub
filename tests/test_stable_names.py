@@ -21,14 +21,15 @@ called, and nothing else.
 
 from pathlib import Path
 
-from epubconvert import archive, planning, run
-from epubconvert.naming import (
+from epubconvert.export import archive
+from epubconvert.export.naming import (
     MAX_FILENAME_BYTES,
     MetadataNaming,
     disambiguator,
     encode_name,
 )
-from epubconvert.validate import Package, usable_identifier
+from epubconvert.extract.validate import Package, usable_identifier
+from epubconvert.run import planning, run
 from tests.conftest import make_metadata_package, remove_tree
 
 

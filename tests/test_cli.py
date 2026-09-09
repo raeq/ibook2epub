@@ -10,7 +10,8 @@ import os
 
 import pytest
 
-from epubconvert import app_logger, cli, convert, defaults, exits, run
+from epubconvert.run import cli, convert, run
+from epubconvert.utils import app_logger, defaults, exits
 from tests.conftest import make_package
 
 
@@ -220,7 +221,7 @@ class TestMain:
         def boom(_name):
             raise OSError("disk fell over")
 
-        monkeypatch.setattr("epubconvert.archive.is_excluded", boom)
+        monkeypatch.setattr("epubconvert.export.archive.is_excluded", boom)
 
         code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0"])
 

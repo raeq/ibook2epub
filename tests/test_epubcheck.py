@@ -15,7 +15,9 @@ what the tool says.
 
 import subprocess
 
-from epubconvert import cli, exits, run, validate
+from epubconvert.extract import validate
+from epubconvert.run import cli, run
+from epubconvert.utils import exits
 
 
 class TestEpubcheck:
@@ -23,7 +25,9 @@ class TestEpubcheck:
         assert isinstance(validate.epubcheck_available(), bool)
 
     def test_missing_tool_is_reported(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("epubconvert.validate.shutil.which", lambda _name: None)
+        monkeypatch.setattr(
+            "epubconvert.extract.validate.shutil.which", lambda _name: None
+        )
 
         assert validate.run_epubcheck(tmp_path / "x.epub") == [
             "epubcheck is not on PATH"
@@ -33,7 +37,7 @@ class TestEpubcheck:
         # Was a usage error, indistinguishable from a typo'd flag. Whether the
         # tool is installed is a fact about the machine, not about the command
         # line, so it is checked in run.main and carries its own code.
-        monkeypatch.setattr("epubconvert.run.epubcheck_available", lambda: False)
+        monkeypatch.setattr("epubconvert.run.run.epubcheck_available", lambda: False)
 
         code = run.main(
             ["-s", str(library), "-o", str(tmp_path / "out"), "--epubcheck", "-q"]
@@ -71,7 +75,8 @@ class TestRunningEpubcheck:
         """Pretend the tool is installed, and record how it was invoked."""
         calls: list[tuple[list[str], dict[str, object]]] = []
         monkeypatch.setattr(
-            "epubconvert.validate.shutil.which", lambda _name: "/usr/bin/epubcheck"
+            "epubconvert.extract.validate.shutil.which",
+            lambda _name: "/usr/bin/epubcheck",
         )
 
         def fake_run(command, **options):
@@ -80,7 +85,7 @@ class TestRunningEpubcheck:
                 raise raises
             return result
 
-        monkeypatch.setattr("epubconvert.validate.subprocess.run", fake_run)
+        monkeypatch.setattr("epubconvert.extract.validate.subprocess.run", fake_run)
         return calls
 
     def test_a_clean_archive_reports_nothing(self, tmp_path, monkeypatch):

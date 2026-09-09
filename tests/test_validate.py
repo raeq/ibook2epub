@@ -10,8 +10,10 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert import exits, run, validate
-from epubconvert.archive import zip_package
+from epubconvert.export.archive import zip_package
+from epubconvert.extract import validate
+from epubconvert.run import run
+from epubconvert.utils import exits
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0"

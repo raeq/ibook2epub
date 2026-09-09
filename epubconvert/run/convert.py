@@ -27,13 +27,15 @@ from pathlib import Path
 from random import shuffle
 from typing import TextIO
 
-from . import exits
-from .annotations import for_book as annotations_for_book
-from .app_logger import logger
-from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
-from .display import printable
-from .inspect_output import extract_cover, free_megabytes
-from .naming import PassthroughNaming
+from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
+from ..export.inspect_output import extract_cover, free_megabytes
+from ..export.naming import PassthroughNaming
+from ..extract.annotations import for_book as annotations_for_book
+from ..extract.validate import ValidationOptions
+from ..utils import exits
+from ..utils.app_logger import logger
+from ..utils.display import printable
+from ..utils.policy import NamingPolicy
 from .planning import (
     PENDING,
     Decision,
@@ -41,8 +43,6 @@ from .planning import (
     plan_exports,
     record_decisions,
 )
-from .policy import NamingPolicy
-from .validate import ValidationOptions
 
 try:
     import fcntl

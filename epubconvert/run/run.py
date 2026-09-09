@@ -21,19 +21,36 @@ from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile
 
-from . import app_logger, exits
-from .annotations import STDOUT
-from .annotations import collect as collect_annotations
-from .annotations import for_book as annotations_for_book
-from .annotations import index_by_book as index_annotations
-from .app_logger import logger
-from .archive import (
+from ..export.archive import (
     collect_copyable,
     collect_package_dirs,
     copy_through,
     count_ignored,
     replace_annotations,
 )
+from ..export.detached import library_export, library_refusal, vault_of, write_export
+from ..export.inspect_output import verify_output
+from ..export.naming import (
+    PortableNamesUnavailableError,
+    PortableNaming,
+    StripNaming,
+    build_policy,
+)
+from ..extract.annotations import STDOUT
+from ..extract.annotations import collect as collect_annotations
+from ..extract.annotations import for_book as annotations_for_book
+from ..extract.annotations import index_by_book as index_annotations
+from ..extract.coredata import ContainerUnavailableError
+from ..extract.validate import (
+    ArchiveInvalidError,
+    ValidationOptions,
+    epubcheck_available,
+)
+from ..utils import app_logger, exits
+from ..utils.app_logger import logger
+from ..utils.defaults import SOURCE_CANDIDATES
+from ..utils.display import printable
+from ..utils.policy import Assignment, NamingPolicy
 from .cli import parse_args
 from .convert import (
     ExportOptions,
@@ -49,17 +66,6 @@ from .convert import (
     progress_for,
     sweep_partials,
 )
-from .coredata import ContainerUnavailableError
-from .defaults import SOURCE_CANDIDATES
-from .detached import library_export, library_refusal, vault_of, write_export
-from .display import printable
-from .inspect_output import verify_output
-from .naming import (
-    PortableNamesUnavailableError,
-    PortableNaming,
-    StripNaming,
-    build_policy,
-)
 from .planning import (
     CollisionMode,
     PlanOptions,
@@ -70,8 +76,6 @@ from .planning import (
     plan_exports,
     render_listing,
 )
-from .policy import Assignment, NamingPolicy
-from .validate import ArchiveInvalidError, ValidationOptions, epubcheck_available
 
 
 def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:

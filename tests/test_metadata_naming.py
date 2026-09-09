@@ -18,14 +18,16 @@ than guessed. Where a number appears in a comment, that is where it came from.
 
 from pathlib import Path
 
-from epubconvert import archive, planning, run, validate
-from epubconvert.naming import (
+from epubconvert.export import archive
+from epubconvert.export.naming import (
     MAX_FILENAME_BYTES,
     MetadataNaming,
     PassthroughNaming,
     encode_name,
 )
-from epubconvert.validate import Package
+from epubconvert.extract import validate
+from epubconvert.extract.validate import Package
+from epubconvert.run import planning, run
 from tests.conftest import make_metadata_package, make_package
 
 

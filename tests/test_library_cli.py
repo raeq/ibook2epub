@@ -18,9 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import cli, library
-from epubconvert.catalogue import schema_problems
-from epubconvert.run import main
+from epubconvert.export.catalogue import schema_problems
+from epubconvert.extract import annotations, library
+from epubconvert.run import cli
+from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_library import BOUGHT, _csv_rows
@@ -42,16 +43,14 @@ def _container(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str]:
         ],
     )
     monkeypatch.setattr(
-        "epubconvert.detached.collect_library",
+        "epubconvert.export.detached.collect_library",
         lambda policy=None, identifiers=True: library.collect(
             tmp_path / "container", policy, identifiers=identifiers
         ),
     )
     monkeypatch.setattr(
-        "epubconvert.run.collect_annotations",
-        lambda policy=None: __import__("epubconvert.annotations").annotations.collect(
-            tmp_path / "container", policy
-        ),
+        "epubconvert.run.run.collect_annotations",
+        lambda policy=None: annotations.collect(tmp_path / "container", policy),
     )
     return ["-s", str(tmp_path / "no-such-library"), "-o", str(tmp_path / "out")]
 
@@ -337,7 +336,7 @@ class TestWhenTheDestinationIsWrong:
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(
-            "epubconvert.detached.collect_library",
+            "epubconvert.export.detached.collect_library",
             lambda **_: pytest.fail("read the library before refusing"),
         )
 
@@ -361,7 +360,7 @@ class TestWhenTheDestinationIsWrong:
         target = tmp_path / "library.csv"
         target.write_text("precious", encoding="utf-8")
         monkeypatch.setattr(
-            "epubconvert.detached.collect_library",
+            "epubconvert.export.detached.collect_library",
             lambda **_: pytest.fail("read the library before refusing"),
         )
 
@@ -451,7 +450,7 @@ class TestWhenTheDestinationIsWrong:
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(
-            "epubconvert.detached.collect_library",
+            "epubconvert.export.detached.collect_library",
             lambda **_: library.collect(tmp_path / "absent"),
         )
 
@@ -473,7 +472,7 @@ class TestWhenTheDestinationIsWrong:
     ):
         make_databases(tmp_path / "container", books=[])
         monkeypatch.setattr(
-            "epubconvert.detached.collect_library",
+            "epubconvert.export.detached.collect_library",
             lambda **_: library.collect(tmp_path / "container"),
         )
 
@@ -495,7 +494,7 @@ class TestWhenTheDestinationIsWrong:
         )
         make_databases(tmp_path / "container", books=[library_row(path=str(package))])
         monkeypatch.setattr(
-            "epubconvert.detached.collect_library",
+            "epubconvert.export.detached.collect_library",
             lambda **_: library.collect(tmp_path / "container"),
         )
 

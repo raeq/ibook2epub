@@ -18,11 +18,11 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .app_logger import logger
-from .contained import is_free, open_contained, resolve
-from .display import printable
-from .spec import PACKAGE_SUFFIX
-from .validate import ValidationError, ValidationOptions, read_package_dir
+from ..extract.validate import ValidationError, ValidationOptions, read_package_dir
+from ..utils.app_logger import logger
+from ..utils.contained import is_free, open_contained, resolve
+from ..utils.display import printable
+from ..utils.spec import PACKAGE_SUFFIX
 
 #: Guards the "cannot measure free space" warning so it is said once per
 #: process rather than once per sampling interval.

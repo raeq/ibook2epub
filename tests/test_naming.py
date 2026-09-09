@@ -12,9 +12,11 @@ from typing import Any
 
 import pytest
 
-from epubconvert import cli, convert, exits, naming, run
-from epubconvert.archive import collect_package_dirs
-from epubconvert.policy import NamingPolicy
+from epubconvert.export import naming
+from epubconvert.export.archive import collect_package_dirs
+from epubconvert.run import cli, convert, run
+from epubconvert.utils import exits
+from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_package
 
 disarm = pytest.importorskip("disarm", reason="portable naming needs the disarm extra")

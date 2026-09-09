@@ -17,8 +17,8 @@ from typing import Any
 
 import pytest
 
-from epubconvert import annotations
-from epubconvert import schema as epubconvert_schema
+from epubconvert.export import schema as epubconvert_schema
+from epubconvert.extract import annotations
 
 
 def _document(found: list[dict[str, Any]]) -> dict[str, Any]:

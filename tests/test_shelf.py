@@ -18,8 +18,9 @@ the gap was that it would not tell you either.
 
 import json
 
-from epubconvert import archive, planning, run
-from epubconvert.naming import PassthroughNaming, StripNaming
+from epubconvert.export import archive
+from epubconvert.export.naming import PassthroughNaming, StripNaming
+from epubconvert.run import planning, run
 from tests.conftest import make_metadata_package, make_package, remove_tree
 
 

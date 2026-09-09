@@ -26,25 +26,17 @@ from zipfile import ZipFile
 
 import pytest
 
-from epubconvert import (
-    archive,
-    contained,
-    convert,
-    display,
-    inspect_output,
-    naming,
-    planning,
-    run,
-    source,
-    validate,
-)
-from epubconvert.naming import (
+from epubconvert.export import archive, inspect_output, naming
+from epubconvert.export.naming import (
     MetadataNaming,
     PassthroughNaming,
     StripNaming,
     truncate_bytes,
 )
-from epubconvert.validate import Package
+from epubconvert.extract import source, validate
+from epubconvert.extract.validate import Package
+from epubconvert.run import convert, planning, run
+from epubconvert.utils import contained, display
 from tests.conftest import make_package, needs_permissions, remove_tree
 from tests.test_export import _cover_package
 
@@ -297,7 +289,7 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
         # surrogate-safe path, which is the traceback this rule exists to
         # prevent.
         offenders = []
-        for path in sorted(Path("epubconvert").glob("*.py")):
+        for path in sorted(Path("epubconvert").rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if not (
@@ -314,7 +306,7 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
 
     def test_nothing_decodes_bytes_back_except_the_truncator(self):
         offenders = []
-        for path in sorted(Path("epubconvert").glob("*.py")):
+        for path in sorted(Path("epubconvert").rglob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if not (
@@ -441,7 +433,7 @@ class TestRuleTheSweepNeedsARealLock:
         def unsupported(*_args, **_kwargs):
             raise OSError(errno.ENOTSUP, "not supported")
 
-        monkeypatch.setattr("epubconvert.convert.fcntl.flock", unsupported)
+        monkeypatch.setattr("epubconvert.run.convert.fcntl.flock", unsupported)
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
         # A temporary another concurrent run may still be writing.
@@ -732,7 +724,8 @@ class TestOneReaderRulePerRule:
 
     @staticmethod
     def _tree() -> ast.Module:
-        module = Path(__file__).resolve().parent.parent / "epubconvert" / "validate.py"
+        root = Path(__file__).resolve().parent.parent
+        module = root / "epubconvert" / "extract" / "validate.py"
         return ast.parse(module.read_text(encoding="utf-8"))
 
     def test_only_one_function_walks_the_container_rootfiles(self):

@@ -43,13 +43,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from . import __version__, schema
-from .app_logger import logger
-from .contained import escapes
+from .. import __version__
+from ..export import schema
+from ..utils.app_logger import logger
+from ..utils.contained import escapes
+from ..utils.policy import NamingPolicy
+from ..utils.spec import PACKAGE_SUFFIX
 from .coredata import container_directory, database_in, moment, now, rows
 from .library import describe_book, index_assets, package_of, read_package_once
-from .policy import NamingPolicy
-from .spec import PACKAGE_SUFFIX
 from .validate import Package
 
 #: What names standard output where a filename is expected. The convention

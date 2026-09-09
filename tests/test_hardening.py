@@ -18,10 +18,12 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
-from epubconvert import archive, convert, inspect_output, run, source, validate
-from epubconvert.app_logger import logger
-from epubconvert.display import printable
-from epubconvert.naming import StripNaming
+from epubconvert.export import archive, inspect_output
+from epubconvert.export.naming import StripNaming
+from epubconvert.extract import source, validate
+from epubconvert.run import convert, run
+from epubconvert.utils.app_logger import logger
+from epubconvert.utils.display import printable
 from tests.conftest import make_package, needs_permissions
 
 
@@ -148,7 +150,7 @@ class TestLockFailuresAreDistinguished:
         def unsupported(*_args, **_kwargs):
             raise OSError(errno.ENOTSUP, "not supported")
 
-        monkeypatch.setattr("epubconvert.convert.fcntl.flock", unsupported)
+        monkeypatch.setattr("epubconvert.run.convert.fcntl.flock", unsupported)
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
 
@@ -226,7 +228,7 @@ class TestUnmeasurableFreeSpaceIsAnnounced:
             raise OSError("no statvfs here")
 
         monkeypatch.setattr(
-            "epubconvert.inspect_output.shutil.disk_usage", unmeasurable
+            "epubconvert.export.inspect_output.shutil.disk_usage", unmeasurable
         )
 
         free = inspect_output.free_megabytes(tmp_path)
