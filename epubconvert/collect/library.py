@@ -55,6 +55,7 @@ from .validate import (
     canonical_identifier,
     read_package_dir,
     usable_identifier,
+    usable_title,
 )
 
 #: What a book with neither a title nor an asset id is called. Both schemas
@@ -207,16 +208,20 @@ def describe_book(
         id as a title, so an annotation whose book the library has forgotten is
         still exported.
     """
-    # Apple's columns are untyped. A BLOB where a title should be is treated
-    # as no title: it used to reach json.dumps and take the whole export down,
-    # and skipping the row instead would cost a highlight over a title.
+    # Apple's row wins; the package fills what it lacks. One rule, applied to
+    # every field here, so the two exports cannot describe the same book two
+    # ways. The sort name has no column in Apple's database at all.
+    #
+    # Apple's columns are untyped, so a BLOB where a title should be is
+    # treated as no title: it used to reach json.dumps and take the whole
+    # export down, and skipping the row would cost a highlight over a title.
+    # The title followed no rule at all until a book with a null ZTITLE was
+    # catalogued under its asset id while the same run named its file on the
+    # shelf from the very package title this ignored.
     title = row.get("ZTITLE")
-    book: dict[str, Any] = {
-        "title": title if _is_text(title) else asset_id or UNKNOWN_BOOK
-    }
-    # Apple's row wins; the package fills what it lacks. One rule, here, so
-    # the two exports cannot describe the same book two ways. The sort name
-    # has no column in Apple's database at all.
+    if not _is_text(title):
+        title = usable_title(parsed)
+    book: dict[str, Any] = {"title": title or asset_id or UNKNOWN_BOOK}
     author = row.get("ZAUTHOR")
     if not _is_text(author) and parsed is not None:
         author = parsed.creator

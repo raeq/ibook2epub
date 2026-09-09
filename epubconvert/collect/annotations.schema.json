@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/raeq/ibook2epub/main/epubconvert/annotations.schema.json",
+  "$id": "https://raw.githubusercontent.com/raeq/ibook2epub/main/epubconvert/collect/annotations.schema.json",
   "title": "ibook2epub annotation export",
   "description": "Highlights and notes taken out of Apple Books, shaped so that each one stands on its own. Modelled on the direction of the W3C EPUB Annotations work rather than on the current draft: that draft's normative dependency on URL text fragments has not yet landed in HTML, so this is deliberately ahead of it and does not claim conformance. See w3c/epub-specs#2763.",
   "type": "object",

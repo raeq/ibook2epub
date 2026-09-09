@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/raeq/ibook2epub/main/epubconvert/library.schema.json",
+  "$id": "https://raw.githubusercontent.com/raeq/ibook2epub/main/epubconvert/export/library.schema.json",
   "title": "ibook2epub library export",
   "description": "A reader's library taken out of Apple Books: what they own, who wrote it, when they got it, and the collections they sorted it onto. A catalogue rather than a reading history. Measured against a real 3,620-book library, the rating, page count, year and finished columns are empty on every row and eleven books carry a finish date, so every field beyond title, author, collections and acquisition date is present only when the database holds it.",
   "type": "object",

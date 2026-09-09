@@ -754,8 +754,8 @@ unrecognised is passed through exactly as declared, and whenever
 canonicalising changed something the original is kept alongside as
 `declaredIdentifier`, so nothing the book said is lost.
 
-The schema is [`epubconvert/annotations.schema.json`][schema], shipped inside
-the package.
+The schema is [`epubconvert/collect/annotations.schema.json`][schema],
+shipped inside the package.
 
 #### The locator, and why the CFI is kept anyway
 
@@ -823,7 +823,7 @@ what a current one would.
 
 [anno]: https://w3c.github.io/epub-specs/epub34/annotations/
 [frag]: https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments
-[schema]: epubconvert/annotations.schema.json
+[schema]: epubconvert/collect/annotations.schema.json
 
 ### Taking your library with you
 
@@ -907,7 +907,7 @@ leading apostrophe, because a title is input and a cell starting with `=` runs
 when the file is opened in Excel. Control characters are escaped, as they are
 in every name this tool prints.
 
-The JSON export is described by [`epubconvert/library.schema.json`][libschema]
+The JSON export is described by [`epubconvert/export/library.schema.json`][libschema]
 and looks like this:
 
 ```json
@@ -939,7 +939,7 @@ tool cannot tell its own file from yours. An existing file is left alone with
 exit code `5`; pass `--force` to replace it.
 
 [storygraph]: https://app.thestorygraph.com/import-export
-[libschema]: epubconvert/library.schema.json
+[libschema]: epubconvert/export/library.schema.json
 
 ### Tracking what's been converted
 

@@ -452,15 +452,17 @@ def write_vault(
         # shape as run._warn_about_stranded, and for the same reason: silence
         # here reads as "you had nothing to export".
         #
-        # Counted against the books this run considered, never against every
-        # annotation read: under --match the rest were excluded on purpose,
-        # and counting them blamed the source directory for a filter.
-        stranded = sum(len(for_book(item.package.name, index)) for item in named)
+        # Two counts that are true whatever narrowed the run, and no third
+        # invented from them: under --match the other books were excluded on
+        # purpose, so reporting their highlights as stranded blamed the
+        # source directory for a filter the reader asked for.
         logger.warning(
-            "%d annotation(s) reached no note: none of the books this run "
-            "considered has any. Check -s, and --match if you passed one, or "
-            "use --annotations-format json to write them without the books.",
-            stranded or len(found),
+            "No note was written: this run considered %d book(s) and none of "
+            "them has a highlight. Check -s, and --match if you passed one, or "
+            "use --annotations-format json to write your %d annotation(s) "
+            "without the books.",
+            len(named),
+            len(found),
         )
     for outcome, sentence in REPORTS.items():
         if tally[outcome]:

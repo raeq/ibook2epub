@@ -134,6 +134,27 @@ class TestWhatIsRead:
             "Gamma",
         ]
 
+    def test_the_package_supplies_a_title_apple_lacks(self, tmp_path):
+        # Apple's row wins and the package fills what it lacks, which every
+        # other field already did. The title alone fell straight through to
+        # the asset id, so a book was catalogued under a UUID while the same
+        # run named its file on the shelf from the very title this ignored.
+        package = make_metadata_package(
+            tmp_path / "lib", "Leviathan Wakes.epub", title="Leviathan Wakes"
+        )
+        make_databases(tmp_path, books=[library_row(title=None, path=str(package))])
+
+        assert library.collect(tmp_path)[0]["title"] == "Leviathan Wakes"
+
+    def test_a_junk_package_title_is_no_better_than_none(self, tmp_path):
+        # "none" is a title 92 books in a surveyed library declare.
+        package = make_metadata_package(
+            tmp_path / "lib", "Leviathan Wakes.epub", title="none"
+        )
+        make_databases(tmp_path, books=[library_row(title=None, path=str(package))])
+
+        assert library.collect(tmp_path)[0]["title"] == "ASSET1"
+
     def test_a_blob_where_a_title_should_be_costs_the_title_not_the_export(
         self, tmp_path
     ):

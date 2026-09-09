@@ -123,7 +123,10 @@ class TestAVaultNeedsTheLibrary:
 
         assert code == 0
         assert list(vault.glob("*.md")) == []
-        assert "reached no note" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert "No note was written" in err
+        # No book at all was considered, which is what "check -s" is for.
+        assert "considered 0 book(s)" in err
 
     def test_verifying_a_shelf_still_needs_no_library(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -174,8 +177,10 @@ class TestAVaultNeedsTheLibrary:
         )
 
         err = capsys.readouterr().err
-        assert "reached no note" in err
+        assert "No note was written" in err
         assert "--match if you passed one" in err
+        # Only the matched book is counted; the rest were excluded on purpose.
+        assert "considered 1 book(s)" in err
 
     def test_a_vault_run_still_announces_the_library_it_reads(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
