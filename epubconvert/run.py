@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
-import os
 import shlex
 import sys
 from collections.abc import Sequence
@@ -23,16 +21,11 @@ from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile
 
-from . import app_logger, exits, notes
-from .annotations import (
-    STDOUT,
-    AnnotationsUnavailableError,
-)
-from .annotations import build_document as build_annotation_document
+from . import app_logger, exits
+from .annotations import STDOUT
 from .annotations import collect as collect_annotations
 from .annotations import for_book as annotations_for_book
 from .annotations import index_by_book as index_annotations
-from .annotations import merge as merge_annotations
 from .app_logger import logger
 from .archive import (
     collect_copyable,
@@ -40,7 +33,6 @@ from .archive import (
     copy_through,
     count_ignored,
     replace_annotations,
-    write_atomically,
 )
 from .cli import parse_args
 from .convert import (
@@ -57,7 +49,9 @@ from .convert import (
     progress_for,
     sweep_partials,
 )
+from .coredata import ContainerUnavailableError
 from .defaults import SOURCE_CANDIDATES
+from .detached import library_export, library_refusal, vault_of, write_export
 from .display import printable
 from .inspect_output import verify_output
 from .naming import (
@@ -89,11 +83,17 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
     :param policy: The naming policy in force.
     """
     logger.debug("Naming policy: %s", policy.label)
-    if args.source_auto:
-        logger.info("Using discovered iBooks library: %s", args.source_dir)
-    else:
-        logger.info("Examining source: %s", args.source_dir)
-    logger.info("Writing output to: %s", args.output_dir)
+    # A run that converts nothing touches neither, and announcing them named
+    # a source it never opened and an output directory it never created.
+    # A vault is the exception: it names its notes from the library.
+    converts_nothing = bool(args.library_export or args.annotations_only)
+    if not converts_nothing or vault_of(args) is not None:
+        if args.source_auto:
+            logger.info("Using discovered iBooks library: %s", args.source_dir)
+        else:
+            logger.info("Examining source: %s", args.source_dir)
+    if not converts_nothing:
+        logger.info("Writing output to: %s", args.output_dir)
     # Keyed off the policy object rather than re-derived from the raw argument.
     # Two independent statements of one fact drift apart the moment
     # build_policy's mapping changes, and the debug line above is the one that
@@ -197,138 +197,9 @@ def _gather_annotations(
         return None
     try:
         return collect_annotations(policy=policy)
-    except AnnotationsUnavailableError as exc:
+    except ContainerUnavailableError as exc:
         logger.error("Could not read annotations: %s", exc)
         return None
-
-
-def _write_export(
-    args: argparse.Namespace,
-    found: list[dict[str, Any]],
-    destination: str,
-    named: Sequence[Assignment],
-) -> int:
-    """
-    Write the detached export, in whichever shape this run asked for.
-
-    The one place that decides between a vault of notes and a single JSON
-    document. It was decided at three separate call sites, so a fourth route
-    could have been added without anyone seeing the other three as precedent --
-    the shape of defect this project has shipped four times.
-
-    :param args: Parsed command line arguments.
-    :param found: Every annotation this run read.
-    :param destination: The file or directory named on the command line.
-    :param named: The names this run gave every book.
-
-    :return: A process exit code.
-    """
-    if args.annotations_format == "markdown":
-        return notes.write_vault(found, destination, named)
-    return _write_detached(found, destination)
-
-
-def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
-    """
-    Write the one-file-per-library export.
-
-    To a file, a rerun merges into what is there. To standard output there is
-    nothing to merge into -- a pipe is not a file to add to -- so the whole set
-    is emitted and nothing is said about what changed.
-
-    :param found: What was read from Apple.
-    :param destination: A path, or ``-`` for standard output.
-
-    :return: A process exit code.
-    """
-    if destination == STDOUT:
-        document = json.dumps(
-            build_annotation_document(found), indent=2, ensure_ascii=False
-        )
-        try:
-            print(document)
-        except BrokenPipeError:
-            # "-ao - | head" and "| less" then q are how this flag's own help
-            # text says to use it. Closing the pipe is the reader saying they
-            # have seen enough, not an error to report. The descriptor is
-            # replaced so the interpreter's shutdown flush cannot raise again.
-            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
-        return exits.SUCCESS
-
-    target = Path(destination)
-    try:
-        existing = _existing_annotations(target)
-    except AnnotationsUnavailableError as exc:
-        logger.critical("%s", exc)
-        return exits.NO_OUTPUT
-
-    merged, tally = merge_annotations(existing, found)
-    try:
-        write_atomically(
-            target,
-            json.dumps(build_annotation_document(merged), indent=2, ensure_ascii=False)
-            + "\n",
-        )
-    except OSError as exc:
-        logger.critical("Could not write %s: %s", printable(str(target)), exc)
-        return exits.NO_OUTPUT
-
-    logger.info("Wrote %d annotation(s) to %s", len(merged), printable(str(target)))
-    if existing is not None:
-        logger.info(
-            "%d added, %d updated, %d unchanged, %d kept (no longer in Books)",
-            tally["added"],
-            tally["updated"],
-            tally["unchanged"],
-            tally["kept"],
-        )
-    return exits.SUCCESS
-
-
-def _existing_annotations(target: Path) -> dict[str, Any] | None:
-    """
-    Read back an export so a rerun can add to it rather than replace it.
-
-    A file that is there and is not an export of this shape is refused rather
-    than overwritten or treated as empty. Either would throw away annotations
-    the reader may no longer be able to get back out of Books.
-
-    "Not the document I expect" is one condition, not two. Refusing only
-    malformed JSON meant a file holding a valid JSON *list* fell through to
-    "nothing to merge into" and was silently replaced.
-
-    :param target: The file about to be written.
-
-    :return: The document, or None when there is nothing to merge into.
-
-    :raises AnnotationsUnavailableError: If it is there and is not one of ours.
-    """
-    if not target.exists():
-        return None
-    try:
-        if target.stat().st_size > MAX_EXPORT_BYTES:
-            raise ValueError(f"larger than {MAX_EXPORT_BYTES} bytes")
-        loaded = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, ValueError, RecursionError) as exc:
-        # RecursionError is neither: deeply nested JSON raises it out of
-        # json.loads, and it used to escape as a traceback.
-        raise AnnotationsUnavailableError(
-            f"{target.name} is already there and could not be read ({exc}); "
-            "move it aside rather than have this overwrite it"
-        ) from exc
-    if not isinstance(loaded, dict) or not isinstance(loaded.get("annotations"), list):
-        raise AnnotationsUnavailableError(
-            f"{target.name} is already there and is not an annotation export; "
-            "move it aside rather than have this overwrite it"
-        )
-    return loaded
-
-
-#: How large an export this will read back to merge into. Generous next to a
-#: real one -- 400 annotations is under half a megabyte -- and finite, so a
-#: file that is not an export cannot be read into memory whole before the
-#: check that would have refused it.
-MAX_EXPORT_BYTES = 256 * 1024 * 1024
 
 
 def _annotations_after_export(
@@ -363,7 +234,7 @@ def _annotations_after_export(
     if args.annotations_refresh and found is not None:
         code = _embed_in_shelf(args, policy, found, True, named)
     if code == exits.SUCCESS and args.annotations_detached and found is not None:
-        code = _write_export(args, found, args.annotations_detached, named)
+        code = write_export(args, found, args.annotations_detached, named)
     if args.annotations_embedded and not args.annotations_detached and found:
         _warn_about_stranded(args, found, named)
     return None if code == exits.SUCCESS else code
@@ -443,14 +314,20 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     """
     try:
         found = collect_annotations(policy=policy)
-    except AnnotationsUnavailableError as exc:
+    except ContainerUnavailableError as exc:
         logger.critical("Could not read annotations: %s", exc)
         return exits.NO_SOURCE
+    if args.dry_run:
+        # Guarded here, where the write is decided, rather than at the call
+        # site: this route composes with --library-export, whose dry run was
+        # honoured while this one went on to write the file.
+        logger.info("Dry run: %d annotation(s) read; nothing was written.", len(found))
+        return exits.SUCCESS
     # -ao reads Apple's container and nothing else, but a note's filename comes
     # from the naming policy, so the library still has to be named. Naming is
     # cheap under the default policy and only reached for markdown.
     named = _named(args, policy) if args.annotations_format == "markdown" else []
-    return _write_export(args, found, args.annotations_only, named)
+    return write_export(args, found, args.annotations_only, named)
 
 
 def _apply_annotations(
@@ -509,7 +386,7 @@ def _apply_annotations(
             return code
 
     if args.annotations_detached:
-        return _write_export(args, found, args.annotations_detached, assignments)
+        return write_export(args, found, args.annotations_detached, assignments)
     return exits.SUCCESS
 
 
@@ -797,6 +674,83 @@ def _run_export(
     return report, max(0, pending_before - report.exported), assigned
 
 
+def _run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
+    """
+    Write whatever a run that reads only Apple's container was asked for.
+
+    The two compose: the reader who wants their catalogue out is the reader
+    who wants their highlights out, and both come from the same container.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+
+    :return: A process exit code.
+    """
+    # Both destinations are judged before either is written. A composed run
+    # that wrote one file and was then refused the other left the reader with
+    # half an answer and, worse, something a retry tripped over.
+    unwritable = _unwritable_destination(args)
+    if unwritable is not None:
+        logger.critical("%s", unwritable)
+        if args.annotations_only:
+            # The highlights merge and would have been safe to rerun, so a
+            # reader repeating the README's composed command sees only the
+            # catalogue's refusal and no sign that the rest was skipped too.
+            logger.error(
+                "Your highlights were not written either, because both files "
+                "are judged before either is written. Pass --force to replace "
+                "the library export, or write the two separately."
+            )
+        return exits.NO_OUTPUT
+    # The highlights first: their export merges into its file, so a refusal
+    # afterwards costs a rerun rather than a file.
+    if args.annotations_only:
+        code = _annotations_only(args, policy)
+        if code != exits.SUCCESS:
+            if args.library_export:
+                # Skipped rather than written, so a retry has nothing to
+                # refuse: the catalogue does not merge, and one left behind
+                # would need --force next time. Said rather than silent,
+                # because a per-note vault failure is stable -- a note the
+                # reader edited whose sidecar is itself foreign is blocked on
+                # every run -- and the catalogue then never appeared at all
+                # with nothing said about why.
+                logger.error(
+                    "The library was not exported, because the highlights "
+                    "above could not be written. Fix that, or run "
+                    "--library-export on its own."
+                )
+            return code
+        if not args.library_export:
+            return code
+    return library_export(args, policy)
+
+
+def _unwritable_destination(args: argparse.Namespace) -> str | None:
+    """
+    Judge where a convert-nothing run would write, before it writes anything.
+
+    Only the library export is judged here. The annotation export's own check
+    reads the file back to merge into it, which is the read it exists for and
+    not a check that can be lifted out of it; but it is written first, and it
+    merges, so a refusal after it costs a rerun rather than a file.
+
+    :param args: Parsed command line arguments.
+
+    :return: Why the run cannot write, or None when it can.
+    """
+    if not args.library_export or args.library_export == STDOUT or args.dry_run:
+        return None
+    # The vault is made by the run that is about to write it, so a catalogue
+    # inside one is not homeless. Judged before that happens, it looked it.
+    vault = vault_of(args)
+    return library_refusal(
+        Path(args.library_export),
+        force=args.force,
+        pending=() if vault is None else (vault,),
+    )
+
+
 def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:
     """
     Run whichever reporting mode was asked for, if either was.
@@ -810,10 +764,10 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
 
     :return: An exit code, or None when this is an ordinary export run.
     """
-    # Before --list and --verify: it reads Apple's container rather than the
+    # Before --list and --verify: these read Apple's container rather than the
     # library or the shelf, so neither of their preconditions applies.
-    if args.annotations_only:
-        return _annotations_only(args, policy)
+    if args.annotations_only or args.library_export:
+        return _run_container_only(args, policy)
     if args.annotations_refresh:
         return _apply_annotations(args, policy)  # -ar converts nothing
     if args.list_only:
@@ -866,7 +820,16 @@ def _check_environment(args: argparse.Namespace) -> int | None:
 
     :return: An exit code, or None when the environment is usable.
     """
-    if not (args.verify or args.annotations_only) and not args.source_dir.is_dir():
+    # A vault names its notes the way the shelf names its books, so writing
+    # one needs the library even though -ao otherwise does not. Without this
+    # the run reported "Wrote 0 note(s)" and exited 0, having written none.
+    #
+    # An independent reason rather than an exception to the convert-nothing
+    # modes: written as one, adding --library-export to the same command
+    # cancelled it and the empty vault came back.
+    writes_a_vault = vault_of(args) is not None
+    converts = not (args.verify or args.annotations_only or args.library_export)
+    if (converts or writes_a_vault) and not args.source_dir.is_dir():
         if args.source_auto:
             # Both known homes were probed and neither held books. Naming only
             # the fallback reads as "this one path is wrong" rather than "we

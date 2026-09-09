@@ -35,7 +35,8 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import __version__, annotations, archive, cli
+from epubconvert import __version__, annotations, archive, cli, coredata
+from epubconvert.library import describe_book
 from epubconvert.run import main
 from epubconvert.validate import Package, canonical_identifier
 from tests.conftest import make_metadata_package
@@ -53,8 +54,8 @@ class TestNothingReadFromAppleIsTrusted:
             connection.execute("CREATE TABLE T (a)")
         before = sorted(p.name for p in tmp_path.iterdir())
 
-        with pytest.raises(annotations.AnnotationsUnavailableError):
-            annotations._rows(database, "SELECT * FROM MISSING")
+        with pytest.raises(coredata.ContainerUnavailableError):
+            coredata.rows(database, "SELECT * FROM MISSING")
 
         assert sorted(p.name for p in tmp_path.iterdir()) == before
 
@@ -66,44 +67,45 @@ class TestNothingReadFromAppleIsTrusted:
             connection.execute("CREATE TABLE T (a)")
             connection.execute("INSERT INTO T VALUES (1)")
 
-        assert len(annotations._rows(database, "SELECT * FROM T")) == 1
+        assert len(coredata.rows(database, "SELECT * FROM T")) == 1
 
     def test_the_database_is_still_opened_read_only(self, tmp_path: Path):
         database = tmp_path / "plain.sqlite"
         with sqlite3.connect(database) as connection:
             connection.execute("CREATE TABLE T (a)")
 
-        with pytest.raises(annotations.AnnotationsUnavailableError):
-            annotations._rows(database, "INSERT INTO T VALUES (1)")
+        with pytest.raises(coredata.ContainerUnavailableError):
+            coredata.rows(database, "INSERT INTO T VALUES (1)")
 
     def test_a_dangling_symlink_does_not_break_finding_the_newest(self, tmp_path: Path):
         real = tmp_path / "AEAnnotation_v1.sqlite"
         real.write_bytes(b"")
         (tmp_path / "AEAnnotation_gone.sqlite").symlink_to(tmp_path / "nowhere")
 
-        assert annotations._newest(tmp_path, "AEAnnotation") == real
+        assert coredata.newest(tmp_path, "AEAnnotation") == real
 
     @pytest.mark.parametrize("seconds", [1e18, -1e18, float("nan")])
     def test_an_out_of_range_timestamp_is_dropped_not_raised(self, seconds: float):
-        assert annotations._moment(seconds) is None
+        assert coredata.moment(seconds) is None
 
     def test_the_epoch_boundary_still_converts(self):
-        assert annotations._moment(0) == "2001-01-01T00:00:00Z"
-        assert annotations._moment(-annotations.APPLE_EPOCH_OFFSET) == (
-            "1970-01-01T00:00:00Z"
-        )
+        assert coredata.moment(1) == "2001-01-01T00:00:01Z"
+        assert coredata.moment(-coredata.APPLE_EPOCH_OFFSET) == ("1970-01-01T00:00:00Z")
+
+    @pytest.mark.parametrize("seconds", [0, 0.0])
+    def test_a_zero_date_is_no_date(self, seconds: float):
+        # Apple writes 0 where it has no date. Rendered, it was midnight on
+        # New Year's Day 2001, on every book acquired that way and every
+        # highlight modified that way.
+        assert coredata.moment(seconds) is None
 
     @pytest.mark.parametrize("year", ["2011-03-01", "MMXI", None, ""])
     def test_a_year_that_is_not_a_number_is_left_out(self, year: object):
-        book = annotations._book_of(
-            "A", {"A": {"ZTITLE": "T", "ZYEAR": year}}, None, None
-        )
+        book = describe_book("A", {"ZTITLE": "T", "ZYEAR": year}, None, None)
         assert "year" not in book
 
     def test_a_year_that_is_a_number_is_kept(self):
-        book = annotations._book_of(
-            "A", {"A": {"ZTITLE": "T", "ZYEAR": "2011"}}, None, None
-        )
+        book = describe_book("A", {"ZTITLE": "T", "ZYEAR": "2011"}, None, None)
         assert book["year"] == 2011
 
     def test_an_unusable_row_costs_one_annotation_not_the_export(self, tmp_path: Path):
@@ -125,14 +127,16 @@ class TestNothingReadFromAppleIsTrusted:
         self, tmp_path: Path
     ):
         # The highlight is the thing worth keeping. A creation date that will
-        # not convert falls back to now rather than dropping the row.
+        # not convert is left out rather than dropping the row -- and rather
+        # than stamped with the moment of export, which made an embedded set
+        # move with the clock and every -ae -ar run rewrite the archive.
         container = make_databases(
             tmp_path / "container", rows=[highlight(uuid="U", created="soon")]
         )
         found = annotations.collect(container=container)
 
         assert [item["id"] for item in found] == ["U"]
-        assert found[0]["created"].endswith("Z")
+        assert "created" not in found[0]
 
     def test_a_style_that_is_not_a_number_is_left_out(self, tmp_path: Path):
         container = make_databases(
@@ -232,32 +236,30 @@ class TestBookIdentity:
         # dc:identifier is the one key that is neither Apple's nor this run's.
         # Every other field in "book" is a name that can change.
         parsed = Package(opf_path="content.opf", identifier="urn:uuid:0f3a-4c21")
-        book = annotations._book_of("A", {"A": {"ZTITLE": "T"}}, parsed, None)
+        book = describe_book("A", {"ZTITLE": "T"}, parsed, None)
 
         assert book["identifier"] == "urn:uuid:0f3a-4c21"
 
     def test_a_junk_identifier_is_not_recorded(self):
         # "none" identifies 92 books in a real library, so it identifies none.
         parsed = Package(opf_path="content.opf", identifier="none")
-        book = annotations._book_of("A", {"A": {"ZTITLE": "T"}}, parsed, None)
+        book = describe_book("A", {"ZTITLE": "T"}, parsed, None)
 
         assert "identifier" not in book
 
     def test_no_identifier_is_claimed_when_the_book_cannot_be_read(self):
-        book = annotations._book_of("A", {"A": {"ZTITLE": "T"}}, None, None)
+        book = describe_book("A", {"ZTITLE": "T"}, None, None)
         assert "identifier" not in book
 
     @pytest.mark.parametrize("path", ["/Users/someone/Books/..", "/", "..", ""])
     def test_a_path_that_is_not_a_book_name_is_not_published(self, path: str):
-        book = annotations._book_of(
-            "A", {"A": {"ZTITLE": "T", "ZPATH": path}}, None, None
-        )
+        book = describe_book("A", {"ZTITLE": "T", "ZPATH": path}, None, None)
 
         assert "source" not in book
         assert "filename" not in book
 
     def test_a_book_with_no_title_and_no_asset_id_still_says_something(self):
-        assert annotations._book_of("", {}, None, None)["title"] != ""
+        assert describe_book("", {}, None, None)["title"] != ""
 
 
 # --------------------------------------------------------------- the contract
@@ -576,6 +578,28 @@ class TestNothingAlreadyWrittenIsDestroyed:
         assert code != 0
         assert target.read_text(encoding="utf-8") == content
 
+    def test_a_directory_at_the_target_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # exists() is true of a directory and of a FIFO, and read_text on the
+        # latter blocks until a writer appears, which is never.
+        library = self._library(tmp_path, monkeypatch)
+        target = tmp_path / "notes.json"
+        target.mkdir()
+
+        assert main(["-s", str(library), "-ao", str(target), "-q"]) == 5
+
+    def test_a_file_past_the_cap_is_refused_not_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        library = self._library(tmp_path, monkeypatch)
+        target = tmp_path / "notes.json"
+        target.write_text('{"annotations": []}', encoding="utf-8")
+        monkeypatch.setattr("epubconvert.detached.MAX_EXPORT_BYTES", 4)
+
+        assert main(["-s", str(library), "-ao", str(target), "-q"]) == 5
+        assert target.read_text(encoding="utf-8") == '{"annotations": []}'
+
     def test_a_malformed_file_is_still_refused(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
@@ -728,7 +752,7 @@ class TestTheFlagsRefuseWhatTheyCannotDo:
 
 def _unreadable(policy: object = None) -> list[dict[str, Any]]:
     """Stand in for a container this machine cannot read."""
-    raise annotations.AnnotationsUnavailableError("no Books container here")
+    raise coredata.ContainerUnavailableError("no Books container here")
 
 
 # --------------------------------------------------- one identifier, one shape
@@ -810,40 +834,40 @@ class TestIdentifiersAreCanonical:
 
     def test_the_book_records_the_canonical_form(self):
         parsed = Package(opf_path="c.opf", identifier="978-1-78883-568-8")
-        book = annotations._book_of("A", {"A": {"ZTITLE": "T"}}, parsed, None)
+        book = describe_book("A", {"ZTITLE": "T"}, parsed, None)
 
         assert book["identifier"] == "urn:isbn:9781788835688"
 
     def test_the_declared_form_is_kept_when_it_differed(self):
         parsed = Package(opf_path="c.opf", identifier="978-1-78883-568-8")
-        book = annotations._book_of("A", {"A": {"ZTITLE": "T"}}, parsed, None)
+        book = describe_book("A", {"ZTITLE": "T"}, parsed, None)
 
         assert book["declaredIdentifier"] == "978-1-78883-568-8"
 
     def test_nothing_is_said_twice_when_the_book_was_already_canonical(self):
         parsed = Package(opf_path="c.opf", identifier="urn:isbn:9781788835688")
-        book = annotations._book_of("A", {"A": {"ZTITLE": "T"}}, parsed, None)
+        book = describe_book("A", {"ZTITLE": "T"}, parsed, None)
 
         assert book["identifier"] == "urn:isbn:9781788835688"
         assert "declaredIdentifier" not in book
 
     def test_a_junk_identifier_is_still_refused_before_any_of_this(self):
         parsed = Package(opf_path="c.opf", identifier="none")
-        book = annotations._book_of("A", {"A": {"ZTITLE": "T"}}, parsed, None)
+        book = describe_book("A", {"ZTITLE": "T"}, parsed, None)
 
         assert "identifier" not in book
         assert "declaredIdentifier" not in book
 
     def test_two_books_written_differently_now_match(self):
-        one = annotations._book_of(
+        one = describe_book(
             "A",
-            {"A": {"ZTITLE": "T"}},
+            {"ZTITLE": "T"},
             Package(opf_path="c.opf", identifier="urn:isbn:9781449340360"),
             None,
         )
-        other = annotations._book_of(
+        other = describe_book(
             "B",
-            {"B": {"ZTITLE": "T"}},
+            {"ZTITLE": "T"},
             Package(opf_path="c.opf", identifier="978-1-4493-4036-0"),
             None,
         )

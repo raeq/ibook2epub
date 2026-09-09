@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/raeq/ibook2epub/main/epubconvert/library.schema.json",
+  "title": "ibook2epub library export",
+  "description": "A reader's library taken out of Apple Books: what they own, who wrote it, when they got it, and the collections they sorted it onto. A catalogue rather than a reading history. Measured against a real 3,620-book library, the rating, page count, year and finished columns are empty on every row and eleven books carry a finish date, so every field beyond title, author, collections and acquisition date is present only when the database holds it.",
+  "type": "object",
+  "required": [
+    "generator",
+    "books"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional pointer back to this schema."
+    },
+    "generator": {
+      "type": "object",
+      "description": "What produced the file.",
+      "required": [
+        "name",
+        "version"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "const": "ibook2epub"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+.*$",
+          "description": "The version of ibook2epub that wrote the file."
+        }
+      }
+    },
+    "generated": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "description": "When the file was written, UTC, seconds precision, always ending in Z."
+    },
+    "books": {
+      "type": "array",
+      "description": "Every book in the library, by title.",
+      "items": {
+        "$ref": "#/$defs/book"
+      }
+    }
+  },
+  "$defs": {
+    "book": {
+      "type": "object",
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "As Apple recorded it. Falls back to the asset id when Apple recorded none."
+        },
+        "author": {
+          "type": "string",
+          "description": "As Apple recorded it, or as the book's own package document declares it when Apple recorded none."
+        },
+        "authorSort": {
+          "type": "string",
+          "description": "The author's sort name, 'Corey, James S. A.', as the package document declares it through opf:file-as. Apple keeps no such column, so it is present only when the package document was read and declares one."
+        },
+        "language": {
+          "type": "string",
+          "description": "As Apple recorded it, unnormalised."
+        },
+        "year": {
+          "type": "integer",
+          "description": "The year Apple recorded. Null on every row of a surveyed library, so usually absent."
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The publication's own dc:identifier, rendered canonically exactly as the annotation export renders it: a verifiable ISBN becomes 'urn:isbn:' and thirteen digits, a UUID becomes lowercase 'urn:uuid:', anything else is left as declared. Present only when the package document was read and declares something usable. Not unique: 52 books in a surveyed library share theirs with another."
+        },
+        "declaredIdentifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The identifier exactly as declared, present only when canonicalising changed it."
+        },
+        "source": {
+          "type": "string",
+          "description": "Name of the package directory or file Apple holds the book in, e.g. 'Leviathan Wakes.epub'. The path is deliberately not recorded: it names the reader's home directory."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Name of the file on the shelf, under the naming policy the run was using. Absent when the run named no policy."
+        },
+        "assetId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Apple's identifier for the book. Unique within the library, stable across a re-export, and what the annotation export joins on."
+        },
+        "added": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+          "description": "When the book entered the library, UTC, from ZPURCHASEDATE: set on every row of a surveyed library including sideloaded books, and spanning the life of the library. Not ZCREATIONDATE, which dates the database row -- it begins in mid-2025 for a library going back to 2016."
+        },
+        "lastOpened": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+          "description": "When the book was last opened, UTC."
+        },
+        "finished": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+          "description": "When the reader finished the book, UTC. Eleven of 3,620 books carry one in a surveyed library."
+        },
+        "progress": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "How far through the book the reader is, as a share of it: 1 is the end. Absent when the book has not been started."
+        },
+        "rating": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The reader's rating, when Apple recorded one. Zero on every row of a surveyed library, so usually absent."
+        },
+        "pages": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The page count, when Apple recorded one. Zero on all but one row of a surveyed library, so usually absent."
+        },
+        "collections": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Every collection the book is in, sorted, exactly as named in Books. Includes the ones Apple fills itself -- Library, Downloaded, Books, PDFs, Audiobooks -- which the CSV leaves out because they describe storage and format rather than shelving."
+        },
+        "shelf": {
+          "type": "string",
+          "enum": [
+            "read",
+            "currently-reading"
+          ],
+          "description": "The reading state the evidence supports: 'read' on a finish date, a finished flag, or progress at the end of the book; 'currently-reading' on progress short of it. Absent when the database says nothing, which is most books. Never 'to-read': that is an assertion about intent the database cannot support, and the CSV makes it only when --unknown-shelf asks for it."
+        }
+      }
+    }
+  }
+}

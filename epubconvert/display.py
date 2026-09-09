@@ -31,6 +31,21 @@ def printable(name: str) -> str:
     )
 
 
+def collapse(value: object) -> str:
+    """
+    Render a value as one line.
+
+    ``usable_title`` trims but leaves internal newlines alone, so a title
+    carrying one used to split a note's ``#`` heading and drop its second line
+    into the body unguarded; in a CSV it would have started a new row.
+
+    :param value: Whatever the book or the reader supplied.
+
+    :return: The value with its whitespace collapsed to single spaces.
+    """
+    return " ".join(str(value).split())
+
+
 def _is_control(char: str) -> bool:
     """
     Report whether a character cannot safely be written out.

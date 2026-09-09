@@ -90,7 +90,7 @@ class TestFrontmatter:
         assert "year: 2011" in notes.frontmatter({"title": "T", "year": 2011})
 
     def test_a_year_that_is_not_an_integer_is_refused_at_the_boundary(self):
-        # _book_of already suppresses TypeError/ValueError so this cannot
+        # describe_book already suppresses TypeError/ValueError so this cannot
         # happen, and the guarantee is enforced where it is relied on.
         with pytest.raises(TypeError):
             notes.frontmatter({"title": "T", "year": "2011"})
@@ -102,6 +102,16 @@ class TestFrontmatter:
 
         assert 'identifier: "urn:isbn:9780553905656"' in rendered
         assert 'isbn: "9780553905656"' in rendered
+
+    def test_an_isbn_that_does_not_verify_yields_no_isbn_line(self):
+        # canonical_identifier leaves an unverifiable identifier as declared,
+        # so the prefix is not evidence: 68 books in a surveyed library carry
+        # digits that fail their check, and a note claiming `isbn:` for one
+        # of those would send a plugin to the wrong book.
+        text = notes.frontmatter({"title": "T", "identifier": "urn:isbn:1234567890123"})
+
+        assert "\nisbn:" not in text
+        assert 'identifier: "urn:isbn:1234567890123"' in text
 
     def test_a_uuid_identifier_yields_no_isbn(self):
         rendered = notes.frontmatter(

@@ -48,6 +48,164 @@ def _library(
     return library
 
 
+class TestAVaultNeedsTheLibrary:
+    """
+    A vault names its notes the way the shelf names its books, so writing one
+    needs the library even though ``-ao`` otherwise does not. Without the
+    library the run wrote no notes at all and said it had succeeded.
+    """
+
+    def test_a_missing_library_is_refused_rather_than_writing_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _library(tmp_path, monkeypatch)
+        vault = tmp_path / "vault"
+
+        code = main(
+            [
+                "-s",
+                str(tmp_path / "no-such-library"),
+                "-ao",
+                str(vault),
+                "--annotations-format",
+                "markdown",
+                "-q",
+            ]
+        )
+
+        assert code == 4
+        assert not vault.exists()
+
+    def test_a_composed_library_export_does_not_cancel_the_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Written as an exception to the convert-nothing modes rather than as
+        # a reason of its own, adding --library-export brought the empty
+        # vault back: the run wrote a CSV, no notes, and exited 0.
+        _library(tmp_path, monkeypatch)
+        vault = tmp_path / "vault"
+        catalogue = tmp_path / "library.csv"
+
+        code = main(
+            [
+                "-s",
+                str(tmp_path / "no-such-library"),
+                "-ao",
+                str(vault),
+                "--annotations-format",
+                "markdown",
+                "--library-export",
+                str(catalogue),
+                "-q",
+            ]
+        )
+
+        assert code == 4
+        assert not vault.exists()
+        assert not catalogue.exists()
+
+    def test_a_vault_that_matched_no_book_says_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ):
+        # The library is there and holds none of the highlighted books, so
+        # every note is unmatched. "Wrote 0 note(s)" and exit 0 read as "you
+        # had nothing to export".
+        _library(tmp_path, monkeypatch)
+        empty = tmp_path / "empty-library"
+        empty.mkdir()
+        vault = tmp_path / "vault"
+
+        code = main(
+            ["-s", str(empty), "-ao", str(vault), "--annotations-format", "markdown"]
+        )
+
+        assert code == 0
+        assert list(vault.glob("*.md")) == []
+        assert "reached no note" in capsys.readouterr().err
+
+    def test_verifying_a_shelf_still_needs_no_library(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # --verify reads the output directory and writes no vault, so the
+        # markdown flags must not make it demand a library.
+        _library(tmp_path, monkeypatch)
+        shelf = tmp_path / "shelf"
+        shelf.mkdir()
+
+        code = main(
+            [
+                "-s",
+                str(tmp_path / "no-such-library"),
+                "-o",
+                str(shelf),
+                "--verify",
+                "-ad",
+                str(tmp_path / "vault"),
+                "--annotations-format",
+                "markdown",
+            ]
+        )
+
+        assert code == 0
+
+    def test_a_filtered_run_does_not_blame_the_source_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ):
+        # Under --match the other books were excluded on purpose, so counting
+        # their highlights blamed -s for a filter the reader asked for.
+        library = _library(tmp_path, monkeypatch)
+        make_metadata_package(library, "Dune.epub", title="Dune")
+
+        main(
+            [
+                "-s",
+                str(library),
+                "-ad",
+                str(tmp_path / "vault"),
+                "--annotations-format",
+                "markdown",
+                "--match",
+                "Dune",
+                "-o",
+                str(tmp_path / "out"),
+            ]
+        )
+
+        err = capsys.readouterr().err
+        assert "reached no note" in err
+        assert "--match if you passed one" in err
+
+    def test_a_vault_run_still_announces_the_library_it_reads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+    ):
+        # The vault is the exception: it names its notes from the library.
+        library = _library(tmp_path, monkeypatch)
+
+        main(
+            [
+                "-s",
+                str(library),
+                "-ao",
+                str(tmp_path / "vault"),
+                "--annotations-format",
+                "markdown",
+            ]
+        )
+
+        assert "Examining source" in capsys.readouterr().err
+
+    def test_the_json_export_still_needs_no_library(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _library(tmp_path, monkeypatch)
+        target = tmp_path / "notes.json"
+
+        code = main(["-s", str(tmp_path / "no-such-library"), "-ao", str(target), "-q"])
+
+        assert code == 0
+        assert target.is_file()
+
+
 class TestTheFlagGuards:
     def test_standard_output_has_no_per_book_meaning(self):
         with pytest.raises(SystemExit):

@@ -90,7 +90,9 @@ class TestTheSchemaIsShipped:
         )
 
         assert "[tool.setuptools.package-data]" in config
-        assert 'epubconvert = ["annotations.schema.json"]' in config
+        assert (
+            'epubconvert = ["annotations.schema.json", "library.schema.json"]' in config
+        )
 
     def test_validating_a_document_does_not_need_the_source_tree(self):
         document = annotations.build_document([])

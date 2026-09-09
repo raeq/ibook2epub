@@ -174,6 +174,8 @@ usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
                   [--list] [--json] [--refresh] [--skip-incomplete] [-an]
                   [-ae] [-ad [FILE]] [-ao [FILE]]
                   [--annotations-format {json,markdown}] [-ar]
+                  [--library-export [FILE]] [--library-format {csv,json}]
+                  [--no-isbn] [--unknown-shelf SHELF]
                   [--name-by {passthrough,author-title}]
                   [--on-collision {skip,suffix}] [--min-free MB]
                   [--no-copy-through] [--covers] [--validate] [--epubcheck]
@@ -251,7 +253,8 @@ Deciding what to do:
   -d, --dry-run         Report what would be exported without writing
                         anything.
   -f, --force           Re-export books even if they are already in the
-                        output directory.
+                        output directory. With --library-export, replace the
+                        file it names.
   --list                List every *.epub/ package with its status (pending,
                         exported, collision, drm, incomplete, orphan) and
                         exit without converting anything. Anything in the
@@ -327,6 +330,43 @@ Your highlights and notes:
                         convert nothing. A library is converted once and
                         annotated for years afterwards; this picks up new
                         highlights without rewriting every archive.
+
+Your library:
+  Taking the catalogue out of Apple Books: what you own, who wrote it, when
+  you got it, and the collections you sorted it onto. Needs Full Disk
+  Access on macOS.
+
+  --library-export [FILE]
+                        Write the library as a file and convert nothing. A
+                        Goodreads-format CSV by default, which The StoryGraph
+                        imports directly; see --library-format. A catalogue
+                        rather than a reading history: Apple keeps titles,
+                        authors, collections and acquisition dates, and
+                        little else. Composes with --annotations-only. An
+                        existing FILE is left alone unless --force is given.
+                        With no FILE, or with '-', it goes to standard
+                        output.
+  --library-format {csv,json}
+                        Shape of the library export. 'csv', the default, is
+                        the Goodreads export format. 'json' is the canonical
+                        record the schema describes, carrying every
+                        collection and every date the database holds.
+  --no-isbn             Do not open any book's package document. That is
+                        where the ISBN comes from, and also the author's sort
+                        name and, under --name-by author-title, the name the
+                        book would have on the shelf, so those are left out
+                        too. A tracker matches a row on its ISBN, so this
+                        trades a matched import for speed: the read costs one
+                        per book, where the highlights cost one per annotated
+                        book.
+  --unknown-shelf SHELF
+                        What the CSV's Exclusive Shelf column says for a book
+                        the database says nothing about: 'to-read',
+                        'currently-reading' or 'read'. By default the column
+                        is left blank rather than claiming 'to-read' for
+                        every book merely bought. Some importers require the
+                        column; this is how you choose the claim made on your
+                        behalf.
 ```
 
 The source directory is searched recursively, so books stored in subfolders are
@@ -784,6 +824,122 @@ what a current one would.
 [anno]: https://w3c.github.io/epub-specs/epub34/annotations/
 [frag]: https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments
 [schema]: epubconvert/annotations.schema.json
+
+### Taking your library with you
+
+Apple gives no way to get a catalogue out. `--library-export` reads the same
+database the highlights come from and writes what you own: title, author,
+when each book arrived, and the collections you sorted it onto. By default it
+is a **Goodreads-format CSV**, which [The StoryGraph][storygraph] and most
+other trackers import directly; `--library-format json` writes the canonical
+record instead.
+
+```bash
+ibook2epub --library-export ~/library.csv                       # for a tracker
+ibook2epub --library-export ~/library.json --library-format json
+ibook2epub --library-export ~/library.csv -ao ~/highlights.json --force
+ibook2epub --library-export --dry-run                           # just the estimate
+```
+
+The third one writes both files, and takes `--force` because the catalogue is
+a snapshot: without it a second run stops at the file already there, and stops
+before the highlights too, since both destinations are judged before either is
+written.
+
+It converts nothing, like `-ao`, and the two compose: the reader who wants
+their catalogue out is the reader who wants their highlights out. It needs no
+library on disk and no output directory, only Full Disk Access on macOS.
+
+#### It is a catalogue, not a reading history
+
+Worth knowing before you import it. Measured against my 3,620-book library,
+Apple's database holds titles, authors, collections and acquisition dates for
+every book, and almost nothing else: the rating is zero on every row, the page
+count on all but one, the year and the finished flag are null throughout, and
+eleven books carry a finish date. The CSV promises what the database holds.
+Every other column is filled when it is there and left blank when it is not.
+
+**The exclusive shelf is evidence or nothing.** A finish date, a finished flag
+or reaching the end of a book means `read`; progress short of the end means
+`currently-reading`. Nothing else is claimed. The obvious rule -- a book with
+no evidence is `to-read` -- would have told a tracker I intend to read 3,389
+books I merely bought. If your importer insists on the column,
+`--unknown-shelf to-read` fills the blanks, so the claim made on your behalf
+is one you chose.
+
+Collections become the `Bookshelves` column, minus the ones Apple fills by
+itself -- Library, Downloaded, Books, PDFs, Audiobooks, My Samples -- which
+say where a book is stored rather than where you shelved it. `Want to Read` is
+one of yours and comes through as a shelf. The JSON carries every collection.
+
+#### Most rows will import unmatched, and the tool says so first
+
+A tracker matches a row on its ISBN, and most books do not have one: 1,108 of
+my 2,805 epubs carry an ISBN, 1,448 carry a UUID, and the PDFs and audiobooks
+carry nothing a tracker can read. So about 30% of rows import matched and the
+rest need adding by hand. The run says exactly that, before writing anything:
+
+```text
+1108 of 3620 book(s) carry an ISBN a tracker can match on. The other 2512
+will import unmatched and need adding by hand.
+```
+
+`--dry-run` gives you the number and writes nothing, which is where to look
+before a 3,620-row import into a service where undoing one is manual. Reading
+the ISBN means opening every book's package document, one read per book where
+the highlights cost one per *annotated* book; `--no-isbn` skips it when speed
+matters more than matching. The package document is also where the author's
+sort name comes from, and under `--name-by author-title` the book's name on
+the shelf, so those go too.
+
+An ISBN is judged by its check digit, never by its prefix: 68 identifiers in
+that library are ten or thirteen digits that fail their check, and a tracker
+handed one of those matches the wrong book. They are left out of the ISBN
+columns and out of the count.
+
+#### What a row looks like
+
+The header is Goodreads' own, verbatim and in its order, because that is what
+the importers key on. ISBNs are written the way Goodreads writes them,
+`="9781449340360"`, which is a spreadsheet's spelling of "keep this as text".
+Dates are `YYYY/MM/DD`. A title that starts with `=`, `+`, `-` or `@` gains a
+leading apostrophe, because a title is input and a cell starting with `=` runs
+when the file is opened in Excel. Control characters are escaped, as they are
+in every name this tool prints.
+
+The JSON export is described by [`epubconvert/library.schema.json`][libschema]
+and looks like this:
+
+```json
+{
+  "title": "Leviathan Wakes",
+  "author": "James S. A. Corey",
+  "authorSort": "Corey, James S. A.",
+  "identifier": "urn:isbn:9781449340360",
+  "source": "Leviathan Wakes.epub",
+  "assetId": "0A1B2C3D-4E5F-6789-ABCD-EF0123456789",
+  "added": "2016-03-05T18:22:41Z",
+  "lastOpened": "2019-08-14T07:03:12Z",
+  "finished": "2018-12-25T22:44:28Z",
+  "collections": ["Books", "Downloaded", "Library", "Space opera"],
+  "shelf": "read"
+}
+```
+
+`assetId` is Apple's key for the book, unique within the library and the same
+one the annotation export records, so the two files join. `identifier` is the
+book's own, canonicalised exactly as the annotation export canonicalises it.
+
+#### Re-running
+
+Unlike the annotation file, the library export is a snapshot rather than a
+file that is merged into: there is nothing in a CSV to merge on, and a
+Goodreads export at the same path would carry the very same header, so the
+tool cannot tell its own file from yours. An existing file is left alone with
+exit code `5`; pass `--force` to replace it.
+
+[storygraph]: https://app.thestorygraph.com/import-export
+[libschema]: epubconvert/library.schema.json
 
 ### Tracking what's been converted
 

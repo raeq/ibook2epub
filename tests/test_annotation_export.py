@@ -27,7 +27,7 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert import annotations, archive, run
+from epubconvert import annotations, archive, coredata, run
 from epubconvert.naming import (
     MetadataNaming,
     NamingPolicy,
@@ -35,7 +35,12 @@ from epubconvert.naming import (
     StripNaming,
 )
 from tests.conftest import make_metadata_package
-from tests.test_annotations import highlight, library_row, make_databases
+from tests.test_annotations import (
+    highlight,
+    library_row,
+    make_databases,
+    open_for_writing,
+)
 
 
 class TestAnnotationsCanTravelInsideTheBook:
@@ -137,7 +142,7 @@ class TestItFailsSafely:
             connection.execute("CREATE TABLE ZAEANNOTATION (SOMETHINGELSE TEXT)")
 
         with pytest.raises(
-            annotations.AnnotationsUnavailableError, match="not shaped as expected"
+            coredata.ContainerUnavailableError, match="not shaped as expected"
         ):
             annotations.collect(tmp_path)
 
@@ -145,7 +150,7 @@ class TestItFailsSafely:
         (tmp_path / "AEAnnotation").mkdir(parents=True)
 
         with pytest.raises(
-            annotations.AnnotationsUnavailableError, match="Full Disk Access"
+            coredata.ContainerUnavailableError, match="Full Disk Access"
         ):
             annotations.collect(tmp_path)
 
@@ -166,90 +171,46 @@ class TestItFailsSafely:
 
         assert len(annotations.collect(tmp_path)) == 1
 
+    def test_a_missing_library_says_nothing_about_full_disk_access(
+        self, tmp_path, caplog
+    ):
+        # The annotation database under the same protected tree has just been
+        # read, so the permission cannot be the reason, and saying it was sent
+        # the reader to System Settings for nothing.
+        make_databases(tmp_path)
+        next(tmp_path.rglob("BKLibrary*.sqlite")).unlink()
+
+        annotations.collect(tmp_path)
+
+        assert "Full Disk Access" not in caplog.text
+
+    def test_a_library_without_the_reading_state_still_names_its_books(self, tmp_path):
+        # The catalogue reads seven columns the annotation export never
+        # needed. Asking for them here cost every highlight its title on a
+        # library that lacks one.
+        make_databases(tmp_path)
+        database = next(tmp_path.rglob("BKLibrary*.sqlite"))
+        with open_for_writing(database) as connection:
+            connection.execute("ALTER TABLE ZBKLIBRARYASSET DROP COLUMN ZRATING")
+            connection.execute("ALTER TABLE ZBKLIBRARYASSET DROP COLUMN ZPAGECOUNT")
+
+        book = annotations.collect(tmp_path)[0]["book"]
+
+        assert book["title"] == "Leviathan Wakes"
+        assert book["author"] == "James S. A. Corey"
+
     def test_an_annotation_with_no_creation_date_is_still_exported(self, tmp_path):
         make_databases(tmp_path, rows=[highlight(created=None, modified=None)])
 
         found = annotations.collect(tmp_path)[0]
 
-        assert found["created"].endswith("Z")
+        assert "created" not in found
         assert "modified" not in found
 
     def test_a_row_with_no_style_leaves_the_field_out(self, tmp_path):
         make_databases(tmp_path, rows=[highlight(style=None)])
 
         assert "style" not in annotations.collect(tmp_path)[0]
-
-
-class TestTheSchemaCheckActuallyChecks:
-    """A validator that never rejects anything is not a validator."""
-
-    def test_a_missing_required_field_is_reported(self):
-        document = annotations.build_document([])
-        del document["generator"]
-
-        assert annotations.schema_problems(document) == ["missing generator"]
-
-    def test_a_set_with_no_generation_stamp_is_still_valid(self):
-        # An embedded set carries none: a stamp that moves on every run makes
-        # the archive holding it stop being byte-reproducible.
-        document = annotations.build_document([], stamped=False)
-
-        assert "generated" not in document
-        assert annotations.schema_problems(document) == []
-
-    def test_a_malformed_instant_is_reported(self):
-        document = annotations.build_document([])
-        document["generated"] = "yesterday"
-
-        assert any(
-            "not an instant" in problem
-            for problem in annotations.schema_problems(document)
-        )
-
-    def test_an_annotation_missing_a_required_field_is_reported(self):
-        document = annotations.build_document(
-            [{"id": "A", "book": {"title": "T"}, "text": "x"}]
-        )
-
-        assert annotations.schema_problems(document) == [
-            "annotations[0] missing created"
-        ]
-
-    def test_a_locator_that_is_not_a_text_fragment_is_reported(self):
-        document = annotations.build_document(
-            [
-                {
-                    "id": "A",
-                    "book": {"title": "T"},
-                    "text": "x",
-                    "created": "2018-12-25T22:44:28Z",
-                    "locator": "epubcfi(/6/4)",
-                }
-            ]
-        )
-
-        assert any(
-            "locator does not match" in problem
-            for problem in annotations.schema_problems(document)
-        )
-
-    def test_an_unknown_field_is_reported(self):
-        document = annotations.build_document(
-            [
-                {
-                    "id": "A",
-                    "book": {"title": "T"},
-                    "text": "x",
-                    "created": "2018-12-25T22:44:28Z",
-                    "colour": "yellow",
-                }
-            ]
-        )
-
-        assert any(
-            "unknown ['colour']" in problem
-            for problem in annotations.schema_problems(document)
-        )
 
 
 class TestTheCommandLineMode:

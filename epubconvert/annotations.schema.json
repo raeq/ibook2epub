@@ -54,8 +54,7 @@
       "required": [
         "id",
         "book",
-        "text",
-        "created"
+        "text"
       ],
       "additionalProperties": false,
       "properties": {
@@ -103,7 +102,7 @@
           "type": "string",
           "format": "date-time",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
-          "description": "When the annotation was made, UTC."
+          "description": "When the annotation was made, UTC. Absent when Apple recorded none: an export stamps nothing of its own into an entry, so that a set embedded in an archive does not move with the clock."
         },
         "modified": {
           "type": "string",
@@ -126,7 +125,12 @@
           "minLength": 1
         },
         "author": {
-          "type": "string"
+          "type": "string",
+          "description": "As Apple recorded it, or as the book's own package document declares it when Apple recorded none."
+        },
+        "authorSort": {
+          "type": "string",
+          "description": "The author's sort name, 'Corey, James S. A.', as the package document declares it through opf:file-as. Apple keeps no such column, so it is present only when the package document was read and declares one."
         },
         "identifier": {
           "type": "string",

@@ -31,6 +31,10 @@ module, so this map saves a search:
 ``test_exit_codes.py``       the exit codes, as a contract for scripts
 ``test_shelf.py``            orphans: what is on the shelf and not in the library
 ``test_copy_through.py``     books taken along without converting
+``test_library.py``          the library export: ``library`` and ``coredata``
+``test_library_cli.py``      ``--library-export`` as a command, and the flags
+                             a run that converts nothing refuses
+``test_schema.py``           ``schema``: the runtime check both exports share
 ===========================  ==================================================
 
 ``spec`` is exercised through the modules that use it rather than directly.

@@ -34,9 +34,10 @@ from . import exits
 from .annotations import for_book, index_by_book
 from .app_logger import logger
 from .archive import write_atomically
-from .display import printable
+from .display import collapse, printable
 from .naming import encode_name
 from .planning import Assignment
+from .validate import isbn13_of
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
 #: copied through untouched. Written from the first run even when there is
@@ -55,7 +56,8 @@ START_PATTERN = re.compile(r"^<!-- ibook2epub sha256=([0-9a-f]{16,64}) -->$")
 #: Largest note this will read back. A note of a few hundred highlights is
 #: tens of kilobytes; anything past this is a runaway or a planted file, and
 #: reading it whole every run costs twice its size in memory. Mirrors
-#: ``run.MAX_EXPORT_BYTES``, which bounds the JSON export for the same reason.
+#: ``detached.MAX_EXPORT_BYTES``, which bounds the JSON export for the same
+#: reason.
 MAX_NOTE_BYTES = 8 * 1024 * 1024
 
 #: Suffix for the copy written when a reader has edited the note itself. Not
@@ -78,21 +80,6 @@ BLOCK_OPENERS = re.compile(r"^(\s*)([#>+*-]|\d+[.)])")
 #: Frontmatter keys this tool owns, which are safe to emit bare because no book
 #: supplies them.
 LITERALS = {"category": "book", "tags": "[books]", "source": "ibook2epub"}
-
-
-def _collapse(value: object) -> str:
-    """
-    Render a value as one line.
-
-    ``usable_title`` trims but leaves internal newlines alone, so a title
-    carrying one used to split the ``#`` heading and drop its second line into
-    the body unguarded.
-
-    :param value: Whatever the book or the reader supplied.
-
-    :return: The value with its whitespace collapsed to single spaces.
-    """
-    return " ".join(str(value).split())
 
 
 def _escape(line: str) -> str:
@@ -139,7 +126,7 @@ def _quoted(value: object) -> str:
 
     :return: The quoted scalar.
     """
-    escaped = _collapse(value).replace("\\", "\\\\").replace('"', '\\"')
+    escaped = collapse(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
 
 
@@ -157,14 +144,15 @@ def frontmatter(book: dict[str, Any]) -> str:
     :return: The block, fences included, ending in a newline.
 
     :raises TypeError: If ``year`` is not an integer. It cannot be --
-        ``_book_of`` suppresses the conversion error and omits the key -- and
-        the guarantee is enforced here because here is where it is relied on.
+        ``library.describe_book`` suppresses the conversion error and omits the
+        key -- and the guarantee is enforced here because here is where it is
+        relied on.
     """
     lines = ["---"]
     for key in ("title", "author", "identifier"):
         if book.get(key):
             lines.append(f"{key}: {_quoted(book[key])}")
-    isbn = _isbn_of(book.get("identifier"))
+    isbn = isbn13_of(book.get("identifier"))
     if isbn:
         lines.append(f"isbn: {_quoted(isbn)}")
     if book.get("language"):
@@ -177,23 +165,6 @@ def frontmatter(book: dict[str, Any]) -> str:
     lines.extend(f"{key}: {value}" for key, value in LITERALS.items())
     lines.append("---")
     return "\n".join(lines) + "\n"
-
-
-def _isbn_of(identifier: object) -> str | None:
-    """
-    Take the bare ISBN out of a canonical identifier, when it is one.
-
-    Derived by stripping the prefix rather than looked up again, so it cannot
-    disagree with the field it came from. About 41% of books have one: 1,108
-    ``urn:isbn`` against 1,448 ``urn:uuid`` in a surveyed library.
-
-    :param identifier: The canonical identifier, or None.
-
-    :return: The digits, or None when the book is identified some other way.
-    """
-    if isinstance(identifier, str) and identifier.startswith("urn:isbn:"):
-        return identifier[len("urn:isbn:") :]
-    return None
 
 
 def body(found: list[dict[str, Any]]) -> str:
@@ -211,16 +182,16 @@ def body(found: list[dict[str, Any]]) -> str:
     :return: The region, ending in a newline.
     """
     book = found[0].get("book", {}) if found else {}
-    lines = [f"# {_collapse(book.get('title', 'Unknown book'))}"]
+    lines = [f"# {collapse(book.get('title', 'Unknown book'))}"]
     if book.get("author"):
-        lines.append(f"*{_collapse(book['author'])}*")
+        lines.append(f"*{collapse(book['author'])}*")
 
     chapter: object = object()  # Never equal to a real chapter, so the first
     for item in found:  # one always prints.
         current = item.get("chapter") or "Highlights"
         if current != chapter:
             chapter = current
-            lines.extend(["", f"## {_collapse(current)}"])
+            lines.extend(["", f"## {collapse(current)}"])
         lines.append("")
         lines.extend(f"> {line}" for line in _lines(item.get("text", "")))
         if item.get("note"):
@@ -474,6 +445,23 @@ def write_vault(
     logger.info(
         "Wrote %d note(s) to %s.", len(tally["written"]), printable(str(directory))
     )
+    if found and not any(tally[outcome] for outcome in OUTCOMES):
+        # Highlights were read and not one reached a note. Every book they
+        # belong to is absent from the library this run walked, so nothing
+        # was matched -- which said "Wrote 0 note(s)" and exited 0. The same
+        # shape as run._warn_about_stranded, and for the same reason: silence
+        # here reads as "you had nothing to export".
+        #
+        # Counted against the books this run considered, never against every
+        # annotation read: under --match the rest were excluded on purpose,
+        # and counting them blamed the source directory for a filter.
+        stranded = sum(len(for_book(item.package.name, index)) for item in named)
+        logger.warning(
+            "%d annotation(s) reached no note: none of the books this run "
+            "considered has any. Check -s, and --match if you passed one, or "
+            "use --annotations-format json to write them without the books.",
+            stranded or len(found),
+        )
     for outcome, sentence in REPORTS.items():
         if tally[outcome]:
             logger.warning(sentence, len(tally[outcome]), _naming(tally[outcome]))

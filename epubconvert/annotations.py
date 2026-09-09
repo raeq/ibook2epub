@@ -39,36 +39,22 @@ import contextlib
 import json
 import re
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from . import __version__
+from . import __version__, schema
 from .app_logger import logger
 from .contained import escapes
+from .coredata import container_directory, database_in, moment, now, rows
+from .library import describe_book, index_assets, package_of, read_package_once
 from .naming import NamingPolicy
 from .spec import PACKAGE_SUFFIX
-from .validate import (
-    Package,
-    ValidationError,
-    canonical_identifier,
-    read_package_dir,
-    usable_identifier,
-)
+from .validate import Package
 
 #: What names standard output where a filename is expected. The convention
 #: every other command-line tool uses, so it needs no explaining.
 STDOUT = "-"
-
-
-#: Where Apple keeps the two databases, relative to the user's home.
-CONTAINER = Path(
-    "Library/Containers/com.apple.iBooksX/Data/Documents",
-)
-
-#: Core Data counts seconds from 2001-01-01, not from the Unix epoch.
-APPLE_EPOCH_OFFSET = 978307200
 
 #: Apple's annotation type for a highlight. Others exist -- a bare bookmark,
 #: and a per-book reading position -- but only this one carries text. Rather
@@ -82,9 +68,6 @@ HIGHLIGHT_TYPE = 2
 #: assertion in ``/6[spine]/46[ch15.xhtml]!``, which resolves to nothing.
 CFI_DOCUMENT = re.compile(r"\[([^\]]+)\](?=[^!\[\]]*!)")
 
-#: The one way an instant is written here, matching the schema's pattern.
-INSTANT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
 #: Characters a text fragment leaves alone. The rest are percent-encoded.
 FRAGMENT_SAFE = ""
 
@@ -97,93 +80,6 @@ FRAGMENT_WHOLE_LIMIT = 60
 #: Roughly how much of each end to quote when a highlight is too long to quote
 #: whole. Trimmed to a word boundary, so the real length varies.
 FRAGMENT_END_CHARS = 30
-
-
-class AnnotationsUnavailableError(RuntimeError):
-    """Raised when Apple's databases cannot be found or read."""
-
-
-def _newest(directory: Path, prefix: str) -> Path | None:
-    """
-    Find the database Apple is currently using.
-
-    The filenames carry a version and a build stamp, and old ones are left in
-    place across upgrades, so the name cannot be hard-coded and the newest is
-    the live one.
-
-    :param directory: The container subdirectory to look in.
-    :param prefix: The filename prefix to match.
-
-    :return: The most recently modified match, or None if there is none.
-    """
-    # Stat inside the sort key raised on a dangling symlink among the
-    # candidates, out of a function whose whole contract is "or None". Books
-    # leaves old files here across upgrades, which is why the glob exists.
-    dated: list[tuple[float, Path]] = []
-    for path in directory.glob(f"{prefix}*.sqlite"):
-        try:
-            dated.append((path.stat().st_mtime, path))
-        except OSError:
-            continue
-    if not dated:
-        return None
-    return max(dated, key=lambda pair: pair[0])[1]
-
-
-def _rows(database: Path, query: str) -> list[sqlite3.Row]:
-    """
-    Run one query against a database, without writing to it.
-
-    Opened read-only through a URI so that reading somebody's library cannot
-    modify it, and so that a live Books process holding the write lock does not
-    stop the export.
-
-    :param database: The database file.
-    :param query: The query to run.
-
-    :return: The rows, as mappings.
-
-    :raises AnnotationsUnavailableError: If the database cannot be read.
-    """
-    # as_uri() percent-encodes "?", "#" and "%" itself. Building the URI by
-    # concatenation let a filename carrying "?" append its own parameters
-    # ahead of mode=ro -- a read path that could open the database writable.
-    try:
-        connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro", uri=True)
-    except (sqlite3.Error, ValueError, OSError) as exc:
-        raise AnnotationsUnavailableError(f"could not open {database.name}") from exc
-    try:
-        connection.row_factory = sqlite3.Row
-        return list(connection.execute(query))
-    except sqlite3.Error as exc:
-        # A schema change in a Books update lands here rather than as a
-        # traceback: the columns below are Apple's, and Apple never promised
-        # them.
-        raise AnnotationsUnavailableError(
-            f"{database.name} is not shaped as expected: {exc}"
-        ) from exc
-    finally:
-        connection.close()
-
-
-def _moment(seconds: float | None) -> str | None:
-    """
-    Render a Core Data timestamp as UTC.
-
-    :param seconds: Seconds since 2001-01-01, or None.
-
-    :return: An RFC 3339 instant ending in ``Z``, or None.
-    """
-    # Apple's column is untyped and undocumented. A string, a NaN or a value
-    # past the year 9999 all reach here, and every one of them used to take
-    # the whole export down with it.
-    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
-        return None
-    try:
-        when = datetime.fromtimestamp(seconds + APPLE_EPOCH_OFFSET, tz=timezone.utc)
-    except (OverflowError, OSError, ValueError):
-        return None
-    return when.strftime(INSTANT_FORMAT)
 
 
 def text_fragment(text: str) -> str:
@@ -271,23 +167,6 @@ def _assertion_of(cfi: str) -> str | None:
     return found[-1] if found else None
 
 
-def _read(package: Path, parsed: dict[Path, Package | None]) -> Package | None:
-    """
-    Parse a book once, however many annotations point into it.
-
-    :param package: The package directory.
-    :param parsed: Books already read, added to in place.
-
-    :return: The package document, or None if it could not be read.
-    """
-    if package not in parsed:
-        try:
-            parsed[package] = read_package_dir(package)
-        except (ValidationError, OSError):
-            parsed[package] = None
-    return parsed[package]
-
-
 def _href_of(cfi: str, book: Package | None) -> str | None:
     """
     Resolve the document a CFI points into.
@@ -321,117 +200,6 @@ def _href_of(cfi: str, book: Package | None) -> str | None:
     return href
 
 
-def _library(directory: Path) -> dict[str, dict[str, Any]]:
-    """
-    Read the library database, keyed by the id annotations join on.
-
-    :param directory: The container directory.
-
-    :return: Asset id to book metadata. Empty if the library cannot be read,
-        because losing every highlight is worse than losing every title.
-    """
-    database = _newest(directory / "BKLibrary", "BKLibrary")
-    if database is None:
-        return {}
-    try:
-        rows = _rows(
-            database,
-            "SELECT ZASSETID, ZTITLE, ZAUTHOR, ZLANGUAGE, ZYEAR, ZPATH "
-            "FROM ZBKLIBRARYASSET",
-        )
-    except AnnotationsUnavailableError as exc:
-        logger.warning(
-            "Reading the Books library failed, so titles are missing: %s", exc
-        )
-        return {}
-    return {row["ZASSETID"]: dict(row) for row in rows if row["ZASSETID"]}
-
-
-def _book_of(
-    asset_id: str,
-    library: dict[str, dict[str, Any]],
-    parsed: Package | None,
-    policy: NamingPolicy | None,
-) -> dict[str, Any]:
-    """
-    Describe the book an annotation belongs to.
-
-    :param asset_id: Apple's id for the book.
-    :param library: What the library database knows.
-    :param parsed: The book's package document, if it could be read.
-    :param policy: The naming policy, or None to make no claim about the shelf.
-
-    :return: The book, with whatever fields are known. Falls back to the asset
-        id as a title, so an annotation whose book the library has forgotten is
-        still exported.
-    """
-    row = library.get(asset_id, {})
-    book: dict[str, Any] = {"title": row.get("ZTITLE") or asset_id or UNKNOWN_BOOK}
-    if row.get("ZAUTHOR"):
-        book["author"] = row["ZAUTHOR"]
-    if row.get("ZLANGUAGE"):
-        book["language"] = row["ZLANGUAGE"]
-    if row.get("ZYEAR"):
-        # Apple's column is untyped, and a date-shaped value in it used to
-        # raise out of the whole export.
-        with contextlib.suppress(TypeError, ValueError):
-            book["year"] = int(row["ZYEAR"])
-    source = _source_name(row.get("ZPATH"))
-    if source is not None:
-        book["source"] = source
-        if policy is not None:
-            # Asked of the policy, never worked out here. Under --name-by
-            # author-title a book read from "Leviathan Wakes.epub" is written
-            # as "Corey, James S.A. - Leviathan Wakes.epub", and an annotation
-            # naming the wrong one cannot be traced back to its book.
-            book["filename"] = policy.filename(source, parsed)
-    # The publication's own key, and the only one here that is neither Apple's
-    # nor this run's: a title, a package name and a shelf filename can all
-    # change, and after any of them the annotation can still be matched to its
-    # book by this. Asked of validate rather than re-derived, because knowing
-    # which dc:identifier counts -- and that "none" identifies 92 books in a
-    # real library -- is that module's job.
-    declared = usable_identifier(parsed)
-    if declared is not None:
-        # Canonical, because the field is only a matching key if the same book
-        # always yields the same string, and 1,092 books in a surveyed library
-        # write their ISBN six different ways. The declared form is kept
-        # whenever it differed, so nothing about the book is lost.
-        book["identifier"] = canonical_identifier(declared)
-        if book["identifier"] != declared:
-            book["declaredIdentifier"] = declared
-    if asset_id:
-        book["assetId"] = asset_id
-    return book
-
-
-#: What a book with neither a title nor an asset id is called. The schema
-#: requires a non-empty title, and an entry with no identity at all is worse
-#: than one that admits it has none.
-UNKNOWN_BOOK = "Unknown book"
-
-
-def _source_name(path: object) -> str | None:
-    """
-    Take the package directory's name out of the path Apple recorded.
-
-    The name only. ``ZPATH`` is absolute and runs through the reader's home
-    directory, which has no business in a file they may share.
-
-    :param path: The recorded path, of whatever type the column held.
-
-    :return: The name, or None when it is not one. A ``ZPATH`` ending in
-        ``..`` yielded ``source: ".."``, published into JSON another tool is
-        expected to act on.
-    """
-    if not isinstance(path, str) or not path:
-        return None
-    name = Path(path).name
-    if name in ("", ".", "..") or escapes(name):
-        return None
-    return name
-
-
 def collect(
     container: Path | None = None, policy: NamingPolicy | None = None
 ) -> list[dict[str, Any]]:
@@ -447,25 +215,14 @@ def collect(
     :return: Annotations, grouped by book title and ordered by when each was
         made within a book.
 
-    :raises AnnotationsUnavailableError: If the annotation database is missing
+    :raises ContainerUnavailableError: If the annotation database is missing
         or unreadable. On macOS this usually means the terminal has not been
         granted Full Disk Access.
     """
-    directory = container if container is not None else Path.home() / CONTAINER
-    if not directory.is_dir():
-        raise AnnotationsUnavailableError(
-            f"{directory} is not there; Apple Books may never have run here"
-        )
-
-    database = _newest(directory / "AEAnnotation", "AEAnnotation")
-    if database is None:
-        raise AnnotationsUnavailableError(
-            f"no annotation database under {directory / 'AEAnnotation'}; on macOS "
-            "this usually means the terminal needs Full Disk Access"
-        )
-
-    library = _library(directory)
-    rows = _rows(
+    directory = container_directory(container)
+    database = database_in(directory, "AEAnnotation", "annotation")
+    library = index_assets(directory)
+    found_rows = rows(
         database,
         "SELECT ZANNOTATIONUUID, ZANNOTATIONASSETID, ZANNOTATIONSTYLE,"
         " ZANNOTATIONSELECTEDTEXT,"
@@ -481,7 +238,7 @@ def collect(
     # opened once and a library with none is never opened at all.
     parsed: dict[Path, Package | None] = {}
     found = []
-    for row in rows:
+    for row in found_rows:
         # One row at a time, because this was a comprehension and one
         # unusable row therefore cost every good one. Apple's columns are
         # untyped: a date that is a string, a style that is a colour name and
@@ -501,7 +258,7 @@ def collect(
     return found
 
 
-def _reading_order(item: dict[str, Any]) -> tuple[str, str]:
+def _reading_order(item: dict[str, Any]) -> tuple[str, bool, str]:
     """
     The order an export is written in: by book, then by when it was made.
 
@@ -509,13 +266,18 @@ def _reading_order(item: dict[str, Any]) -> tuple[str, str]:
     tie-break added to one of two identical lambdas would have quietly given
     a merged file a different order from a fresh one.
 
+    An annotation with no creation date sorts after the dated ones in its
+    book. The empty string sorts before every date, which put them first;
+    the order they had when the export stamped them with the clock was last.
+
     :param item: An annotation, of whatever shape a hand-edited file holds.
 
     :return: The sort key.
     """
     book = item.get("book")
     title = book.get("title") if isinstance(book, dict) else None
-    return (str(title or "").casefold(), str(item.get("created") or ""))
+    created = str(item.get("created") or "")
+    return (str(title or "").casefold(), not created, created)
 
 
 def _annotation_of(
@@ -542,16 +304,22 @@ def _annotation_of(
     text = row["ZANNOTATIONSELECTEDTEXT"]
     if not isinstance(text, str):
         raise TypeError(f"selected text is {type(text).__name__}, not text")
-    held = library.get(row["ZANNOTATIONASSETID"] or "", {}).get("ZPATH")
-    package = Path(held) if isinstance(held, str) and held else None
-    book = _read(package, parsed) if package else None
+    asset_id = row["ZANNOTATIONASSETID"] or ""
+    known = library.get(asset_id, {})
+    package = package_of(known)
+    book = read_package_once(package, parsed) if package else None
 
     annotation: dict[str, Any] = {
         "id": row["ZANNOTATIONUUID"],
-        "book": _book_of(row["ZANNOTATIONASSETID"] or "", library, book, policy),
+        "book": describe_book(asset_id, known, book, policy),
         "text": text,
-        "created": _moment(row["ZANNOTATIONCREATIONDATE"]) or _now(),
     }
+    created = moment(row["ZANNOTATIONCREATIONDATE"])
+    if created:
+        # Left out when Apple recorded none, as "modified" is. It used to be
+        # stamped with the moment of export, which made an embedded set move
+        # with the clock and every -ae -ar run rewrite that archive.
+        annotation["created"] = created
     locator = text_fragment(text)
     if locator:
         annotation["locator"] = locator
@@ -573,15 +341,10 @@ def _annotation_of(
         # next to losing the highlight it belongs to.
         with contextlib.suppress(TypeError, ValueError):
             annotation["style"] = int(row["ZANNOTATIONSTYLE"])
-    modified = _moment(row["ZANNOTATIONMODIFICATIONDATE"])
+    modified = moment(row["ZANNOTATIONMODIFICATIONDATE"])
     if modified:
         annotation["modified"] = modified
     return annotation
-
-
-def _now() -> str:
-    """Return this instant as UTC, to the second, ending in ``Z``."""
-    return datetime.now(tz=timezone.utc).strftime(INSTANT_FORMAT)
 
 
 def build_document(
@@ -604,7 +367,7 @@ def build_document(
         "generator": {"name": "ibook2epub", "version": __version__},
     }
     if stamped:
-        document["generated"] = _now()
+        document["generated"] = now()
     document["annotations"] = found
     return document
 
@@ -617,83 +380,13 @@ def schema_problems(document: dict[str, Any]) -> list[str]:
     """
     Check a document against the shipped schema.
 
-    Deliberately not a JSON Schema library: this tool has no runtime
-    dependencies, and the parts of the schema worth enforcing at runtime are
-    the required fields and the two patterns a consumer will actually rely on.
-    The full schema is for consumers, who may use whatever validator they like.
-
-    The checks are *derived* from the schema rather than restated beside it.
-    Restating them is how the nested ``book`` came to be unchecked: the schema
-    required a title there and this function never looked, so a book with no
-    identity at all passed the tool's own validator.
-
     :param document: The document to check.
 
     :return: What is wrong with it, empty if nothing is.
     """
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    problems: list[str] = []
-
-    for name in schema["required"]:
-        if name not in document:
-            problems.append(f"missing {name}")
-
-    instant = re.compile(schema["properties"]["generated"]["pattern"])
-    if "generated" in document and not instant.match(document["generated"]):
-        problems.append(f"generated is not an instant: {document['generated']!r}")
-
-    item = schema["$defs"]["annotation"]
-    for index, annotation in enumerate(document.get("annotations", [])):
-        where = f"annotations[{index}]"
-        problems.extend(_object_problems(annotation, item, where))
-        if isinstance(annotation, dict) and isinstance(annotation.get("book"), dict):
-            problems.extend(
-                _object_problems(
-                    annotation["book"], schema["$defs"]["book"], f"{where}.book"
-                )
-            )
-    return problems
-
-
-def _object_problems(value: Any, rules: dict[str, Any], where: str) -> list[str]:
-    """
-    Check one object against one schema definition.
-
-    The three constraints worth enforcing at runtime, taken from the schema
-    itself: what must be present, what may be present, and the patterns and
-    minimum lengths a consumer will rely on.
-
-    :param value: The object to check.
-    :param rules: The schema definition it should satisfy.
-    :param where: What to call it in a message.
-
-    :return: What is wrong with it.
-    """
-    if not isinstance(value, dict):
-        return [f"{where} is {type(value).__name__}, not an object"]
-
-    problems: list[str] = []
-    for name in rules.get("required", []):
-        if name not in value:
-            problems.append(f"{where} missing {name}")
-
-    properties = rules.get("properties", {})
-    for name, rule in properties.items():
-        if name not in value:
-            continue
-        held = value[name]
-        pattern = rule.get("pattern")
-        if pattern and not re.match(pattern, str(held)):
-            problems.append(f"{where}.{name} does not match {pattern}")
-        minimum = rule.get("minLength")
-        if minimum is not None and len(str(held)) < minimum:
-            problems.append(f"{where}.{name} is shorter than {minimum}")
-
-    if rules.get("additionalProperties") is False:
-        extra = set(value) - set(properties)
-        if extra:
-            problems.append(f"{where} has unknown {sorted(extra)}")
-    return problems
+    return schema.document_problems(
+        document, schema.load(SCHEMA_PATH), "annotations", "annotation"
+    )
 
 
 def merge(
@@ -775,6 +468,12 @@ def _says_the_same(was: dict[str, Any], item: dict[str, Any]) -> bool:
     """
     if was.get("modified") != item.get("modified"):
         return False
+    if was.get("created") != item.get("created"):
+        # Not read from Apple in the way "modified" is: an unusable creation
+        # date used to be stamped with the moment of export, so an entry
+        # written that way differs from what this version would write and is
+        # regenerated whether or not the version changed.
+        return False
     held = was.get("book")
     fresh = item.get("book")
     old: dict[str, Any] = held if isinstance(held, dict) else {}
@@ -783,8 +482,11 @@ def _says_the_same(was: dict[str, Any], item: dict[str, Any]) -> bool:
 
 
 #: Fields of ``book`` that this run works out rather than reads from Apple, so
-#: a change to them is a change even when Apple says nothing moved.
-RUN_DEPENDENT_FIELDS = ("filename", "source", "identifier")
+#: a change to them is a change even when Apple says nothing moved. The author
+#: and sort name are here because the package document fills them in when
+#: Apple's row lacks them, and a package unreadable on one run is readable on
+#: the next.
+RUN_DEPENDENT_FIELDS = ("filename", "source", "identifier", "author", "authorSort")
 
 
 #: Where the W3C work says an embedded annotation set lives. It needs no entry

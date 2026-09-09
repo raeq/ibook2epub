@@ -7,14 +7,121 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- `--library-export FILE` writes out your library. It reads the `BKLibrary`
+  database the highlights already come from and records what you own: title,
+  author, when each book arrived, and the collections you sorted it onto. By
+  default it writes a Goodreads-format CSV, which The StoryGraph and most other
+  trackers import directly; `--library-format json` writes the canonical record
+  instead, described by a second shipped schema, `library.schema.json`. It
+  converts nothing, like `-ao`, and composes with it.
+
+  It is a catalogue, and named for what comes out. Measured against a
+  3,620-book library, Apple holds titles, authors, collections and acquisition
+  dates for all 3,620 and little else: the rating is zero on every row, the
+  year and the finished flag are null throughout, and eleven books carry a
+  finish date. The exclusive shelf therefore follows the evidence: a finish
+  date, the finished flag, or reaching the end of the book. Lacking all three
+  it stays blank, rather than defaulting to `to-read` for the 3,389 books that
+  would have taken it. `--unknown-shelf` fills the blanks with a value you
+  choose, and fills that column only.
+
+  Most rows will import unmatched, because most books carry a UUID instead of
+  an ISBN, and the run says so before writing anything: on that library, 1,108
+  of 3,620 match. An ISBN also has to pass its check digit, so the 68
+  identifiers there that run to ten or thirteen digits and fail it never reach
+  a tracker as ISBNs. `--dry-run` gives you the estimate and writes nothing;
+  `--no-isbn` skips opening each book's package document, one read per book
+  where the highlights cost one per annotated book.
+
+  The collection join runs from the asset side, on `ZASSETID`, because 749 of
+  14,500 membership rows in that library point at deleted books and would each
+  have become a title. `Date Added` comes from `ZPURCHASEDATE`, which carries a
+  value on every row including sideloaded books and spans the life of the
+  library. `ZCREATIONDATE` dates the database row instead, beginning in
+  mid-2025 for a library going back to 2016, so nothing reads it. The CSV's
+  `Bookshelves` leaves out the collections Apple fills itself (Library,
+  Downloaded, Books, PDFs, Audiobooks, My Samples), which describe storage
+  rather than shelving; the JSON carries all of them. A cell opening with `=`,
+  `+`, `-` or `@` gains a leading apostrophe, because a title is input and a
+  cell like that runs as a formula when you open the file in a spreadsheet.
+  Control characters get the escaping this tool already gives the names it
+  prints.
+
+  `--library-export` leaves an existing file alone unless you pass `--force`,
+  and it checks that, the destination's directory, and whether the name
+  belongs to a note in a vault the same run writes, before it reads the
+  library. The export replaces rather than merges, and a Goodreads export at
+  the same path carries the very same header, so the tool cannot tell its own
+  file from yours.
+
+- The annotation export's `book` carries the author's sort name as
+  `authorSort` when the package document declares one, for the author it
+  sorts, and falls back to the package document's `dc:creator` when Apple
+  recorded no author.
+
 ### Changed
+
+- An annotation's `created` is optional, and absent when Apple recorded no
+  usable creation date. The export used to stamp it with the moment it ran,
+  which made an embedded set move with the clock and forced every `-ae -ar`
+  run to rewrite that archive. Such an entry sorts after its book's dated
+  highlights, where the invented stamp had put it, and a rerun regenerates one
+  that an older export carries.
+
+- A vault note carries an `isbn:` line only for an ISBN that passes its check
+  digit. A package declaring `urn:isbn:` in front of digits that fail theirs
+  keeps its `identifier:` line and gets no `isbn:` line. Existing notes keep
+  what they have: the frontmatter is yours.
+
+- The annotation export claims `book.filename` only when the naming policy can
+  name the book, which under `--name-by author-title` means it read the
+  package document. It used to fall back to the package directory's name and
+  present that as the name on your shelf.
+
+- A run that converts nothing (`--annotations-only`, and now
+  `--library-export`) refuses the conversion flags it used to accept and
+  ignore: `--list`, `--verify`, `--covers`, `--validate`, `--epubcheck`,
+  `--refresh`, `--skip-incomplete`, `--match`, `-m`, `--workers`,
+  `--min-free`, `--no-copy-through`, `--no-shuffle`, and `--force` where it
+  has no file to replace. `-o` and the naming flags still work: `-o` because a
+  released version took it beside `-ao` and it cannot change what an export
+  contains, and the naming flags because a vault names its notes the way the
+  shelf names its books.
+
+- `coredata` now holds the code that reads Apple's databases, shared by the
+  annotation and library exports, and `AnnotationsUnavailableError` becomes
+  `coredata.ContainerUnavailableError`: the condition it names is the container
+  being unreadable, whichever export asked. `library.describe_book` now
+  describes a book from a library row for both exports, so the two cannot
+  describe one book two ways. The detached-file writers moved out of `run` into
+  `detached`. None of this changes the command line.
 
 - The release workflow's artifact actions move to `actions/upload-artifact@v7`
   and `actions/download-artifact@v8`. v5 defaulted to Node 20, which GitHub now
   forces onto Node 24 with a deprecation warning on every run. Both new majors
   target Node 24 themselves, their new parameters are opt-in, and v8 makes a
-  hash mismatch on download an error rather than a warning — worth having on
+  hash mismatch on download an error rather than a warning, worth having on
   the one job that holds `id-token: write`.
+
+### Fixed
+
+- A vault could write no notes at all and report success. A note takes its name
+  from its epub, so writing one needs the library. Without it the run wrote
+  nothing and exited 0. It now reports a missing library like any other run
+  that needs one, and says so too when the library is there but holds none of
+  the highlighted books. `--verify` still needs no library, and neither does
+  the JSON export.
+
+- `--annotations-only --dry-run` wrote the file. The dry-run guard sat on the
+  conversion route and the refresh route and not on this one. That covers the
+  standard-output form as well: `-ao - --dry-run` now prints nothing, as
+  `-ad -` already did.
+
+- A Core Data date of `0` rendered as midnight on New Year's Day 2001. Apple
+  writes `0` where it holds no date, so an export now leaves `modified` off an
+  annotation whose modification date is `0`.
 
 ## [2.2.0] - 2026-08-28
 

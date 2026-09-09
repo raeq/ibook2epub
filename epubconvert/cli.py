@@ -8,6 +8,7 @@ are long and change often, do not crowd the module that does the work.
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -19,8 +20,42 @@ from .defaults import (
     DEFAULT_OUTPUT,
     discover_source,
 )
+from .library import LIBRARY_FORMATS, SHELVES
 from .naming import NAME_PASSTHROUGH, NAME_SOURCES, PORTABLE_MODES, STRIP
 from .planning import COLLISION_MODES, SKIP, STATUSES
+
+#: Flags that only mean something when books are converted or the shelf is
+#: read, each with its spelling. A run that converts nothing -- --library-export
+#: or --annotations-only -- refuses every one of them rather than ignoring it,
+#: because a flag the user typed that changes nothing is a run doing something
+#: other than what was asked, silently. One list for both modes, so the next
+#: conversion flag is not forgotten by one of them. --epubcheck comes before
+#: --validate, which it implies, so the flag named is the one typed. Judged
+#: against the parser's defaults rather than by truthiness, so a flag with a
+#: real default -- --min-free, -m -- is caught too; one typed *as* its default
+#: is indistinguishable from untyped and passes, which changes nothing.
+#: --on-collision, --name-by and --portable-names are absent on purpose: a
+#: vault names its notes the way the shelf names its books, so all three
+#: shape a convert-nothing run. So is -o, for a different reason: it says
+#: where books go, a released version accepted it beside -ao, and it cannot
+#: change what an export contains -- refusing it would break a wrapper script
+#: to prevent no confusion about the file's contents. The exports name their
+#: own destination and say where they wrote it.
+CONVERSION_ONLY = (
+    ("list_only", "--list"),
+    ("verify", "--verify"),
+    ("covers", "--covers"),
+    ("epubcheck", "--epubcheck"),
+    ("validate", "--validate"),
+    ("refresh", "--refresh"),
+    ("skip_incomplete", "--skip-incomplete"),
+    ("match", "--match"),
+    ("max_export_files", "--max-export-files"),
+    ("workers", "--workers"),
+    ("min_free", "--min-free"),
+    ("no_copy_through", "--no-copy-through"),
+    ("no_shuffle", "--no-shuffle"),
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
         "Taking annotations out of Apple Books. Any of these needs Full Disk "
         "Access on macOS. None is the default: a conversion touches Apple's "
         "container only when asked to.",
+    )
+    catalogue = parser.add_argument_group(
+        "Your library",
+        "Taking the catalogue out of Apple Books: what you own, who wrote it, "
+        "when you got it, and the collections you sorted it onto. Needs Full "
+        "Disk Access on macOS.",
     )
     selection.add_argument(
         "-m",
@@ -101,7 +142,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-f",
         "--force",
         action="store_true",
-        help="Re-export books even if they are already in the output directory.",
+        help=(
+            "Re-export books even if they are already in the output directory. "
+            "With --library-export, replace the file it names."
+        ),
     )
     selection.add_argument(
         "--match",
@@ -244,6 +288,58 @@ def build_parser() -> argparse.ArgumentParser:
             "nothing. A library is converted once and annotated for years "
             "afterwards; this picks up new highlights without rewriting every "
             "archive."
+        ),
+    )
+    catalogue.add_argument(
+        "--library-export",
+        nargs="?",
+        const=STDOUT,
+        metavar="FILE",
+        help=(
+            "Write the library as a file and convert nothing. A Goodreads-format "
+            "CSV by default, which The StoryGraph imports directly; see "
+            "--library-format. A catalogue rather than a reading history: Apple "
+            "keeps titles, authors, collections and acquisition dates, and "
+            "little else. Composes with --annotations-only. An existing FILE is "
+            "left alone unless --force is given. With no FILE, or with '-', it "
+            "goes to standard output."
+        ),
+    )
+    catalogue.add_argument(
+        "--library-format",
+        choices=LIBRARY_FORMATS,
+        default=None,
+        help=(
+            "Shape of the library export. 'csv', the default, is the Goodreads "
+            "export format. 'json' is the canonical record the schema "
+            "describes, carrying every collection and every date the database "
+            "holds."
+        ),
+    )
+    catalogue.add_argument(
+        "--no-isbn",
+        action="store_true",
+        help=(
+            "Do not open any book's package document. That is where the ISBN "
+            "comes from, and also the author's sort name and, under --name-by "
+            "author-title, the name the book would have on the shelf, so those "
+            "are left out too. A tracker "
+            "matches a row on its ISBN, so this trades a matched import for "
+            "speed: the read costs one per book, where the highlights cost one "
+            "per annotated book."
+        ),
+    )
+    catalogue.add_argument(
+        "--unknown-shelf",
+        choices=SHELVES,
+        default=None,
+        metavar="SHELF",
+        help=(
+            "What the CSV's Exclusive Shelf column says for a book the database "
+            "says nothing about: 'to-read', 'currently-reading' or 'read'. By "
+            "default the column is left blank rather than claiming 'to-read' "
+            "for every book merely bought. Some importers require the column; "
+            "this is how you choose the claim made on your behalf."
         ),
     )
     output.add_argument(
@@ -399,6 +495,13 @@ def _check_annotation_flags(
         args.annotations_embedded or args.annotations_detached or args.annotations_only
     ):
         parser.error("--annotations-none contradicts the other annotation flags")
+    if args.annotations_none and args.library_export:
+        # It states the default of a conversion, and this run converts
+        # nothing. Accepted, it read as a choice that changed something.
+        parser.error(
+            "--library-export converts nothing, so --annotations-none has "
+            "nothing to state"
+        )
     if args.annotations_refresh and not args.annotations_embedded:
         # -ar walks the shelf. With only -ad it never touches it, which is what
         # -ao already means, so the pair would be two spellings of one thing.
@@ -406,6 +509,102 @@ def _check_annotation_flags(
             "--annotations-refresh needs --annotations-embedded; to write only "
             "the detached file use --annotations-only"
         )
+
+
+def _check_library_flags(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """
+    Refuse library flags that contradict each other, or say nothing.
+
+    :param parser: The parser, for reporting the refusal.
+    :param args: The parsed arguments.
+    """
+    if args.library_export == "":
+        parser.error("--library-export needs a filename, or - for standard output")
+    if not args.library_export:
+        # A flag the user typed that changes nothing is a run that does
+        # something other than what was asked, silently. --library-format has
+        # no default in the parser for exactly this: with one, typing it
+        # alone was indistinguishable from not typing it.
+        for held, spelled in (
+            (args.no_isbn, "--no-isbn"),
+            (args.unknown_shelf, "--unknown-shelf"),
+            (args.library_format, "--library-format"),
+        ):
+            if held:
+                parser.error(f"{spelled} only applies with --library-export")
+        args.library_format = "csv"
+        return
+    args.library_format = args.library_format or "csv"
+    if args.unknown_shelf and args.library_format == "json":
+        parser.error(
+            "--unknown-shelf fills the CSV's Exclusive Shelf column; the JSON "
+            "export records what the database says and nothing else"
+        )
+    if args.annotations_embedded or args.annotations_detached:
+        parser.error(
+            "--library-export writes the library instead of converting; it "
+            "cannot be combined with --annotations-embedded or "
+            "--annotations-detached. To write highlights as well, use "
+            "--annotations-only"
+        )
+    if args.annotations_only and _same_destination(
+        args.library_export, args.annotations_only
+    ):
+        # The library export ran first and, with --force, replaced the
+        # highlights file with the catalogue before -ao refused to write it.
+        parser.error(
+            "--library-export and --annotations-only cannot both go to the same "
+            "place; name a different file for one of them"
+        )
+
+
+def _same_destination(first: str, second: str) -> bool:
+    """
+    Whether two export destinations are one file, or both standard output.
+
+    :param first: A path, or ``-``.
+    :param second: A path, or ``-``.
+
+    :return: True when writing both would write one over the other.
+    """
+    if STDOUT in (first, second):
+        return first == second
+    # realpath rather than Path.resolve(): on Python 3.10 to 3.12 the latter
+    # raises RuntimeError on a symlink loop, out of argument parsing.
+    return os.path.realpath(first) == os.path.realpath(second)
+
+
+def _check_convert_nothing_flags(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """
+    Refuse conversion flags in a run that converts nothing.
+
+    :param parser: The parser, for reporting the refusal.
+    :param args: The parsed arguments.
+    """
+    if args.library_export:
+        mode = "--library-export"
+    elif args.annotations_only:
+        mode = "--annotations-only"
+    else:
+        return
+    if args.force and args.library_export in (None, "", STDOUT):
+        # Not in CONVERSION_ONLY: --library-export gives it a second meaning,
+        # so it is refused only in the mode that has no use for it.
+        parser.error(
+            f"{mode} overwrites no file, so --force has nothing to do. An "
+            "existing annotation export is merged into rather than replaced, "
+            "and standard output has nothing to replace."
+        )
+    for held, spelled in CONVERSION_ONLY:
+        if getattr(args, held) != parser.get_default(held):
+            parser.error(
+                f"{mode} reads Apple's container and converts nothing, so "
+                f"{spelled} has nothing to do"
+            )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -440,6 +639,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.validate = True
 
     _check_annotation_flags(parser, args)
+    _check_library_flags(parser, args)
+    _check_convert_nothing_flags(parser, args)
 
     args.source_auto = args.source_dir is None
     if args.source_auto:
