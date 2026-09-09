@@ -55,6 +55,7 @@ from .detached import library_export, library_refusal, vault_of, write_export
 from .display import printable
 from .inspect_output import verify_output
 from .naming import (
+    Assignment,
     NamingPolicy,
     PortableNamesUnavailableError,
     PortableNaming,
@@ -62,7 +63,6 @@ from .naming import (
     build_policy,
 )
 from .planning import (
-    Assignment,
     CollisionMode,
     PlanOptions,
     assign_names,

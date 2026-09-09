@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import hashlib
 import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from .spec import PACKAGE_SUFFIX
@@ -287,6 +289,30 @@ def disambiguator(identifier: str) -> str:
         encode_name(identifier), digest_size=DISAMBIGUATOR_CHARS // 2
     )
     return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class Assignment:
+    """
+    One package's output name, and why it has none when it has none.
+
+    Here rather than with the planner that fills it in: a name and the reason
+    a package has none is what a policy produces, and everything that writes
+    a file needs to read one without also depending on how the run was
+    planned.
+    """
+
+    package: Path
+    #: The name to write, or ``""`` when the package lost a collision.
+    filename: str
+    identity: str
+    #: What holds the name instead, set only when *filename* is empty.
+    reason: str | None = None
+    #: Named from metadata that declared no creator. Reported, not fatal.
+    authorless: bool = False
+    #: The policy wanted metadata and got none it could name from, so the
+    #: package directory name was used. Reported, not fatal.
+    from_folder: bool = False
 
 
 @runtime_checkable

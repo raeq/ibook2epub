@@ -20,6 +20,7 @@ from zipfile import BadZipFile, ZipFile
 from .app_logger import logger
 from .display import printable
 from .naming import (
+    Assignment,
     NamingPolicy,
     disambiguator,
     encode_name,
@@ -99,23 +100,6 @@ class _Existing:
 
     path: Path
     identity: str
-
-
-@dataclass(frozen=True)
-class Assignment:
-    """One package's output name, and why it has none when it has none."""
-
-    package: Path
-    #: The name to write, or ``""`` when the package lost a collision.
-    filename: str
-    identity: str
-    #: What holds the name instead, set only when *filename* is empty.
-    reason: str | None = None
-    #: Named from metadata that declared no creator. Reported, not fatal.
-    authorless: bool = False
-    #: The policy wanted metadata and got none it could name from, so the
-    #: package directory name was used. Reported, not fatal.
-    from_folder: bool = False
 
 
 @dataclass

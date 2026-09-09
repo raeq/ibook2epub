@@ -35,8 +35,7 @@ from .annotations import for_book, index_by_book
 from .app_logger import logger
 from .archive import write_atomically
 from .display import collapse, printable
-from .naming import encode_name
-from .planning import Assignment
+from .naming import Assignment, encode_name
 from .validate import isbn13_of
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
