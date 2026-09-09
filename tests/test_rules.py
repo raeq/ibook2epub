@@ -34,9 +34,9 @@ from epubconvert.export.naming import (
     truncate_bytes,
 )
 from epubconvert.extract import source, validate
-from epubconvert.extract.validate import Package
 from epubconvert.run import convert, planning, run
 from epubconvert.utils import contained, display
+from epubconvert.utils.opf import Package
 from tests.conftest import make_package, needs_permissions, remove_tree
 from tests.test_export import _cover_package
 
@@ -893,3 +893,69 @@ class TestRuleEveryEncryptedBlockNamesItsAlgorithm:
         )
 
         assert source.has_drm(package)[0] is True
+
+
+class TestRuleImportsRunDownhill:
+    """
+    The package is four layers, and each may import only its own and those
+    below it: ``utils``, then ``extract``, then ``export``, then ``run``.
+
+    The layers exist to say what depends on what, which they do only while
+    something checks. Two edges pointed the wrong way before the split --
+    reading Apple's databases reached into naming, and writing a file reached
+    into planning -- and both looked like ordinary imports until the
+    directories made them visible.
+
+    One test per layer, including the ones with nothing above them to reach
+    for, so a new module that crosses upward fails the test for its own layer
+    rather than a single test that names them all.
+    """
+
+    #: Bottom to top. A module may import from its own layer and any earlier.
+    LAYERS = ("utils", "extract", "export", "run")
+
+    @staticmethod
+    def _crossings(layer: str, allowed: frozenset[str]) -> list[str]:
+        """Every import in *layer* that reaches outside *allowed*."""
+        found = []
+        for path in sorted(Path("epubconvert", layer).glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom) or not node.level:
+                    continue
+                # level 1 is this layer; level 2 names another, or the top
+                # package itself when it names no module at all.
+                if node.level == 1 or node.module is None:
+                    continue
+                target = node.module.split(".")[0]
+                if target not in allowed:
+                    found.append(f"{path.name}:{node.lineno} -> {target}")
+        return found
+
+    def _check(self, layer: str) -> None:
+        below = self.LAYERS[: self.LAYERS.index(layer) + 1]
+        crossings = self._crossings(layer, frozenset(below))
+        assert crossings == [], f"{layer} may import only {below}: {crossings}"
+
+    def test_utils_imports_no_layer(self):
+        self._check("utils")
+
+    def test_extract_imports_only_utils(self):
+        self._check("extract")
+
+    def test_export_imports_no_higher_than_itself(self):
+        self._check("export")
+
+    def test_run_may_import_anything(self):
+        self._check("run")
+
+    def test_every_layer_on_disk_is_named_here(self):
+        # A fifth directory added without a rule would be unchecked, and the
+        # four tests above would still pass.
+        on_disk = {
+            path.name
+            for path in Path("epubconvert").iterdir()
+            if path.is_dir() and (path / "__init__.py").is_file()
+        }
+
+        assert on_disk == set(self.LAYERS)

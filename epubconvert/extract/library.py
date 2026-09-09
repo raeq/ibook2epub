@@ -39,6 +39,7 @@ from typing import Any
 from ..utils.app_logger import logger
 from ..utils.contained import escapes
 from ..utils.display import printable
+from ..utils.opf import Package
 from ..utils.policy import NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 from .coredata import (
@@ -50,7 +51,6 @@ from .coredata import (
     rows,
 )
 from .validate import (
-    Package,
     ValidationError,
     canonical_identifier,
     read_package_dir,

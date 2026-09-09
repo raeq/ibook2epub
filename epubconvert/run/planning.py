@@ -26,7 +26,6 @@ from ..export.naming import (
 )
 from ..extract.source import inspect_package
 from ..extract.validate import (
-    Package,
     ValidationError,
     read_package,
     read_package_dir,
@@ -34,6 +33,7 @@ from ..extract.validate import (
 )
 from ..utils.app_logger import logger
 from ..utils.display import printable
+from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 

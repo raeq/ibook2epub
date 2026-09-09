@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..extract.validate import Package
+    from ..utils.opf import Package
 
 
 @dataclass(frozen=True)

@@ -36,7 +36,7 @@ from ..utils.policy import NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from ..extract.validate import Package
+    from ..utils.opf import Package
 
 try:
     import disarm

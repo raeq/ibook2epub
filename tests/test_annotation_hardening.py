@@ -39,9 +39,10 @@ from epubconvert import __version__
 from epubconvert.export import archive
 from epubconvert.extract import annotations, coredata
 from epubconvert.extract.library import describe_book
-from epubconvert.extract.validate import Package, canonical_identifier
+from epubconvert.extract.validate import canonical_identifier
 from epubconvert.run import cli
 from epubconvert.run.run import main
+from epubconvert.utils.opf import Package
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 

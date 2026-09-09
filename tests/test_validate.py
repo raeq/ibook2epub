@@ -14,6 +14,7 @@ from epubconvert.export.archive import zip_package
 from epubconvert.extract import validate
 from epubconvert.run import run
 from epubconvert.utils import exits
+from epubconvert.utils.opf import Package
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0"
@@ -374,9 +375,7 @@ def _opf_with(metadata: str, unique_id: str | None = "bid") -> str:
     )
 
 
-def _read_both_ways(
-    tmp_path: Path, opf: str
-) -> tuple[validate.Package, validate.Package]:
+def _read_both_ways(tmp_path: Path, opf: str) -> tuple[Package, Package]:
     """Parse one package document through both readers.
 
     Identifier selection has two entry points -- ``read_package`` for an

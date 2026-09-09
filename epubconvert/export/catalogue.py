@@ -22,8 +22,8 @@ from .. import __version__
 from ..extract.coredata import now
 from ..extract.library import READ
 from ..extract.validate import isbn10_of, isbn13_of
+from ..utils import schema
 from ..utils.display import collapse, printable
-from . import schema
 
 #: The schema shipped beside this module, which is the contract.
 SCHEMA_PATH = Path(__file__).with_name("library.schema.json")

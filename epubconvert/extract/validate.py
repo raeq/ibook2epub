@@ -22,7 +22,7 @@ import posixpath
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import unquote, urldefrag
@@ -33,6 +33,7 @@ from zipfile import ZIP_STORED, BadZipFile, ZipFile
 from ..utils.app_logger import logger
 from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
+from ..utils.opf import Package
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
@@ -46,23 +47,6 @@ DC_NS = "http://purl.org/dc/elements/1.1/"
 MAX_XML_BYTES = 16 * 1024 * 1024
 
 EPUBCHECK = "epubcheck"
-
-
-@dataclass
-class Package:
-    """The parts of a package document (OPF) this tool cares about."""
-
-    opf_path: str
-    title: str | None = None
-    creator: str | None = None
-    creator_sort: str | None = None
-    identifier: str | None = None
-    #: Manifest item id to archive path, already resolved and unquoted.
-    manifest: dict[str, str] = field(default_factory=dict)
-    #: Manifest ids referenced by the spine, in reading order.
-    spine: list[str] = field(default_factory=list)
-    #: Manifest id of the cover image, when the package declares one.
-    cover_id: str | None = None
 
 
 #: Values that appear where a ``dc:identifier`` should be but identify nothing.

@@ -26,8 +26,8 @@ from epubconvert.export.naming import (
     encode_name,
 )
 from epubconvert.extract import validate
-from epubconvert.extract.validate import Package
 from epubconvert.run import planning, run
+from epubconvert.utils.opf import Package
 from tests.conftest import make_metadata_package, make_package
 
 
