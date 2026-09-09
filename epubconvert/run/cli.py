@@ -13,10 +13,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .. import __version__
+from ..collect.annotations import STDOUT
+from ..collect.library import SHELVES
 from ..export.catalogue import LIBRARY_FORMATS
 from ..export.naming import NAME_PASSTHROUGH, NAME_SOURCES, PORTABLE_MODES, STRIP
-from ..extract.annotations import STDOUT
-from ..extract.library import SHELVES
 from ..utils.defaults import (
     DEFAULT_MAX_EXPORT_FILES,
     DEFAULT_MIN_FREE_MB,

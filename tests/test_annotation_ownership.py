@@ -26,7 +26,7 @@ from zipfile import ZipFile
 
 import pytest
 
-from epubconvert.extract import annotations
+from epubconvert.collect import annotations
 from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases

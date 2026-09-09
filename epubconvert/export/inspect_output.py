@@ -18,7 +18,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from ..extract.validate import ValidationError, ValidationOptions, read_package_dir
+from ..collect.validate import ValidationError, ValidationOptions, read_package_dir
 from ..utils.app_logger import logger
 from ..utils.contained import is_free, open_contained, resolve
 from ..utils.display import printable

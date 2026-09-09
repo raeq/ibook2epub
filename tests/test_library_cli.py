@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from epubconvert.collect import annotations, library
 from epubconvert.export.catalogue import schema_problems
-from epubconvert.extract import annotations, library
 from epubconvert.run import cli
 from epubconvert.run.run import main
 from tests.conftest import make_metadata_package

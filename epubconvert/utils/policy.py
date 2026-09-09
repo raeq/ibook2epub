@@ -6,7 +6,7 @@ The vocabulary only. Every policy that implements this lives in
 :class:`Assignment`, but the two modules that *read* Apple's databases also
 have to state what a book will be called on the shelf. Held here, they can
 say so without importing the module that decides how a run is named, which
-is the wrong way round: extraction cannot depend on export.
+is the wrong way round: collecting cannot depend on export.
 """
 
 from __future__ import annotations

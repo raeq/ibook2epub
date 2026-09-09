@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 
 import epubconvert
-from epubconvert.extract import annotations
+from epubconvert.collect import annotations
 from epubconvert.run import cli
 from tests.conftest import needs_permissions
 
@@ -91,7 +91,7 @@ class TestTheSchemaIsShipped:
         )
 
         assert "[tool.setuptools.package-data]" in config
-        assert '"epubconvert.extract" = ["annotations.schema.json"]' in config
+        assert '"epubconvert.collect" = ["annotations.schema.json"]' in config
         assert '"epubconvert.export" = ["library.schema.json"]' in config
 
     def test_validating_a_document_does_not_need_the_source_tree(self):

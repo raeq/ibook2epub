@@ -18,9 +18,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+from epubconvert.collect import source, validate
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import StripNaming
-from epubconvert.extract import source, validate
 from epubconvert.run import convert, run
 from epubconvert.utils.app_logger import logger
 from epubconvert.utils.display import printable

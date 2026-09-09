@@ -12,9 +12,9 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
+from epubconvert.collect.validate import ValidationError, read_package_dir
 from epubconvert.export import inspect_output
 from epubconvert.export.archive import ARCHIVE_TIMESTAMP, zip_package
-from epubconvert.extract.validate import ValidationError, read_package_dir
 from epubconvert.run import convert, run
 from tests.conftest import make_package
 

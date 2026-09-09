@@ -15,7 +15,7 @@ what the tool says.
 
 import subprocess
 
-from epubconvert.extract import validate
+from epubconvert.collect import validate
 from epubconvert.run import cli, run
 from epubconvert.utils import exits
 
@@ -26,7 +26,7 @@ class TestEpubcheck:
 
     def test_missing_tool_is_reported(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "epubconvert.extract.validate.shutil.which", lambda _name: None
+            "epubconvert.collect.validate.shutil.which", lambda _name: None
         )
 
         assert validate.run_epubcheck(tmp_path / "x.epub") == [
@@ -75,7 +75,7 @@ class TestRunningEpubcheck:
         """Pretend the tool is installed, and record how it was invoked."""
         calls: list[tuple[list[str], dict[str, object]]] = []
         monkeypatch.setattr(
-            "epubconvert.extract.validate.shutil.which",
+            "epubconvert.collect.validate.shutil.which",
             lambda _name: "/usr/bin/epubcheck",
         )
 
@@ -85,7 +85,7 @@ class TestRunningEpubcheck:
                 raise raises
             return result
 
-        monkeypatch.setattr("epubconvert.extract.validate.subprocess.run", fake_run)
+        monkeypatch.setattr("epubconvert.collect.validate.subprocess.run", fake_run)
         return calls
 
     def test_a_clean_archive_reports_nothing(self, tmp_path, monkeypatch):

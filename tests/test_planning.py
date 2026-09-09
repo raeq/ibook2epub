@@ -10,9 +10,9 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from epubconvert.collect import source
 from epubconvert.export.archive import collect_package_dirs
 from epubconvert.export.naming import PassthroughNaming
-from epubconvert.extract import source
 from epubconvert.run import convert, planning, run
 from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_package

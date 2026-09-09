@@ -23,11 +23,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ..extract.annotations import STDOUT
-from ..extract.annotations import build_document as build_annotation_document
-from ..extract.annotations import merge as merge_annotations
-from ..extract.coredata import ContainerUnavailableError
-from ..extract.library import collect as collect_library
+from ..collect.annotations import STDOUT
+from ..collect.annotations import build_document as build_annotation_document
+from ..collect.annotations import merge as merge_annotations
+from ..collect.coredata import ContainerUnavailableError
+from ..collect.library import collect as collect_library
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.contained import is_free

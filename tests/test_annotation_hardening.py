@@ -36,10 +36,10 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 import pytest
 
 from epubconvert import __version__
+from epubconvert.collect import annotations, coredata
+from epubconvert.collect.library import describe_book
+from epubconvert.collect.validate import canonical_identifier
 from epubconvert.export import archive
-from epubconvert.extract import annotations, coredata
-from epubconvert.extract.library import describe_book
-from epubconvert.extract.validate import canonical_identifier
 from epubconvert.run import cli
 from epubconvert.run.run import main
 from epubconvert.utils.opf import Package

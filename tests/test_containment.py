@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from epubconvert.collect import source, validate
 from epubconvert.export import inspect_output
-from epubconvert.extract import source, validate
 from epubconvert.utils import contained
 from tests.conftest import make_package
 
@@ -151,8 +151,8 @@ class TestNoSecondImplementation:
     def test_every_package_reader_imports_the_rule(self):
         readers = [
             "export/archive.py",
-            "extract/validate.py",
-            "extract/source.py",
+            "collect/validate.py",
+            "collect/source.py",
             "export/inspect_output.py",
         ]
         for name in readers:

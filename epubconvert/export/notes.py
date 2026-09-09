@@ -30,8 +30,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from ..extract.annotations import for_book, index_by_book
-from ..extract.validate import isbn13_of
+from ..collect.annotations import for_book, index_by_book
+from ..collect.validate import isbn13_of
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import collapse, printable

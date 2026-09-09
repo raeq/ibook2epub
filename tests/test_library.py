@@ -24,9 +24,9 @@ from pathlib import Path
 
 import pytest
 
+from epubconvert.collect import annotations, coredata, library, validate
 from epubconvert.export import catalogue
 from epubconvert.export.naming import MetadataNaming, PassthroughNaming, StripNaming
-from epubconvert.extract import annotations, coredata, library, validate
 from epubconvert.utils.opf import Package
 from tests.conftest import make_metadata_package
 from tests.test_annotations import (

@@ -3,7 +3,7 @@ What a package document says, once it has been read.
 
 A plain holder, kept apart from the module that fills it in. Every layer
 handles one: the reader builds it, the naming policies ask it for a title and
-a creator, the catalogue asks it for an identifier. Held in ``extract`` it
+a creator, the catalogue asks it for an identifier. Held in ``collect`` it
 made the vocabulary of naming depend on the reader, which is backwards.
 """
 

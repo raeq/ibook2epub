@@ -27,13 +27,13 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
+from epubconvert.collect import annotations, coredata
 from epubconvert.export import archive
 from epubconvert.export.naming import (
     MetadataNaming,
     PassthroughNaming,
     StripNaming,
 )
-from epubconvert.extract import annotations, coredata
 from epubconvert.run import run
 from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_metadata_package

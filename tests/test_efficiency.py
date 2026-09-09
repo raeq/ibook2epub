@@ -17,9 +17,9 @@ import os
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
+from epubconvert.collect import source, validate
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
-from epubconvert.extract import source, validate
 from epubconvert.run import convert, planning, run
 from tests.conftest import make_metadata_package, make_package
 

@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from epubconvert.extract import annotations
+from epubconvert.collect import annotations
 from epubconvert.utils import schema as epubconvert_schema
 
 

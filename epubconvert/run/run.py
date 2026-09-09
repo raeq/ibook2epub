@@ -21,6 +21,16 @@ from pathlib import Path
 from typing import Any
 from zipfile import BadZipFile
 
+from ..collect.annotations import STDOUT
+from ..collect.annotations import collect as collect_annotations
+from ..collect.annotations import for_book as annotations_for_book
+from ..collect.annotations import index_by_book as index_annotations
+from ..collect.coredata import ContainerUnavailableError
+from ..collect.validate import (
+    ArchiveInvalidError,
+    ValidationOptions,
+    epubcheck_available,
+)
 from ..export.archive import (
     collect_copyable,
     collect_package_dirs,
@@ -35,16 +45,6 @@ from ..export.naming import (
     PortableNaming,
     StripNaming,
     build_policy,
-)
-from ..extract.annotations import STDOUT
-from ..extract.annotations import collect as collect_annotations
-from ..extract.annotations import for_book as annotations_for_book
-from ..extract.annotations import index_by_book as index_annotations
-from ..extract.coredata import ContainerUnavailableError
-from ..extract.validate import (
-    ArchiveInvalidError,
-    ValidationOptions,
-    epubcheck_available,
 )
 from ..utils import app_logger, exits
 from ..utils.app_logger import logger

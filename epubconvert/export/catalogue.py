@@ -19,9 +19,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from .. import __version__
-from ..extract.coredata import now
-from ..extract.library import READ
-from ..extract.validate import isbn10_of, isbn13_of
+from ..collect.coredata import now
+from ..collect.library import READ
+from ..collect.validate import isbn10_of, isbn13_of
 from ..utils import schema
 from ..utils.display import collapse, printable
 

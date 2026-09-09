@@ -10,8 +10,8 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
+from epubconvert.collect import validate
 from epubconvert.export.archive import zip_package
-from epubconvert.extract import validate
 from epubconvert.run import run
 from epubconvert.utils import exits
 from epubconvert.utils.opf import Package

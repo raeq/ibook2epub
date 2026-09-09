@@ -27,11 +27,11 @@ from pathlib import Path
 from random import shuffle
 from typing import TextIO
 
+from ..collect.annotations import for_book as annotations_for_book
+from ..collect.validate import ValidationOptions
 from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from ..export.inspect_output import extract_cover, free_megabytes
 from ..export.naming import PassthroughNaming
-from ..extract.annotations import for_book as annotations_for_book
-from ..extract.validate import ValidationOptions
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable

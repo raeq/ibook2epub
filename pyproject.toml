@@ -71,7 +71,7 @@ exclude_also = [
 # `catalogue.schema_problems`, and each is the contract a consumer builds
 # against, so they have to be inside the installed package rather than only
 # beside the source.
-"epubconvert.extract" = ["annotations.schema.json"]
+"epubconvert.collect" = ["annotations.schema.json"]
 "epubconvert.export" = ["library.schema.json"]
 
 [project.urls]

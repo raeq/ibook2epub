@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert.extract import source
+from epubconvert.collect import source
 from epubconvert.run import run
 from tests.conftest import make_package
 

@@ -26,6 +26,7 @@ from zipfile import ZipFile
 
 import pytest
 
+from epubconvert.collect import source, validate
 from epubconvert.export import archive, inspect_output, naming
 from epubconvert.export.naming import (
     MetadataNaming,
@@ -33,7 +34,6 @@ from epubconvert.export.naming import (
     StripNaming,
     truncate_bytes,
 )
-from epubconvert.extract import source, validate
 from epubconvert.run import convert, planning, run
 from epubconvert.utils import contained, display
 from epubconvert.utils.opf import Package
@@ -725,7 +725,7 @@ class TestOneReaderRulePerRule:
     @staticmethod
     def _tree() -> ast.Module:
         root = Path(__file__).resolve().parent.parent
-        module = root / "epubconvert" / "extract" / "validate.py"
+        module = root / "epubconvert" / "collect" / "validate.py"
         return ast.parse(module.read_text(encoding="utf-8"))
 
     def test_only_one_function_walks_the_container_rootfiles(self):
@@ -898,7 +898,7 @@ class TestRuleEveryEncryptedBlockNamesItsAlgorithm:
 class TestRuleImportsRunDownhill:
     """
     The package is four layers, and each may import only its own and those
-    below it: ``utils``, then ``extract``, then ``export``, then ``run``.
+    below it: ``utils``, then ``collect``, then ``export``, then ``run``.
 
     The layers exist to say what depends on what, which they do only while
     something checks. Two edges pointed the wrong way before the split --
@@ -912,7 +912,7 @@ class TestRuleImportsRunDownhill:
     """
 
     #: Bottom to top. A module may import from its own layer and any earlier.
-    LAYERS = ("utils", "extract", "export", "run")
+    LAYERS = ("utils", "collect", "export", "run")
 
     @staticmethod
     def _crossings(layer: str, allowed: frozenset[str]) -> list[str]:
@@ -940,8 +940,8 @@ class TestRuleImportsRunDownhill:
     def test_utils_imports_no_layer(self):
         self._check("utils")
 
-    def test_extract_imports_only_utils(self):
-        self._check("extract")
+    def test_collect_imports_only_utils(self):
+        self._check("collect")
 
     def test_export_imports_no_higher_than_itself(self):
         self._check("export")

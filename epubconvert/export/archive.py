@@ -18,8 +18,8 @@ from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
-from ..extract.annotations import EMBEDDED_PATH, embedded_json
-from ..extract.validate import ArchiveInvalidError, ValidationOptions
+from ..collect.annotations import EMBEDDED_PATH, embedded_json
+from ..collect.validate import ArchiveInvalidError, ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
 from ..utils.display import printable
