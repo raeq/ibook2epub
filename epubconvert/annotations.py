@@ -48,7 +48,7 @@ from .app_logger import logger
 from .contained import escapes
 from .coredata import container_directory, database_in, moment, now, rows
 from .library import describe_book, index_assets, package_of, read_package_once
-from .naming import NamingPolicy
+from .policy import NamingPolicy
 from .spec import PACKAGE_SUFFIX
 from .validate import Package
 

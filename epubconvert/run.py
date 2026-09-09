@@ -55,8 +55,6 @@ from .detached import library_export, library_refusal, vault_of, write_export
 from .display import printable
 from .inspect_output import verify_output
 from .naming import (
-    Assignment,
-    NamingPolicy,
     PortableNamesUnavailableError,
     PortableNaming,
     StripNaming,
@@ -72,6 +70,7 @@ from .planning import (
     plan_exports,
     render_listing,
 )
+from .policy import Assignment, NamingPolicy
 from .validate import ArchiveInvalidError, ValidationOptions, epubcheck_available
 
 

@@ -33,7 +33,7 @@ from .app_logger import logger
 from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from .display import printable
 from .inspect_output import extract_cover, free_megabytes
-from .naming import NamingPolicy, PassthroughNaming
+from .naming import PassthroughNaming
 from .planning import (
     PENDING,
     Decision,
@@ -41,6 +41,7 @@ from .planning import (
     plan_exports,
     record_decisions,
 )
+from .policy import NamingPolicy
 from .validate import ValidationOptions
 
 try:

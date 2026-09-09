@@ -12,7 +12,8 @@ from pathlib import Path
 
 from epubconvert import convert, planning, run, source
 from epubconvert.archive import collect_package_dirs
-from epubconvert.naming import NamingPolicy, PassthroughNaming
+from epubconvert.naming import PassthroughNaming
+from epubconvert.policy import NamingPolicy
 from tests.conftest import make_package
 
 

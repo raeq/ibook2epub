@@ -54,7 +54,7 @@ from .coredata import (
     rows,
 )
 from .display import collapse, printable
-from .naming import NamingPolicy
+from .policy import NamingPolicy
 from .spec import PACKAGE_SUFFIX
 from .validate import (
     Package,

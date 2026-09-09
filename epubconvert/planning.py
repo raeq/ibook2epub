@@ -20,14 +20,13 @@ from zipfile import BadZipFile, ZipFile
 from .app_logger import logger
 from .display import printable
 from .naming import (
-    Assignment,
-    NamingPolicy,
     disambiguator,
     encode_name,
     filesystem_key,
     split_extension,
     truncate_bytes,
 )
+from .policy import Assignment, NamingPolicy
 from .source import inspect_package
 from .spec import PACKAGE_SUFFIX
 from .validate import (

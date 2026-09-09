@@ -12,7 +12,8 @@ import pytest
 
 from epubconvert import __version__, cli, convert, planning, run
 from epubconvert.archive import collect_package_dirs
-from epubconvert.naming import NamingPolicy, PassthroughNaming
+from epubconvert.naming import PassthroughNaming
+from epubconvert.policy import NamingPolicy
 from tests.conftest import make_package
 
 

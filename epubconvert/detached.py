@@ -33,8 +33,8 @@ from .contained import is_free
 from .coredata import ContainerUnavailableError
 from .display import printable
 from .library import collect as collect_library
-from .naming import Assignment, NamingPolicy
 from .notes import SIDECAR_SUFFIX
+from .policy import Assignment, NamingPolicy
 
 
 def write_export(

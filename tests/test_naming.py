@@ -14,6 +14,7 @@ import pytest
 
 from epubconvert import cli, convert, exits, naming, run
 from epubconvert.archive import collect_package_dirs
+from epubconvert.policy import NamingPolicy
 from tests.conftest import make_package
 
 disarm = pytest.importorskip("disarm", reason="portable naming needs the disarm extra")
@@ -46,7 +47,7 @@ class TestPassthroughNaming:
         assert policy.identity("Dune.epub") != policy.identity("DUNE.epub")
 
     def test_satisfies_the_protocol(self):
-        assert isinstance(naming.PassthroughNaming(), naming.NamingPolicy)
+        assert isinstance(naming.PassthroughNaming(), NamingPolicy)
 
 
 class TestPortableNaming:
@@ -102,7 +103,7 @@ class TestPortableNaming:
         )
 
     def test_satisfies_the_protocol(self):
-        assert isinstance(naming.PortableNaming(), naming.NamingPolicy)
+        assert isinstance(naming.PortableNaming(), NamingPolicy)
 
     def test_build_policy_selects_by_mode(self):
         assert isinstance(naming.build_policy(None), naming.PassthroughNaming)
@@ -355,7 +356,7 @@ class TestStripNaming:
         )
 
     def test_satisfies_the_protocol(self):
-        assert isinstance(naming.StripNaming(), naming.NamingPolicy)
+        assert isinstance(naming.StripNaming(), NamingPolicy)
 
     def test_needs_no_disarm(self, monkeypatch):
         monkeypatch.setattr(naming, "disarm", None)

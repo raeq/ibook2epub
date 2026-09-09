@@ -30,10 +30,10 @@ import pytest
 from epubconvert import annotations, archive, coredata, run
 from epubconvert.naming import (
     MetadataNaming,
-    NamingPolicy,
     PassthroughNaming,
     StripNaming,
 )
+from epubconvert.policy import NamingPolicy
 from tests.conftest import make_metadata_package
 from tests.test_annotations import (
     highlight,

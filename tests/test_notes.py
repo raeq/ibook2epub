@@ -33,7 +33,7 @@ import pytest
 
 from epubconvert import app_logger, notes
 from epubconvert.archive import write_atomically
-from epubconvert.naming import Assignment
+from epubconvert.policy import Assignment
 
 # ------------------------------------------------------------------ rendering
 
