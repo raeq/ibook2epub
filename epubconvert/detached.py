@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from . import exits, library, notes
+from . import catalogue, exits, notes
 from .annotations import STDOUT
 from .annotations import build_document as build_annotation_document
 from .annotations import merge as merge_annotations
@@ -334,7 +334,9 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
         logger.info("Dry run: %d book(s) read; nothing was written.", len(found))
         return exits.SUCCESS
 
-    text = library.render(found, args.library_format, unknown_shelf=args.unknown_shelf)
+    text = catalogue.render(
+        found, args.library_format, unknown_shelf=args.unknown_shelf
+    )
     if target is None:
         _emit(text)
         return exits.SUCCESS
@@ -368,7 +370,7 @@ def _report_matchable(found: list[dict[str, Any]], *, read_identifiers: bool) ->
             "these rows by ISBN."
         )
         return
-    matched = library.matchable_count(found)
+    matched = catalogue.matchable_count(found)
     if matched == len(found):
         logger.info("Every book carries an ISBN a tracker can match on.")
         return

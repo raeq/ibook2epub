@@ -14,13 +14,14 @@ from pathlib import Path
 
 from . import __version__
 from .annotations import STDOUT
+from .catalogue import LIBRARY_FORMATS
 from .defaults import (
     DEFAULT_MAX_EXPORT_FILES,
     DEFAULT_MIN_FREE_MB,
     DEFAULT_OUTPUT,
     discover_source,
 )
-from .library import LIBRARY_FORMATS, SHELVES
+from .library import SHELVES
 from .naming import NAME_PASSTHROUGH, NAME_SOURCES, PORTABLE_MODES, STRIP
 from .planning import COLLISION_MODES, SKIP, STATUSES
 

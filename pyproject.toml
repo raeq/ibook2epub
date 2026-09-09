@@ -68,7 +68,7 @@ exclude_also = [
 
 [tool.setuptools.package-data]
 # The schemas are read at runtime by `annotations.schema_problems` and
-# `library.schema_problems`, and each is the contract a consumer builds
+# `catalogue.schema_problems`, and each is the contract a consumer builds
 # against, so they have to be inside the installed package rather than only
 # beside the source.
 epubconvert = ["annotations.schema.json", "library.schema.json"]

@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from epubconvert import cli, library
+from epubconvert.catalogue import schema_problems
 from epubconvert.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
@@ -84,7 +85,7 @@ class TestTheCommandLineMode:
 
         assert code == 0
         document = json.loads(target.read_text(encoding="utf-8"))
-        assert library.schema_problems(document) == []
+        assert schema_problems(document) == []
         assert len(document["books"]) == 2
 
     def test_with_no_file_it_goes_to_standard_output(

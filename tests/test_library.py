@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert import annotations, coredata, library, validate
+from epubconvert import annotations, catalogue, coredata, library, validate
 from epubconvert.naming import MetadataNaming, PassthroughNaming, StripNaming
 from epubconvert.validate import Package
 from tests.conftest import make_metadata_package
@@ -145,7 +145,7 @@ class TestWhatIsRead:
         )
 
         found = library.collect(tmp_path)
-        text = library.render(found, "json")
+        text = catalogue.render(found, "json")
 
         assert found[0]["title"] == "ASSET1"
         assert "author" not in found[0]
@@ -306,7 +306,7 @@ class TestTheIdentifierComesFromTheBook:
             {"title": "C"},
         ]
 
-        assert library.matchable_count(found) == 1
+        assert catalogue.matchable_count(found) == 1
 
     @pytest.mark.parametrize(
         "declared", ["urn:isbn:1234567890123", "urn:isbn:", "urn:isbn:0306406153"]
@@ -319,9 +319,9 @@ class TestTheIdentifierComesFromTheBook:
         self._package(tmp_path, declared)
 
         found = library.collect(tmp_path)
-        row = _csv_rows(library.goodreads_csv(found, unknown_shelf=None))[0]
+        row = _csv_rows(catalogue.goodreads_csv(found, unknown_shelf=None))[0]
 
-        assert library.matchable_count(found) == 0
+        assert catalogue.matchable_count(found) == 0
         assert row["ISBN13"] == ""
         assert row["ISBN"] == ""
 
@@ -418,12 +418,12 @@ class TestTheCsvIsWhatGoodreadsWrites:
 
     def _one(self, **entry: object) -> dict[str, str]:
         book = {"title": "Leviathan Wakes", **entry}
-        return _csv_rows(library.goodreads_csv([book], unknown_shelf=None))[0]
+        return _csv_rows(catalogue.goodreads_csv([book], unknown_shelf=None))[0]
 
     def test_the_header_is_goodreads_own(self):
-        text = library.goodreads_csv([], unknown_shelf=None)
+        text = catalogue.goodreads_csv([], unknown_shelf=None)
 
-        assert text.split("\n")[0] == ",".join(library.GOODREADS_COLUMNS)
+        assert text.split("\n")[0] == ",".join(catalogue.GOODREADS_COLUMNS)
         assert text.split("\n")[0].startswith("Book Id,Title,Author,")
 
     def test_a_row_carries_what_apple_holds(self):
@@ -464,7 +464,7 @@ class TestTheCsvIsWhatGoodreadsWrites:
             assert row[column] == ""
 
     def test_the_unknown_shelf_fills_only_the_blanks(self):
-        text = library.goodreads_csv(
+        text = catalogue.goodreads_csv(
             [{"title": "Finished", "shelf": "read"}, {"title": "Bought"}],
             unknown_shelf="to-read",
         )
@@ -477,7 +477,7 @@ class TestTheCsvIsWhatGoodreadsWrites:
     def test_the_unknown_shelf_does_not_also_invent_a_read_count(self):
         # The flag fills one column. A read count from it told a tracker the
         # reader had finished 3,389 books they merely bought.
-        text = library.goodreads_csv(
+        text = catalogue.goodreads_csv(
             [{"title": "Finished", "shelf": "read"}, {"title": "Bought"}],
             unknown_shelf="read",
         )
@@ -556,7 +556,7 @@ class TestTheCsvIsWhatGoodreadsWrites:
     def test_lines_end_in_newline_only(self):
         # write_text translates newlines, so "\\r\\n" would become "\\r\\r\\n"
         # on Windows and the file would open with a blank row after each book.
-        assert "\r" not in library.goodreads_csv([{"title": "T"}], unknown_shelf=None)
+        assert "\r" not in catalogue.goodreads_csv([{"title": "T"}], unknown_shelf=None)
 
 
 class TestTheJsonIsTheCanonicalRecord:
@@ -570,30 +570,30 @@ class TestTheJsonIsTheCanonicalRecord:
             collections={"Books": ["ASSET1", "B"], "Favourites": ["B"]},
         )
 
-        document = library.build_document(library.collect(tmp_path))
+        document = catalogue.build_document(library.collect(tmp_path))
 
-        assert library.schema_problems(document) == []
+        assert catalogue.schema_problems(document) == []
         assert document["generator"]["name"] == "ibook2epub"
         assert document["generated"].endswith("Z")
 
     def test_the_schema_file_is_shipped_beside_the_module(self):
-        assert library.SCHEMA_PATH.is_file()
+        assert catalogue.SCHEMA_PATH.is_file()
 
     def test_an_unknown_field_is_a_problem(self):
-        document = library.build_document([{"title": "T", "isbn": "x"}])
+        document = catalogue.build_document([{"title": "T", "isbn": "x"}])
 
-        assert library.schema_problems(document) == ["books[0] has unknown ['isbn']"]
+        assert catalogue.schema_problems(document) == ["books[0] has unknown ['isbn']"]
 
     def test_a_book_without_a_title_is_a_problem(self):
-        document = library.build_document([{"author": "A"}])
+        document = catalogue.build_document([{"author": "A"}])
 
-        assert library.schema_problems(document) == ["books[0] missing title"]
+        assert catalogue.schema_problems(document) == ["books[0] missing title"]
 
     def test_an_entry_that_is_not_an_object_is_a_problem(self):
-        document = library.build_document([])
+        document = catalogue.build_document([])
         document["books"] = ["Leviathan Wakes"]
 
-        assert library.schema_problems(document) == ["books[0] is str, not an object"]
+        assert catalogue.schema_problems(document) == ["books[0] is str, not an object"]
 
     def test_every_collection_is_kept_including_apples(self, tmp_path):
         # The CSV filters; the record does not.
@@ -602,7 +602,7 @@ class TestTheJsonIsTheCanonicalRecord:
         assert library.collect(tmp_path)[0]["collections"] == ["Books"]
 
     def test_the_render_is_the_document_plus_a_newline(self):
-        text = library.render([{"title": "T"}], "json")
+        text = catalogue.render([{"title": "T"}], "json")
 
         assert text.endswith("}\n")
         assert json.loads(text)["books"] == [{"title": "T"}]
