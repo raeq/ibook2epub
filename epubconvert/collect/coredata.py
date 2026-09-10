@@ -83,14 +83,21 @@ def container_directory(container: Path | None) -> Path:
     :return: The directory.
 
     :raises ContainerPermissionError: If macOS refuses access to it.
-    :raises ContainerUnavailableError: If it is not there, or cannot be read.
+    :raises ContainerUnavailableError: If it is not there, is a file, or cannot
+        be read.
     """
     directory = container if container is not None else Path.home() / CONTAINER
     try:
         _listed(directory)
-    except (FileNotFoundError, NotADirectoryError) as exc:
+    except FileNotFoundError as exc:
         raise ContainerUnavailableError(
             f"{directory} is not there; Apple Books may never have run here"
+        ) from exc
+    except NotADirectoryError as exc:
+        # There, as a file. "Not there" sent the reader looking for something
+        # they could already see (Copilot on #18).
+        raise ContainerUnavailableError(
+            f"{directory} is a file, not a folder, so it cannot be the Books container"
         ) from exc
     except OSError as exc:
         raise ContainerUnavailableError(
@@ -116,15 +123,20 @@ def database_in(directory: Path, folder: str, what: str) -> Path:
 
     :raises ContainerPermissionError: If macOS refuses access to the folder.
     :raises ContainerUnavailableError: If the folder or the database is not
-        there, because Apple Books has not created it yet.
+        there, because Apple Books has not created it yet, or if the folder
+        is a file.
     """
     location = directory / folder
     try:
         _listed(location)
-    except (FileNotFoundError, NotADirectoryError) as exc:
+    except FileNotFoundError as exc:
         raise ContainerUnavailableError(
             f"no {folder} folder under {directory}; Apple Books has not created "
             f"the {what} database here yet"
+        ) from exc
+    except NotADirectoryError as exc:
+        raise ContainerUnavailableError(
+            f"{location} is a file, not a folder, so it cannot hold the {what} database"
         ) from exc
     except OSError as exc:
         raise ContainerUnavailableError(f"{location} could not be read: {exc}") from exc

@@ -877,3 +877,26 @@ class TestAMissingPermissionIsToldApartFromAbsence:
                 library.collect(tmp_path)
         finally:
             folder.chmod(0o700)
+
+    def test_a_container_that_is_a_file_says_so(self, tmp_path):
+        # Copilot on #18: NotADirectoryError was worded as "not there", which
+        # sent the reader looking for something that is there, as a file.
+        container = tmp_path / "Documents"
+        container.write_text("not a folder", encoding="utf-8")
+
+        with pytest.raises(
+            coredata.ContainerUnavailableError, match="is a file"
+        ) as caught:
+            coredata.container_directory(container)
+
+        assert "not there" not in str(caught.value)
+
+    def test_a_folder_that_is_a_file_says_so(self, tmp_path):
+        (tmp_path / "BKLibrary").write_text("not a folder", encoding="utf-8")
+
+        with pytest.raises(
+            coredata.ContainerUnavailableError, match="is a file"
+        ) as caught:
+            coredata.database_in(tmp_path, "BKLibrary", "library")
+
+        assert "has not created" not in str(caught.value)
