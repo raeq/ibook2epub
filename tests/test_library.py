@@ -28,7 +28,7 @@ from epubconvert.collect import annotations, coredata, library, validate
 from epubconvert.export import catalogue
 from epubconvert.export.naming import MetadataNaming, PassthroughNaming, StripNaming
 from epubconvert.utils.opf import Package
-from tests.conftest import make_metadata_package
+from tests.conftest import make_metadata_package, needs_permissions
 from tests.test_annotations import (
     MADE_AT,
     highlight,
@@ -632,10 +632,16 @@ class TestTheJsonIsTheCanonicalRecord:
 
 class TestItFailsSafely:
     def test_a_missing_library_database_says_so(self, tmp_path):
+        # #9: the folder was read, so the permission is not the reason, and
+        # the Full Disk Access advice this used to give was wrong.
         (tmp_path / "BKLibrary").mkdir(parents=True)
 
-        with pytest.raises(coredata.ContainerUnavailableError, match="Full Disk"):
+        with pytest.raises(
+            coredata.ContainerUnavailableError, match="has not created"
+        ) as caught:
             library.collect(tmp_path)
+
+        assert "Full Disk Access" not in str(caught.value)
 
     def test_a_missing_container_is_reported_not_raised(self, tmp_path):
         with pytest.raises(coredata.ContainerUnavailableError, match="not there"):
@@ -788,3 +794,86 @@ class TestUndatedAnnotationsSortLast:
         _merged, tally = annotations.merge(annotations.build_document([was]), [now])
 
         assert tally["updated"] == 1
+
+
+class TestAMissingPermissionIsToldApartFromAbsence:
+    """
+    #9: a missing container and a missing Full Disk Access grant each had one
+    fixed message, and each fired for the other. ``is_dir()`` and ``glob()``
+    both swallow the ``OSError`` that names the cause, so by the time a message
+    was chosen the errno was gone. Driven with ``chmod``, which fails the way a
+    denied grant does on macOS: both arrive as ``PermissionError``.
+    """
+
+    @needs_permissions
+    def test_a_refusing_parent_names_the_permission(self, tmp_path):
+        parent = tmp_path / "Containers"
+        container = parent / "Documents"
+        container.mkdir(parents=True)
+        parent.chmod(0)
+        try:
+            with pytest.raises(
+                coredata.ContainerPermissionError, match="Full Disk Access"
+            ):
+                coredata.container_directory(container)
+        finally:
+            parent.chmod(0o700)
+
+    @needs_permissions
+    def test_a_refusing_folder_names_the_permission(self, tmp_path):
+        folder = tmp_path / "BKLibrary"
+        folder.mkdir()
+        folder.chmod(0)
+        try:
+            with pytest.raises(
+                coredata.ContainerPermissionError, match="Full Disk Access"
+            ):
+                coredata.database_in(tmp_path, "BKLibrary", "library")
+        finally:
+            folder.chmod(0o700)
+
+    def test_an_absent_container_says_books_never_ran(self, tmp_path):
+        with pytest.raises(
+            coredata.ContainerUnavailableError, match="may never have run"
+        ) as caught:
+            coredata.container_directory(tmp_path / "absent")
+
+        assert "Full Disk Access" not in str(caught.value)
+
+    def test_an_absent_folder_is_not_blamed_on_the_permission(self, tmp_path):
+        with pytest.raises(
+            coredata.ContainerUnavailableError, match="BKLibrary"
+        ) as caught:
+            coredata.database_in(tmp_path, "BKLibrary", "library")
+
+        assert "Full Disk Access" not in str(caught.value)
+
+    def test_an_empty_folder_says_books_has_not_made_one(self, tmp_path):
+        (tmp_path / "BKLibrary").mkdir()
+
+        with pytest.raises(
+            coredata.ContainerUnavailableError, match="has not created"
+        ) as caught:
+            coredata.database_in(tmp_path, "BKLibrary", "library")
+
+        assert "Full Disk Access" not in str(caught.value)
+
+    def test_a_refusal_still_reaches_every_caller(self):
+        # Every caller catches ContainerUnavailableError. A refusal that got
+        # past them would be a traceback where there used to be a message.
+        assert issubclass(
+            coredata.ContainerPermissionError, coredata.ContainerUnavailableError
+        )
+
+    @needs_permissions
+    def test_the_library_export_names_the_permission(self, tmp_path):
+        folder = tmp_path / "BKLibrary"
+        folder.mkdir()
+        folder.chmod(0)
+        try:
+            with pytest.raises(
+                coredata.ContainerPermissionError, match="Full Disk Access"
+            ):
+                library.collect(tmp_path)
+        finally:
+            folder.chmod(0o700)

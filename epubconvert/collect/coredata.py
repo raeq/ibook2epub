@@ -12,6 +12,7 @@ export and the library export cannot drift apart on any of them.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,9 +28,50 @@ APPLE_EPOCH_OFFSET = 978307200
 #: The one way an instant is written by every export, matching the schemas.
 INSTANT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
+#: The remedy for a refusal, worded once so every path that meets one gives
+#: the same advice.
+FULL_DISK_ACCESS = (
+    "macOS refused access, so the terminal needs Full Disk Access "
+    "(System Settings > Privacy & Security > Full Disk Access)"
+)
+
 
 class ContainerUnavailableError(RuntimeError):
     """Raised when Apple's databases cannot be found or read."""
+
+
+class ContainerPermissionError(ContainerUnavailableError):
+    """
+    Raised when the operating system refuses to let the container be read.
+
+    A subclass, so every caller that reports an unavailable container reports
+    this one too, and one that needs to tell the two apart can.
+    """
+
+
+def _listed(directory: Path) -> None:
+    """
+    Open a directory for listing, so the operating system says why it cannot.
+
+    ``Path.is_dir()`` and ``Path.glob()`` both swallow the ``OSError`` that
+    names the cause. That is how a missing container and a missing Full Disk
+    Access grant came to share their messages, each chosen by a guess that was
+    wrong for the other (#9). Listing raises it instead: ``PermissionError`` is
+    the refusal -- a grant denied on macOS arrives as ``EPERM``, which Python
+    raises as ``PermissionError`` too -- and ``FileNotFoundError`` the absence.
+
+    :param directory: The directory to open.
+
+    :raises ContainerPermissionError: If the operating system refuses.
+    :raises OSError: For every other cause, ``FileNotFoundError`` among them,
+        left for the caller to word.
+    """
+    try:
+        os.scandir(directory).close()
+    except PermissionError as exc:
+        raise ContainerPermissionError(
+            f"{directory} cannot be read: {FULL_DISK_ACCESS}"
+        ) from exc
 
 
 def container_directory(container: Path | None) -> Path:
@@ -40,19 +82,30 @@ def container_directory(container: Path | None) -> Path:
 
     :return: The directory.
 
-    :raises ContainerUnavailableError: If it is not there.
+    :raises ContainerPermissionError: If macOS refuses access to it.
+    :raises ContainerUnavailableError: If it is not there, or cannot be read.
     """
     directory = container if container is not None else Path.home() / CONTAINER
-    if not directory.is_dir():
+    try:
+        _listed(directory)
+    except (FileNotFoundError, NotADirectoryError) as exc:
         raise ContainerUnavailableError(
             f"{directory} is not there; Apple Books may never have run here"
-        )
+        ) from exc
+    except OSError as exc:
+        raise ContainerUnavailableError(
+            f"{directory} could not be read: {exc}"
+        ) from exc
     return directory
 
 
 def database_in(directory: Path, folder: str, what: str) -> Path:
     """
     Find the live copy of one of Apple's databases, or say why it cannot be.
+
+    Only a refusal is blamed on the permission. A folder that is absent, or
+    there and empty, has been read, so the permission is not the reason, and
+    saying it was sent the reader to grant what they may already have granted.
 
     :param directory: The container directory.
     :param folder: The subdirectory, which is also the filename prefix:
@@ -61,14 +114,24 @@ def database_in(directory: Path, folder: str, what: str) -> Path:
 
     :return: The database.
 
-    :raises ContainerUnavailableError: If there is none. On macOS this usually
-        means the terminal has not been granted Full Disk Access.
+    :raises ContainerPermissionError: If macOS refuses access to the folder.
+    :raises ContainerUnavailableError: If the folder or the database is not
+        there, because Apple Books has not created it yet.
     """
-    database = newest(directory / folder, folder)
+    location = directory / folder
+    try:
+        _listed(location)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ContainerUnavailableError(
+            f"no {folder} folder under {directory}; Apple Books has not created "
+            f"the {what} database here yet"
+        ) from exc
+    except OSError as exc:
+        raise ContainerUnavailableError(f"{location} could not be read: {exc}") from exc
+    database = newest(location, folder)
     if database is None:
         raise ContainerUnavailableError(
-            f"no {what} database under {directory / folder}; on macOS this "
-            "usually means the terminal needs Full Disk Access"
+            f"no {what} database under {location}; Apple Books has not created one yet"
         )
     return database
 

@@ -9,6 +9,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A missing Full Disk Access grant and a missing Books container are told
+  apart. Each had one fixed message, and each fired for the other: a refused
+  container read as "Apple Books may never have run here", and a folder that
+  was there but empty, or absent, as "the terminal needs Full Disk Access". The
+  tool now asks the operating system and blames the permission only when it
+  refuses. A refusal names the grant and where to give it; an absent or empty
+  folder says Books has not created the database yet.
+  ([#9](https://github.com/raeq/ibook2epub/issues/9))
 - Books taken along rather than converted — PDFs, and books that arrived
   already zipped — are copied concurrently, by as many workers as `-w` sets.
   They were copied one at a time, before the conversion pool started, so on a
