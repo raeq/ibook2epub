@@ -237,6 +237,24 @@ def _metadata_of(package: Path, wanted: bool) -> Package | None:
         return None
 
 
+def copy_name_opens_file(source: Path, policy: NamingPolicy) -> bool:
+    """
+    Report whether naming *source* for the shelf means opening it.
+
+    Only an already-zipped epub under a metadata policy is named from its own
+    contents. Asked on its own so ``--skip-incomplete`` can leave an evicted
+    file unopened: opening it is the download the flag exists to avoid.
+
+    :param source: The file to be copied.
+    :param policy: The naming policy this run is using.
+
+    :return: True if :func:`copy_target_name` would read the file.
+    """
+    return bool(getattr(policy, "needs_metadata", False)) and (
+        source.suffix.lower() == PACKAGE_SUFFIX
+    )
+
+
 def copy_target_name(source: Path, policy: NamingPolicy) -> str:
     """
     Name a file that is copied rather than converted.
@@ -260,9 +278,7 @@ def copy_target_name(source: Path, policy: NamingPolicy) -> str:
     :return: The filename to write it under.
     """
     metadata = None
-    if getattr(policy, "needs_metadata", False) and source.suffix.lower() == (
-        PACKAGE_SUFFIX
-    ):
+    if copy_name_opens_file(source, policy):
         try:
             with ZipFile(source) as archive:
                 metadata = read_package(archive)

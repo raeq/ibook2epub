@@ -17,6 +17,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Files that would land on the same name are still copied in sorted order, so
   which one reaches the shelf does not depend on which download finishes
   first. ([#10](https://github.com/raeq/ibook2epub/issues/10))
+- `--skip-incomplete` skips PDFs and already-zipped books iCloud has not
+  downloaded, as it already skipped packages. It checked packages only, so a
+  run told to leave evicted books alone downloaded every evicted PDF anyway.
+  The check is a stat, which downloads nothing. A skipped file is counted in
+  the summary's "not downloaded", and one whose copy is already on the shelf is
+  not reported at all. Under `--name-by author-title` an evicted zipped book is
+  not opened to name it, so it always counts as not downloaded.
+  ([#12](https://github.com/raeq/ibook2epub/issues/12))
 
 ## [2.3.0] - 2026-09-09
 

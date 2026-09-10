@@ -266,10 +266,11 @@ Deciding what to do:
                         than the exported file. Compares directory
                         timestamps, so a book re-downloaded in place may not
                         be noticed; use --force for that.
-  --skip-incomplete     Skip books iCloud has not downloaded, which would
-                        otherwise export as empty files. Requires walking
-                        every package, which is slow on a cloud library, so
-                        it is off by default.
+  --skip-incomplete     Skip books iCloud has not downloaded, rather than
+                        exporting packages as empty files or downloading PDFs
+                        and already-zipped books. Requires walking every
+                        package, which is slow on a cloud library, so it is
+                        off by default.
 
 Checking the result:
   Verifying archives and protecting the volume.

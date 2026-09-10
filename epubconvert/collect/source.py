@@ -191,6 +191,31 @@ def dataless_detection_available() -> bool:
     return hasattr(os.stat_result, "st_flags")
 
 
+def is_dataless(path: Path) -> bool:
+    """
+    Report whether a single file is an undownloaded iCloud stub.
+
+    One stat, which reads metadata only, so asking downloads nothing. That is
+    the point: ``--skip-incomplete`` asks it of every PDF and already-zipped
+    book so as not to download the evicted ones.
+
+    Unlike :func:`has_dataless_files`, a file that cannot be stated answers
+    False. The copy that follows reports why it failed, where "not downloaded"
+    would be a guess.
+
+    :param path: The file to check.
+
+    :return: True if the platform can tell and the file has no local contents.
+    """
+    if not dataless_detection_available():
+        return False
+    try:
+        flags = getattr(path.stat(), "st_flags", 0)
+    except OSError:
+        return False
+    return bool(flags & SF_DATALESS)
+
+
 def has_dataless_files(package: Path) -> bool:
     """
     Report whether any file in the package is an undownloaded iCloud stub.
