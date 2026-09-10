@@ -103,6 +103,7 @@ class Report:
     ignored: int = 0  # Things in the source that were not *.epub/ packages.
     orphaned: int = 0  # Archives on the shelf no book in the library claims.
     copied: int = 0  # Files taken along unchanged rather than converted.
+    held_back: int = 0  # Pending books the export cap left for a later run.
 
 
 #: Guards the shared Report and progress counter, which worker threads update.
@@ -814,11 +815,39 @@ def format_summary(
     if report.aborted:
         summary = f"Aborted: not enough free space on {output_dir}. {summary}"
     if remaining:
-        summary += (
-            f" {remaining} remaining; rerun to continue, "
-            f"or pass -m 0 to convert everything."
-        )
+        summary += _remaining_hint(report, remaining)
     return summary
+
+
+def _remaining_hint(report: Report, remaining: int) -> str:
+    """
+    Say what is left, and why, since each reason wants different advice.
+
+    ``remaining`` counts every pending book this run did not export. Advising a
+    rerun and ``-m 0`` for all of them was wrong twice over when the only book
+    left had failed under ``-m 0``: the flag was already given, and a rerun
+    fails the same book again (#15). The count itself is unchanged; only the
+    advice is split by cause.
+
+    :param report: The run's report.
+    :param remaining: Pending books this run did not export.
+
+    :return: The sentences to append, each prefixed with a space.
+    """
+    failed = min(report.failed, remaining)
+    held = min(report.held_back, remaining - failed)
+    unattempted = remaining - failed - held
+    parts = [f" {remaining} remaining."]
+    if held:
+        parts.append(
+            f" {held} held back by --max-export-files: rerun to continue, "
+            "or pass -m 0 to convert everything."
+        )
+    if unattempted:
+        parts.append(f" {unattempted} not attempted: rerun to continue.")
+    if failed:
+        parts.append(f" {failed} failed: see the errors above for why.")
+    return "".join(parts)
 
 
 def _clauses(report: Report, *, failures: bool) -> str:

@@ -33,6 +33,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   longer opened anywhere; since its name cannot be known without it, the run
   says how many went unnamed, and that a copy of one already on the shelf
   counts as an orphan. ([#14](https://github.com/raeq/ibook2epub/issues/14))
+- The end-of-run summary says why books remain. It advised "rerun to continue,
+  or pass -m 0" for every book not exported, which was wrong twice over on a
+  real run whose one remaining book had failed under `-m 0`: the flag was
+  already given, and a rerun fails the same book again. The count is unchanged;
+  the advice is now split. Books the cap held back are pointed at a rerun or
+  `-m 0`, books an interrupt or a full disk left unattempted at a rerun, and
+  failed books at the errors above.
+  ([#15](https://github.com/raeq/ibook2epub/issues/15))
 
 ## [2.3.0] - 2026-09-09
 

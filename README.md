@@ -424,8 +424,13 @@ exported — a DRM-protected or undownloaded book is reported on its own line
 instead, so the count can actually reach zero:
 
 ```text
-Exported 5 epub file(s) (412 member files) to /Users/you/Books, skipped 37. 212 remaining; rerun to continue.
+Exported 5 epub file(s) (412 member files) to /Users/you/Books, skipped 37. 212 remaining. 212 held back by --max-export-files: rerun to continue, or pass -m 0 to convert everything.
 ```
+
+The advice depends on why books remain. Only books the cap held back are
+pointed at `-m 0`. A book that failed is reported as failed, and the error
+lines above the summary say why; rerunning would fail it again. Books an
+interrupt or a full disk left unattempted are sent back to rerun.
 
 Convert one book, or a handful, with `--match`. A pattern with no wildcard
 matches anywhere in the name; anything else is treated as a glob. Matching is
