@@ -25,6 +25,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   not reported at all. Under `--name-by author-title` an evicted zipped book is
   not opened to name it, so it always counts as not downloaded.
   ([#12](https://github.com/raeq/ibook2epub/issues/12))
+- Under `--name-by author-title` an already-zipped book is opened once per
+  run, and in parallel. The orphan check named every one in a loop before the
+  run started, and the copy then opened each again, so on a library iCloud had
+  evicted every zipped book was downloaded one at a time before any work began.
+  `--list` did the same. Under `--skip-incomplete` an evicted zipped book is no
+  longer opened anywhere; since its name cannot be known without it, the run
+  says how many went unnamed, and that a copy of one already on the shelf
+  counts as an orphan. ([#14](https://github.com/raeq/ibook2epub/issues/14))
 
 ## [2.3.0] - 2026-09-09
 
