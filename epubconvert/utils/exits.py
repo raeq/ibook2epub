@@ -47,6 +47,11 @@ MISSING_TOOL = 6
 #: ``--verify`` found at least one damaged archive.
 DAMAGED = 7
 
+#: macOS refused access to the Books library, so the terminal needs Full Disk
+#: Access. It exited ``4`` with a missing library until #19, which asked a
+#: scheduled run to fix a path when it needed to grant a permission.
+NO_PERMISSION = 8
+
 #: Stopped with Ctrl-C. Finished books are intact; rerun to continue.
 INTERRUPTED = 130
 
@@ -60,5 +65,6 @@ MEANINGS: dict[int, str] = {
     NO_OUTPUT: "The output directory could not be created, opened or found.",
     MISSING_TOOL: "A required extra or external tool is not installed.",
     DAMAGED: "`--verify` found at least one damaged archive.",
+    NO_PERMISSION: "macOS refused access; the terminal needs Full Disk Access.",
     INTERRUPTED: "Stopped with Ctrl-C. Finished books are intact; rerun to continue.",
 }

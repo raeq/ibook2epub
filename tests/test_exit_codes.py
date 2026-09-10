@@ -17,10 +17,12 @@ from zipfile import ZipFile
 
 import pytest
 
+from epubconvert.collect import annotations
+from epubconvert.collect import library as library_module
 from epubconvert.export import naming
 from epubconvert.run import convert, run
 from epubconvert.utils import exits
-from tests.conftest import make_package
+from tests.conftest import make_package, needs_permissions
 
 
 class TestTheCodesAreDistinct:
@@ -148,6 +150,73 @@ class TestEachFailureHasItsOwnCode:
         )
 
         assert code == exits.NO_OUTPUT
+
+
+@pytest.fixture(name="refused")
+def _refused(tmp_path):
+    """A Books container this run may not read; chmod stands in for TCC."""
+    parent = tmp_path / "Containers"
+    container = parent / "Documents"
+    container.mkdir(parents=True)
+    parent.chmod(0)
+    yield container
+    parent.chmod(0o700)
+
+
+class TestARefusalHasItsOwnCode:
+    """
+    #19: a refused container and a missing library both exited 4, so a
+    scheduled run could not tell "grant Full Disk Access" from "there is no
+    library here". Every route that reads the container is checked, since each
+    turns the failure into a code on its own.
+    """
+
+    @needs_permissions
+    def test_the_annotation_export(self, refused, monkeypatch):
+        monkeypatch.setattr(
+            "epubconvert.run.run.collect_annotations",
+            lambda policy=None: annotations.collect(refused, policy),
+        )
+
+        assert run.main(["-ao", "-", "-q"]) == exits.NO_PERMISSION
+
+    @needs_permissions
+    def test_the_library_export(self, refused, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "epubconvert.export.detached.collect_library",
+            lambda **_: library_module.collect(refused),
+        )
+
+        code = run.main(["-s", str(tmp_path), "--library-export", "-", "-q"])
+
+        assert code == exits.NO_PERMISSION
+
+    @needs_permissions
+    def test_a_refresh_that_converts_nothing(self, refused, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "epubconvert.run.run.collect_annotations",
+            lambda policy=None: annotations.collect(refused, policy),
+        )
+        source = tmp_path / "lib"
+        source.mkdir()
+
+        code = run.main(
+            ["-s", str(source), "-o", str(tmp_path / "out"), "-ar", "-ae", "-q"]
+        )
+
+        assert code == exits.NO_PERMISSION
+
+    def test_an_absent_container_keeps_its_code(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "epubconvert.run.run.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "absent", policy),
+        )
+
+        assert run.main(["-ao", "-", "-q"]) == exits.NO_SOURCE
+
+    def test_the_code_is_eight(self):
+        # A number a script writes down, so it is pinned where it can be read.
+        assert exits.NO_PERMISSION == 8
 
 
 class TestTheDocumentedTableMatchesTheCode:

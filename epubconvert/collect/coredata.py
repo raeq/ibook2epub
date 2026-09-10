@@ -17,6 +17,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ..utils import exits
+
 #: Where Apple keeps the databases, relative to the user's home.
 CONTAINER = Path(
     "Library/Containers/com.apple.iBooksX/Data/Documents",
@@ -39,6 +41,11 @@ FULL_DISK_ACCESS = (
 class ContainerUnavailableError(RuntimeError):
     """Raised when Apple's databases cannot be found or read."""
 
+    #: What a run ends with when this is why it could not proceed. Carried by
+    #: the error rather than decided at each route, so the routes that turn it
+    #: into a code cannot disagree about which failure gets which (#19).
+    exit_code: int = exits.NO_SOURCE
+
 
 class ContainerPermissionError(ContainerUnavailableError):
     """
@@ -47,6 +54,8 @@ class ContainerPermissionError(ContainerUnavailableError):
     A subclass, so every caller that reports an unavailable container reports
     this one too, and one that needs to tell the two apart can.
     """
+
+    exit_code: int = exits.NO_PERMISSION
 
 
 def _listed(directory: Path) -> None:

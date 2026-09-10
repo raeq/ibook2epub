@@ -971,21 +971,20 @@ output directory back off disk.
 | `5` | The output directory could not be created, opened or found. |
 | `6` | A required extra or external tool is not installed. |
 | `7` | --verify found at least one damaged archive. |
+| `8` | macOS refused access to the Books library; the terminal needs Full Disk Access. |
 | `130` | Stopped with Ctrl-C. Finished books are intact. |
 
 Each code means exactly one thing, so a scheduled run can act on the status
 without reading the message: `3` is worth retrying later, `6` needs something
 installed, `4` and `5` are paths to fix, `7` means a book on the shelf is
-broken. `2` keeps its universal meaning of a bad command line.
+broken, and `8` needs Full Disk Access granted to the terminal (System Settings
+> Privacy & Security > Full Disk Access). `2` keeps its universal meaning of a
+bad command line, and only that: an unknown or malformed flag, or flags that
+contradict each other.
 
-`2` is not specific, and a script cannot tell its causes apart from the code
-alone. It covers a usage error from `argparse` (an unknown or malformed flag,
-contradictory flags), a source directory that does not exist, `--portable-names
-romanize` without the `portable` extra, `--epubcheck` without `epubcheck` on
-PATH, and `--verify` pointed at an output directory that is not there. All of
-them are "this run was asked for something it cannot do", and all of them print
-the reason on stderr. If a script needs to distinguish them, match the message
-rather than the code.
+`4` and `8` both mean Apple's library could not be read, for different
+reasons: `4` that there is none where it was looked for, `8` that macOS would
+not let this run look. Every failure prints its reason on stderr as well.
 
 `1` also covers a run that could not proceed at all — for example when the
 output volume is below `--min-free`. Nothing is counted as *failed* in that
