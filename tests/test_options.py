@@ -190,7 +190,10 @@ class TestRemainingCount:
             ]
         )
 
-        assert "2 remaining; rerun to continue" in capsys.readouterr().out
+        assert (
+            "2 remaining. 2 held back by --max-export-files: rerun to continue"
+            in capsys.readouterr().out
+        )
 
     def test_summary_omits_remaining_when_done(self, small_library, output_dir, capsys):
         run.main(["-s", str(small_library), "-o", str(output_dir), "-m", "0", "-q"])

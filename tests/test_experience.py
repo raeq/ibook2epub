@@ -74,6 +74,76 @@ class TestTheCapTeachesTheWayOut:
         assert "-m 0" in summary
 
 
+class TestTheRemainingLineSaysWhyBooksRemain:
+    """
+    ``N remaining`` counts every pending book the run did not export, and they
+    remain for different reasons. The line advised a rerun and ``-m 0`` for all
+    of them, which was wrong twice over on a real run whose one remaining book
+    had failed under ``-m 0``: the flag was already given, and a rerun fails the
+    same book again (#15). An empty package fails the way that one did.
+    """
+
+    def test_books_the_cap_held_back_are_told_how_to_continue(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        for index in range(3):
+            make_package(library, f"Book{index}.epub")
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "1", "-q"])
+
+        summary = capsys.readouterr().out
+        assert code == 0
+        assert "2 remaining" in summary
+        assert "2 held back" in summary
+        assert "-m 0" in summary
+        assert "failed" not in summary
+
+    def test_a_failure_under_no_cap_is_not_sent_to_rerun(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        (library / "Empty.epub").mkdir()
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        summary = capsys.readouterr().out
+        assert code == 1
+        assert "1 remaining" in summary
+        assert "1 failed: see the errors above" in summary
+        assert "-m 0" not in summary
+        assert "rerun" not in summary
+
+    def test_held_back_and_failed_are_told_apart(self, tmp_path, output_dir, capsys):
+        # --no-shuffle and a name that sorts first put the empty package
+        # inside the cap, so one book fails and one is held back.
+        library = tmp_path / "lib"
+        (library / "A Empty.epub").mkdir(parents=True)
+        for index in range(2):
+            make_package(library, f"Book{index}.epub")
+
+        code = run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "2",
+                "--no-shuffle",
+                "-q",
+            ]
+        )
+
+        summary = capsys.readouterr().out
+        assert code == 1
+        assert "2 remaining" in summary
+        assert "1 held back" in summary
+        assert "-m 0" in summary
+        assert "1 failed: see the errors above" in summary
+
+
 class TestTheSummaryIsPrintedOnce:
     """One run, one summary on screen."""
 

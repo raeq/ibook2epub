@@ -687,6 +687,9 @@ def _run_export(
             selected = cap_exports(
                 decisions, args.max_export_files, randomise=not args.no_shuffle
             )
+            # Counted where the cap is applied, so the summary can tell books
+            # it held back from books that failed rather than infer it.
+            report.held_back = pending_before - count_pending_decisions(selected)
             asyncio.run(
                 export_planned(
                     selected,

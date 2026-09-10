@@ -407,3 +407,13 @@ class TestFormatSummary:
         assert "Exported 2" in summary
         assert "skipped 1" in summary
         assert "failed 1" in summary
+
+    def test_books_an_interrupt_left_are_sent_back_to_run(self, tmp_path):
+        # Neither held back by the cap nor failed: never attempted, so a rerun
+        # is exactly right and -m 0 is beside the point.
+        report = convert.Report(exported=1, interrupted=True)
+
+        summary = convert.format_summary(report, tmp_path, dry_run=False, remaining=3)
+
+        assert "3 not attempted: rerun to continue." in summary
+        assert "-m 0" not in summary
