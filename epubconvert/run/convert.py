@@ -29,9 +29,9 @@ from typing import TextIO
 
 from ..collect.annotations import for_book as annotations_for_book
 from ..collect.validate import ValidationOptions
-from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
+from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, copy_through, zip_package
 from ..export.inspect_output import extract_cover, free_megabytes
-from ..export.naming import PassthroughNaming
+from ..export.naming import PassthroughNaming, filesystem_key
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
@@ -40,6 +40,7 @@ from .planning import (
     PENDING,
     Decision,
     PlanOptions,
+    copy_target_name,
     plan_exports,
     record_decisions,
 )
@@ -367,6 +368,94 @@ async def export_planned(
         pool.shutdown(wait=True, cancel_futures=True)
 
     return report
+
+
+def _copy_and_record(group: Sequence[tuple[Path, Path]], report: Report) -> None:
+    """
+    Copy files that could share a name, in order, recording each as it lands.
+
+    Runs in the worker thread, for the same reason :func:`_zip_and_record`
+    does: a copy counted anywhere else can be on disk and missing from the
+    summary after a Ctrl-C.
+
+    :param group: Sources and their targets, whose names a filesystem may
+        treat as one.
+    :param report: Report to record each copy in.
+    """
+    for source, target in group:
+        if target.exists():
+            continue
+        try:
+            copy_through(source, target)
+        except OSError as exc:
+            logger.error("Could not copy %s: %s", printable(source.name), exc)
+            continue
+        with _REPORT_LOCK:
+            report.copied += 1
+        logger.info("Copied %s", printable(source.name))
+
+
+def copy_through_all(
+    copyable: Sequence[Path],
+    output_dir: Path,
+    policy: NamingPolicy,
+    report: Report,
+    max_workers: int | None = None,
+) -> None:
+    """
+    Put already-valid books on the shelf without converting them.
+
+    Rerun-safe on the same terms as everything else: a file already there is
+    left alone rather than rewritten, so a second run does nothing and says
+    nothing.
+
+    Concurrent, because the work is downloading rather than copying. Reading a
+    file iCloud has evicted makes macOS fetch it, and this used to be a loop
+    run before the pool existed: a run with ``-w 64`` was seen pulling PDFs one
+    at a time at about 4.5 MB/s while every worker sat idle (#10).
+
+    Files that could land on one name are copied by one worker, in sorted
+    order, so the first still wins and the rest find its file and skip -- what
+    the loop did. Which of two same-named PDFs reaches the shelf therefore does
+    not depend on which download finishes first. Names are compared the way
+    APFS compares them, since that is where they collide.
+
+    :param copyable: Files found beside the packages, sorted.
+    :param output_dir: Directory to copy into.
+    :param policy: Naming policy, so a copied file is named the same way a
+        converted one is.
+    :param report: Counted into as each file lands, rather than totalled and
+        returned at the end. A Ctrl-C part-way through left the summary saying
+        nothing was copied while the files were already on disk.
+    :param max_workers: Size of the thread pool, as for :func:`export_planned`.
+    """
+    if not copyable:
+        return
+    pool = ThreadPoolExecutor(
+        max_workers=default_workers(max_workers), thread_name_prefix="copy"
+    )
+    try:
+        # Naming an already-zipped epub under a metadata policy opens it, which
+        # is a download of its own, so the names are worked out in the pool too.
+        names = list(
+            pool.map(lambda source: copy_target_name(source, policy), copyable)
+        )
+        groups: dict[str, list[tuple[Path, Path]]] = {}
+        for source, name in zip(copyable, names, strict=True):
+            groups.setdefault(filesystem_key(name), []).append(
+                (source, output_dir / name)
+            )
+        futures = [
+            pool.submit(_copy_and_record, group, report) for group in groups.values()
+        ]
+        # result() re-raises in this thread whatever escaped a worker, so a
+        # surprise still stops the run as it did when the loop ran here.
+        for future in futures:
+            future.result()
+    finally:
+        # As for the exports: copies not yet started are dropped, and the ones
+        # in flight finish, replace atomically and record themselves.
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]:

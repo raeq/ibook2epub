@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Books taken along rather than converted — PDFs, and books that arrived
+  already zipped — are copied concurrently, by as many workers as `-w` sets.
+  They were copied one at a time, before the conversion pool started, so on a
+  library iCloud had evicted every PDF was downloaded in turn while every
+  worker sat idle: a run with `-w 64` was seen fetching them at about 4.5 MB/s.
+  Files that would land on the same name are still copied in sorted order, so
+  which one reaches the shelf does not depend on which download finishes
+  first. ([#10](https://github.com/raeq/ibook2epub/issues/10))
+
 ## [2.3.0] - 2026-09-09
 
 ### Added

@@ -165,8 +165,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N",
         help=(
-            "Number of compression threads (default: 4x the CPU count, "
-            "capped at 64). The work blocks on iCloud rather than on the CPU, "
+            "Number of worker threads, for converting books and for copying "
+            "PDFs and already-zipped books (default: 4x the CPU count, capped "
+            "at 64). The work blocks on iCloud rather than on the CPU, "
             "so raising this well past the CPU count is what helps; 48-64 is "
             "reasonable for a cloud library."
         ),

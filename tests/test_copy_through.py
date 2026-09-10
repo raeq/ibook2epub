@@ -15,11 +15,13 @@ epub stays byte-identical and a PDF stays a PDF.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import threading
+import time
 from pathlib import Path
 from zipfile import ZipFile
 
 from epubconvert.export import archive
-from epubconvert.run import run
+from epubconvert.run import convert, run
 from tests.conftest import make_package
 
 
@@ -384,18 +386,120 @@ class TestAnInterruptedCopyStillCounts:
             _zipped_book(library / f"Book {index}.epub")
 
         real = archive.copy_through
-        done = {"n": 0}
 
-        def stop_after_two(source, target):
-            if done["n"] >= 2:
+        def stop_at_the_third(source, target):
+            # Keyed on the name rather than a running count: the copies run
+            # concurrently, and a shared counter would race.
+            if source.name in {"Book 2.epub", "Book 3.epub"}:
                 raise KeyboardInterrupt
-            done["n"] += 1
             return real(source, target)
 
-        monkeypatch.setattr(run, "copy_through", stop_after_two)
+        monkeypatch.setattr(convert, "copy_through", stop_at_the_third)
 
         code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert code == 130
         assert len(list(output_dir.glob("*.epub"))) == 2
         assert "2 copied" in capsys.readouterr().out
+
+
+class TestCopiesRunConcurrently:
+    """
+    Copying a file iCloud has evicted is a download. A loop did them one at a
+    time before the conversion pool existed, so every worker ``-w`` asked for
+    sat idle through the slowest part of a first run (#10).
+    """
+
+    def test_copies_overlap(self, tmp_path, output_dir, monkeypatch):
+        # Two copies that each wait for the other finish only if they run at
+        # the same time. One after the other, the first times out waiting.
+        library = tmp_path / "lib"
+        library.mkdir()
+        for name in ("One.pdf", "Two.pdf"):
+            (library / name).write_bytes(b"%PDF-1.4\n")
+        real = archive.copy_through
+        both_started = threading.Barrier(2, timeout=10)
+
+        def meet_then_copy(source, target):
+            both_started.wait()
+            return real(source, target)
+
+        monkeypatch.setattr(convert, "copy_through", meet_then_copy)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "2", "-q"]
+        )
+
+        assert code == 0
+        assert sorted(path.name for path in output_dir.glob("*.pdf")) == [
+            "One.pdf",
+            "Two.pdf",
+        ]
+
+    def test_workers_sets_how_many_copy_at_once(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # The overlap above would pass on the default pool too; this is what
+        # shows -w reaches the copies at all.
+        library = tmp_path / "lib"
+        library.mkdir()
+        for index in range(4):
+            (library / f"Paper {index}.pdf").write_bytes(b"%PDF-1.4\n")
+        real = archive.copy_through
+        guard = threading.Lock()
+        running = {"now": 0, "peak": 0}
+
+        def counted(source, target):
+            with guard:
+                running["now"] += 1
+                running["peak"] = max(running["peak"], running["now"])
+            try:
+                time.sleep(0.05)
+                return real(source, target)
+            finally:
+                with guard:
+                    running["now"] -= 1
+
+        monkeypatch.setattr(convert, "copy_through", counted)
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "1", "-q"]
+        )
+
+        assert running["peak"] == 1
+        assert len(list(output_dir.glob("*.pdf"))) == 4
+
+
+class TestSameNamedCopiesStayDeterministic:
+    """
+    Two sources can map to one name: the same filename in two folders. The
+    loop copied the first in sorted order and skipped the second, finding its
+    target already there. Raced, the slower download lands last and replaces
+    the first, and both are counted.
+    """
+
+    def test_the_first_in_sorted_order_still_wins(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = tmp_path / "lib"
+        (library / "a").mkdir(parents=True)
+        (library / "b").mkdir()
+        (library / "a" / "Paper.pdf").write_bytes(b"%PDF-1.4\nfirst\n")
+        (library / "b" / "Paper.pdf").write_bytes(b"%PDF-1.4\nsecond\n")
+        real = archive.copy_through
+
+        def slow_first(source, target):
+            # The first file is the slow download, so a race lets the second
+            # land before it.
+            if source.parent.name == "a":
+                time.sleep(0.2)
+            return real(source, target)
+
+        monkeypatch.setattr(convert, "copy_through", slow_first)
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "2", "-q"]
+        )
+
+        assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4\nfirst\n"
+        assert "1 copied" in capsys.readouterr().out
