@@ -149,12 +149,17 @@ class TestItFailsSafely:
             annotations.collect(tmp_path)
 
     def test_a_container_without_an_annotation_database_says_so(self, tmp_path):
+        # #9: this folder is there and readable, so the permission is not the
+        # reason. Blaming it sent the reader to System Settings to grant what
+        # they may already have granted, and the next run said the same.
         (tmp_path / "AEAnnotation").mkdir(parents=True)
 
         with pytest.raises(
-            coredata.ContainerUnavailableError, match="Full Disk Access"
-        ):
+            coredata.ContainerUnavailableError, match="has not created"
+        ) as caught:
             annotations.collect(tmp_path)
+
+        assert "Full Disk Access" not in str(caught.value)
 
     def test_an_unreadable_library_costs_titles_not_highlights(self, tmp_path):
         make_databases(tmp_path)

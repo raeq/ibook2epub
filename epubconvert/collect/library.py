@@ -335,8 +335,8 @@ def collect(
     :return: The books, ordered by title.
 
     :raises ContainerUnavailableError: If the library database is missing or
-        unreadable. On macOS this usually means the terminal has not been
-        granted Full Disk Access.
+        unreadable; :class:`~.coredata.ContainerPermissionError`, a subclass,
+        when macOS refuses access and the terminal needs Full Disk Access.
     """
     database = database_in(container_directory(container), "BKLibrary", "library")
     assets = _assets(database)

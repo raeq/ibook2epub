@@ -217,8 +217,9 @@ def collect(
         made within a book.
 
     :raises ContainerUnavailableError: If the annotation database is missing
-        or unreadable. On macOS this usually means the terminal has not been
-        granted Full Disk Access.
+        or unreadable; :class:`~.coredata.ContainerPermissionError`, a
+        subclass, when macOS refuses access and the terminal needs Full Disk
+        Access.
     """
     directory = container_directory(container)
     database = database_in(directory, "AEAnnotation", "annotation")
