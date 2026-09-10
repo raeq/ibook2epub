@@ -28,6 +28,7 @@ from random import shuffle
 from typing import TextIO
 
 from ..collect.annotations import for_book as annotations_for_book
+from ..collect.source import is_dataless
 from ..collect.validate import ValidationOptions
 from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, copy_through, zip_package
 from ..export.inspect_output import extract_cover, free_megabytes
@@ -40,6 +41,7 @@ from .planning import (
     PENDING,
     Decision,
     PlanOptions,
+    copy_name_opens_file,
     copy_target_name,
     plan_exports,
     record_decisions,
@@ -95,7 +97,7 @@ class Report:
     planned: int = 0  # Dry-run only: exports that would have been attempted.
     collisions: int = 0  # Distinct packages that share one output name.
     drm: int = 0  # Packages skipped as DRM-protected.
-    incomplete: int = 0  # Packages skipped as not downloaded from iCloud.
+    incomplete: int = 0  # Books skipped as not downloaded from iCloud.
     interrupted: bool = False  # The run was stopped with Ctrl-C.
     aborted: bool = False  # The run could not proceed, e.g. no disk space.
     ignored: int = 0  # Things in the source that were not *.epub/ packages.
@@ -395,12 +397,83 @@ def _copy_and_record(group: Sequence[tuple[Path, Path]], report: Report) -> None
         logger.info("Copied %s", printable(source.name))
 
 
-def copy_through_all(
+def _name_copies(
+    pool: ThreadPoolExecutor,
+    copyable: Sequence[Path],
+    policy: NamingPolicy,
+    evicted: frozenset[Path],
+) -> list[tuple[Path, str | None]]:
+    """
+    Name each file for the shelf, in the pool, without opening an evicted one.
+
+    Naming an already-zipped epub under a metadata policy opens it, which is a
+    download of its own, so it runs in the pool with everything else. An
+    evicted file that could only be named that way gets no name: opening it is
+    the download ``--skip-incomplete`` exists to avoid.
+
+    :param pool: The copy pool.
+    :param copyable: Files found beside the packages, sorted.
+    :param policy: The naming policy this run is using.
+    :param evicted: Files to leave unopened.
+
+    :return: Each file with its name, or None when it was left unnamed.
+    """
+
+    def name(source: Path) -> str | None:
+        if source in evicted and copy_name_opens_file(source, policy):
+            return None
+        return copy_target_name(source, policy)
+
+    return list(zip(copyable, pool.map(name, copyable), strict=True))
+
+
+def _group_copies(
+    named: Sequence[tuple[Path, str | None]],
+    output_dir: Path,
+    evicted: frozenset[Path],
+    report: Report,
+) -> list[list[tuple[Path, Path]]]:
+    """
+    Group the copies that could land on one name, and set evicted files aside.
+
+    An evicted file is settled against the shelf first, as a package is: one
+    whose copy is already there is finished work, not a skipped book. Without
+    that, every rerun after iCloud evicts the source again would report the
+    whole PDF shelf as not downloaded. One left unnamed cannot be looked for,
+    so it counts as not downloaded.
+
+    :param named: Each file with its name, from :func:`_name_copies`.
+    :param output_dir: Directory to copy into.
+    :param evicted: Files ``--skip-incomplete`` leaves where they are.
+    :param report: Counted into for each evicted file not on the shelf.
+
+    :return: Sources and targets, grouped by the name a filesystem sees.
+    """
+    groups: dict[str, list[tuple[Path, Path]]] = {}
+    not_downloaded: list[Path] = []
+    for source, name in named:
+        if source in evicted or name is None:
+            if name is None or not (output_dir / name).exists():
+                not_downloaded.append(source)
+            continue
+        groups.setdefault(filesystem_key(name), []).append((source, output_dir / name))
+    for source in not_downloaded:
+        logger.warning(
+            "Skipped, not downloaded from iCloud: %s", printable(source.name)
+        )
+    with _REPORT_LOCK:
+        report.incomplete += len(not_downloaded)
+    return list(groups.values())
+
+
+def copy_through_all(  # pylint: disable=too-many-arguments
     copyable: Sequence[Path],
     output_dir: Path,
     policy: NamingPolicy,
     report: Report,
+    *,
     max_workers: int | None = None,
+    skip_incomplete: bool = False,
 ) -> None:
     """
     Put already-valid books on the shelf without converting them.
@@ -428,25 +501,25 @@ def copy_through_all(
         returned at the end. A Ctrl-C part-way through left the summary saying
         nothing was copied while the files were already on disk.
     :param max_workers: Size of the thread pool, as for :func:`export_planned`.
+    :param skip_incomplete: Leave files iCloud has evicted where they are, as
+        ``--skip-incomplete`` does for packages, rather than downloading them.
+        A stat tells, and a stat downloads nothing.
     """
     if not copyable:
         return
+    evicted = (
+        frozenset(source for source in copyable if is_dataless(source))
+        if skip_incomplete
+        else frozenset()
+    )
     pool = ThreadPoolExecutor(
         max_workers=default_workers(max_workers), thread_name_prefix="copy"
     )
     try:
-        # Naming an already-zipped epub under a metadata policy opens it, which
-        # is a download of its own, so the names are worked out in the pool too.
-        names = list(
-            pool.map(lambda source: copy_target_name(source, policy), copyable)
-        )
-        groups: dict[str, list[tuple[Path, Path]]] = {}
-        for source, name in zip(copyable, names, strict=True):
-            groups.setdefault(filesystem_key(name), []).append(
-                (source, output_dir / name)
-            )
+        named = _name_copies(pool, copyable, policy, evicted)
         futures = [
-            pool.submit(_copy_and_record, group, report) for group in groups.values()
+            pool.submit(_copy_and_record, group, report)
+            for group in _group_copies(named, output_dir, evicted, report)
         ]
         # result() re-raises in this thread whatever escaped a worker, so a
         # surprise still stops the run as it did when the loop ran here.

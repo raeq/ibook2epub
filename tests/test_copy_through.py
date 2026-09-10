@@ -20,8 +20,9 @@ import time
 from pathlib import Path
 from zipfile import ZipFile
 
-from epubconvert.export import archive
-from epubconvert.run import convert, run
+from epubconvert.collect import source as source_module
+from epubconvert.export import archive, naming
+from epubconvert.run import convert, planning, run
 from tests.conftest import make_package
 
 
@@ -505,3 +506,174 @@ class TestSameNamedCopiesStayDeterministic:
         assert code == 0
         assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4\nfirst\n"
         assert "1 copied" in capsys.readouterr().out
+
+
+class _Evicted:
+    """A stat result for a file whose contents live only in iCloud."""
+
+    def __init__(self, real) -> None:
+        self._real = real
+        self.st_flags = source_module.SF_DATALESS
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _evict(monkeypatch, *paths: Path) -> None:
+    """
+    Make *paths* stat the way macOS reports a file iCloud has evicted.
+
+    Patched on ``Path.stat`` rather than ``os.stat``: pathlib on 3.10 holds its
+    own reference to ``os.stat``, so patching the module would miss it there.
+    Every other path stats as itself.
+    """
+    evicted = {str(path) for path in paths}
+    real_stat = Path.stat
+
+    def stat(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        return _Evicted(result) if str(self) in evicted else result
+
+    monkeypatch.setattr(Path, "stat", stat)
+    monkeypatch.setattr(source_module, "dataless_detection_available", lambda: True)
+
+
+class TestTellingAnEvictedFile:
+    def test_an_evicted_file_is_dataless(self, tmp_path, monkeypatch):
+        path = tmp_path / "Paper.pdf"
+        path.write_bytes(b"%PDF-1.4\n")
+        _evict(monkeypatch, path)
+
+        assert source_module.is_dataless(path) is True
+
+    def test_a_local_file_is_not(self, tmp_path, monkeypatch):
+        path = tmp_path / "Paper.pdf"
+        path.write_bytes(b"%PDF-1.4\n")
+        _evict(monkeypatch)
+
+        assert source_module.is_dataless(path) is False
+
+    def test_a_platform_without_st_flags_cannot_say(self, tmp_path, monkeypatch):
+        path = tmp_path / "Paper.pdf"
+        path.write_bytes(b"%PDF-1.4\n")
+        _evict(monkeypatch, path)
+        monkeypatch.setattr(
+            source_module, "dataless_detection_available", lambda: False
+        )
+
+        assert source_module.is_dataless(path) is False
+
+    def test_a_file_that_cannot_be_stated_is_left_to_the_copy(self, tmp_path):
+        # The copy that follows reports the real reason; "not downloaded"
+        # would be a guess.
+        assert source_module.is_dataless(tmp_path / "Gone.pdf") is False
+
+
+class TestSkipIncompleteCoversCopies:
+    """
+    ``--skip-incomplete`` checked packages only, so a run told to skip what is
+    not local downloaded every evicted PDF anyway (#12).
+    """
+
+    def test_an_evicted_pdf_is_skipped_and_counted(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Local.pdf").write_bytes(b"%PDF-1.4\nlocal\n")
+        (library / "Evicted.pdf").write_bytes(b"%PDF-1.4\nevicted\n")
+        _evict(monkeypatch, library / "Evicted.pdf")
+
+        code = run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--skip-incomplete",
+                "-q",
+            ]
+        )
+
+        assert code == 0
+        assert [path.name for path in output_dir.glob("*.pdf")] == ["Local.pdf"]
+        assert "1 not downloaded" in capsys.readouterr().out
+
+    def test_without_the_flag_an_evicted_pdf_is_still_copied(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Reading it downloads it, and that is what a default run is for.
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Evicted.pdf").write_bytes(b"%PDF-1.4\nevicted\n")
+        _evict(monkeypatch, library / "Evicted.pdf")
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        assert code == 0
+        assert (output_dir / "Evicted.pdf").read_bytes() == b"%PDF-1.4\nevicted\n"
+        assert "not downloaded" not in capsys.readouterr().out
+
+    def test_an_evicted_file_already_on_the_shelf_is_not_reported(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Packages settle against the shelf before the source is inspected.
+        # Copies have to as well, or every rerun after iCloud evicts the source
+        # again reports the whole PDF shelf as not downloaded.
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Evicted.pdf").write_bytes(b"%PDF-1.4\nevicted\n")
+        (output_dir / "Evicted.pdf").write_bytes(b"%PDF-1.4\nevicted\n")
+        _evict(monkeypatch, library / "Evicted.pdf")
+
+        code = run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "--skip-incomplete",
+                "-q",
+            ]
+        )
+
+        assert code == 0
+        assert "not downloaded" not in capsys.readouterr().out
+
+    def test_an_evicted_epub_is_not_opened_to_name_it(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # Under --name-by author-title a zipped epub is named from its own
+        # metadata, and opening it is the download the flag exists to avoid.
+        # Driven through copy_through_all: the orphan check still names every
+        # copyable file by itself, which #12 leaves for its own issue.
+        library = tmp_path / "lib"
+        library.mkdir()
+        evicted = library / "Earthsea.epub"
+        _book_with_metadata(evicted)
+        _evict(monkeypatch, evicted)
+        opened: list[str] = []
+        real_zip = ZipFile
+
+        def recording(file, *args, **kwargs):
+            opened.append(str(file))
+            return real_zip(file, *args, **kwargs)
+
+        monkeypatch.setattr(planning, "ZipFile", recording)
+        report = convert.Report()
+
+        convert.copy_through_all(
+            [evicted],
+            output_dir,
+            naming.build_policy(None, "author-title"),
+            report,
+            skip_incomplete=True,
+        )
+
+        assert opened == []
+        assert report.incomplete == 1
+        assert report.copied == 0

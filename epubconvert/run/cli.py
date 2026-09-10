@@ -220,9 +220,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-incomplete",
         action="store_true",
         help=(
-            "Skip books iCloud has not downloaded, which would otherwise "
-            "export as empty files. Requires walking every package, which is "
-            "slow on a cloud library, so it is off by default."
+            "Skip books iCloud has not downloaded, rather than exporting "
+            "packages as empty files or downloading PDFs and already-zipped "
+            "books. Requires walking every package, which is slow on a cloud "
+            "library, so it is off by default."
         ),
     )
     annotations.add_argument(

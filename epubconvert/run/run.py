@@ -644,7 +644,12 @@ def _run_export(
         try:
             if not args.dry_run:
                 copy_through_all(
-                    copyable, args.output_dir, policy, report, max_workers=args.workers
+                    copyable,
+                    args.output_dir,
+                    policy,
+                    report,
+                    max_workers=args.workers,
+                    skip_incomplete=args.skip_incomplete,
                 )
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
