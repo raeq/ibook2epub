@@ -319,7 +319,7 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
         found = collect_library(policy=policy, identifiers=not args.no_isbn)
     except ContainerUnavailableError as exc:
         logger.critical("Could not read the library: %s", exc)
-        return exits.NO_SOURCE
+        return exc.exit_code
     if args.library_format == "csv":
         # The advice is about the CSV's ISBN columns and the tracker that
         # reads them. The JSON carries every identifier, UUIDs included, and

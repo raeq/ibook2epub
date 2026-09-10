@@ -7,6 +7,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- A macOS permission refusal exits `8`, not `4`. Both used to exit `4`, whose
+  meaning is "the source directory does not exist, or no library was found",
+  so a scheduled run could not tell "grant the terminal Full Disk Access" from
+  "there is no library here". A script that read `4` as "fix the path" now sees
+  `8` for a refusal, from `-ao`, `--library-export`, and `-ar` when it converts
+  nothing. The README's exit-code section also stops claiming that `2` covers
+  failures that have long had codes of their own.
+  ([#19](https://github.com/raeq/ibook2epub/issues/19))
+
 ### Fixed
 
 - A missing Full Disk Access grant and a missing Books container are told

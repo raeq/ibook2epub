@@ -213,7 +213,7 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
 
 
 def _gather_annotations(
-    args: argparse.Namespace, policy: NamingPolicy
+    args: argparse.Namespace, policy: NamingPolicy, *, required: bool = False
 ) -> list[dict[str, Any]] | None:
     """
     Read the reader's highlights, if this run wants any.
@@ -221,16 +221,24 @@ def _gather_annotations(
     :param args: Parsed command line arguments.
     :param policy: The naming policy, so each book can say what its file on
         the shelf is called.
+    :param required: Whether the highlights are the whole run. Then why they
+        could not be read is its outcome, so the failure is raised for the
+        caller to turn into an exit code rather than logged and passed over.
 
     :return: The annotations, or None when the run asked for none or they
         could not be read. A failure here does not stop a conversion: the books
         are the point, and the highlights are an extra.
+
+    :raises ContainerUnavailableError: If they could not be read and
+        *required* is set.
     """
     if not (args.annotations_embedded or args.annotations_detached):
         return None
     try:
         return collect_annotations(policy=policy)
     except ContainerUnavailableError as exc:
+        if required:
+            raise
         logger.error("Could not read annotations: %s", exc)
         return None
 
@@ -349,7 +357,7 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
         found = collect_annotations(policy=policy)
     except ContainerUnavailableError as exc:
         logger.critical("Could not read annotations: %s", exc)
-        return exits.NO_SOURCE
+        return exc.exit_code
     if args.dry_run:
         # Guarded here, where the write is decided, rather than at the call
         # site: this route composes with --library-export, whose dry run was
@@ -401,7 +409,14 @@ def _apply_annotations(
         logger.info("Dry run: annotations were read but nothing was written.")
         return exits.SUCCESS
 
-    found = _gather_annotations(args, policy)
+    try:
+        found = _gather_annotations(args, policy, required=not converted)
+    except ContainerUnavailableError as exc:
+        # Nothing was converted, so the highlights were the whole run and why
+        # they could not be read is its outcome: 4 for a missing library, 8
+        # for a refusal (#19). This route only ever saw None before.
+        logger.error("Could not read annotations: %s", exc)
+        return exc.exit_code
     if found is None:
         # The books are the point and they are already on the shelf. Reporting
         # NO_SOURCE here told a scheduled run the source directory was missing
