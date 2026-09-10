@@ -397,41 +397,81 @@ def _copy_and_record(group: Sequence[tuple[Path, Path]], report: Report) -> None
         logger.info("Copied %s", printable(source.name))
 
 
-def _name_copies(
-    pool: ThreadPoolExecutor,
+@dataclass(frozen=True)
+class CopyPlan:
+    """
+    Every file to take along, with the name it takes on the shelf.
+
+    Named once per run and handed to both the orphan check and the copy. Each
+    used to name them for itself, and under a metadata policy naming a zipped
+    book opens it: the orphan check did so in a loop, one download at a time,
+    before the run started, and the copy then opened every one again (#14).
+    """
+
+    #: Each file with its name, or None when it was left unnamed.
+    named: tuple[tuple[Path, str | None], ...] = ()
+    #: Files ``--skip-incomplete`` leaves where they are.
+    evicted: frozenset[Path] = frozenset()
+
+    @property
+    def claimed(self) -> list[str]:
+        """The names these files hold on the shelf, for the orphan check."""
+        return [name for _source, name in self.named if name is not None]
+
+    @property
+    def unnamed(self) -> int:
+        """How many files could only have been named by downloading them."""
+        return sum(1 for _source, name in self.named if name is None)
+
+
+def plan_copies(
     copyable: Sequence[Path],
     policy: NamingPolicy,
-    evicted: frozenset[Path],
-) -> list[tuple[Path, str | None]]:
+    *,
+    max_workers: int | None = None,
+    skip_incomplete: bool = False,
+) -> CopyPlan:
     """
-    Name each file for the shelf, in the pool, without opening an evicted one.
+    Name each file for the shelf, in a pool, without opening an evicted one.
 
     Naming an already-zipped epub under a metadata policy opens it, which is a
-    download of its own, so it runs in the pool with everything else. An
-    evicted file that could only be named that way gets no name: opening it is
-    the download ``--skip-incomplete`` exists to avoid.
+    download of its own, so it runs in a pool as the copy does. Under
+    ``--skip-incomplete`` an evicted file that could only be named that way
+    gets no name: opening it is the download the flag exists to avoid. A stat
+    tells which files are evicted, and a stat downloads nothing.
 
-    :param pool: The copy pool.
     :param copyable: Files found beside the packages, sorted.
     :param policy: The naming policy this run is using.
-    :param evicted: Files to leave unopened.
+    :param max_workers: Size of the thread pool, as for :func:`export_planned`.
+    :param skip_incomplete: Whether evicted files are to be left alone.
 
-    :return: Each file with its name, or None when it was left unnamed.
+    :return: The plan.
     """
+    if not copyable:
+        return CopyPlan()
+    evicted = (
+        frozenset(source for source in copyable if is_dataless(source))
+        if skip_incomplete
+        else frozenset()
+    )
 
     def name(source: Path) -> str | None:
         if source in evicted and copy_name_opens_file(source, policy):
             return None
         return copy_target_name(source, policy)
 
-    return list(zip(copyable, pool.map(name, copyable), strict=True))
+    pool = ThreadPoolExecutor(
+        max_workers=default_workers(max_workers), thread_name_prefix="name"
+    )
+    try:
+        names = list(pool.map(name, copyable))
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+    return CopyPlan(tuple(zip(copyable, names, strict=True)), evicted)
 
 
 def _group_copies(
-    named: Sequence[tuple[Path, str | None]],
-    output_dir: Path,
-    evicted: frozenset[Path],
-    report: Report,
+    plan: CopyPlan, output_dir: Path, report: Report
 ) -> list[list[tuple[Path, Path]]]:
     """
     Group the copies that could land on one name, and set evicted files aside.
@@ -442,17 +482,16 @@ def _group_copies(
     whole PDF shelf as not downloaded. One left unnamed cannot be looked for,
     so it counts as not downloaded.
 
-    :param named: Each file with its name, from :func:`_name_copies`.
+    :param plan: The files and their names, from :func:`plan_copies`.
     :param output_dir: Directory to copy into.
-    :param evicted: Files ``--skip-incomplete`` leaves where they are.
     :param report: Counted into for each evicted file not on the shelf.
 
     :return: Sources and targets, grouped by the name a filesystem sees.
     """
     groups: dict[str, list[tuple[Path, Path]]] = {}
     not_downloaded: list[Path] = []
-    for source, name in named:
-        if source in evicted or name is None:
+    for source, name in plan.named:
+        if source in plan.evicted or name is None:
             if name is None or not (output_dir / name).exists():
                 not_downloaded.append(source)
             continue
@@ -466,14 +505,12 @@ def _group_copies(
     return list(groups.values())
 
 
-def copy_through_all(  # pylint: disable=too-many-arguments
-    copyable: Sequence[Path],
+def copy_through_all(
+    plan: CopyPlan,
     output_dir: Path,
-    policy: NamingPolicy,
     report: Report,
     *,
     max_workers: int | None = None,
-    skip_incomplete: bool = False,
 ) -> None:
     """
     Put already-valid books on the shelf without converting them.
@@ -493,34 +530,21 @@ def copy_through_all(  # pylint: disable=too-many-arguments
     not depend on which download finishes first. Names are compared the way
     APFS compares them, since that is where they collide.
 
-    :param copyable: Files found beside the packages, sorted.
+    :param plan: The files and the names they take, from :func:`plan_copies`.
     :param output_dir: Directory to copy into.
-    :param policy: Naming policy, so a copied file is named the same way a
-        converted one is.
     :param report: Counted into as each file lands, rather than totalled and
         returned at the end. A Ctrl-C part-way through left the summary saying
         nothing was copied while the files were already on disk.
     :param max_workers: Size of the thread pool, as for :func:`export_planned`.
-    :param skip_incomplete: Leave files iCloud has evicted where they are, as
-        ``--skip-incomplete`` does for packages, rather than downloading them.
-        A stat tells, and a stat downloads nothing.
     """
-    if not copyable:
+    groups = _group_copies(plan, output_dir, report)
+    if not groups:
         return
-    evicted = (
-        frozenset(source for source in copyable if is_dataless(source))
-        if skip_incomplete
-        else frozenset()
-    )
     pool = ThreadPoolExecutor(
         max_workers=default_workers(max_workers), thread_name_prefix="copy"
     )
     try:
-        named = _name_copies(pool, copyable, policy, evicted)
-        futures = [
-            pool.submit(_copy_and_record, group, report)
-            for group in _group_copies(named, output_dir, evicted, report)
-        ]
+        futures = [pool.submit(_copy_and_record, group, report) for group in groups]
         # result() re-raises in this thread whatever escaped a worker, so a
         # surprise still stops the run as it did when the loop ran here.
         for future in futures:

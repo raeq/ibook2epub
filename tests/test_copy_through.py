@@ -649,8 +649,8 @@ class TestSkipIncompleteCoversCopies:
     ):
         # Under --name-by author-title a zipped epub is named from its own
         # metadata, and opening it is the download the flag exists to avoid.
-        # Driven through copy_through_all: the orphan check still names every
-        # copyable file by itself, which #12 leaves for its own issue.
+        # The plan and the copy alone; TestCopiesAreNamedOnce drives a whole
+        # run, orphan check included.
         library = tmp_path / "lib"
         library.mkdir()
         evicted = library / "Earthsea.epub"
@@ -666,14 +666,172 @@ class TestSkipIncompleteCoversCopies:
         monkeypatch.setattr(planning, "ZipFile", recording)
         report = convert.Report()
 
-        convert.copy_through_all(
-            [evicted],
-            output_dir,
-            naming.build_policy(None, "author-title"),
-            report,
-            skip_incomplete=True,
+        plan = convert.plan_copies(
+            [evicted], naming.build_policy(None, "author-title"), skip_incomplete=True
         )
+        convert.copy_through_all(plan, output_dir, report)
 
         assert opened == []
         assert report.incomplete == 1
         assert report.copied == 0
+
+
+AUTHOR_TITLE = ["--name-by", "author-title"]
+
+
+def _count_opens(monkeypatch) -> list[str]:
+    """Record every zip the planner opens to name a copy, and still open it."""
+    opened: list[str] = []
+
+    def recording(file, *args, **kwargs):
+        opened.append(str(file))
+        return ZipFile(file, *args, **kwargs)
+
+    monkeypatch.setattr(planning, "ZipFile", recording)
+    return opened
+
+
+class TestCopiesAreNamedOnce:
+    """
+    Under ``--name-by author-title`` a zipped book is named from its own
+    metadata, which means opening it. The orphan check named every copy in a
+    loop before the run started, and the copy then named them all again, so on
+    an evicted library each zipped book was downloaded one at a time before
+    any work began -- and under ``--skip-incomplete``, downloaded at all.
+    """
+
+    def test_a_zipped_book_is_opened_once_per_run(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        book = library / "Earthsea.epub"
+        _book_with_metadata(book)
+        opened = _count_opens(monkeypatch)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", *AUTHOR_TITLE, "-q"]
+        )
+
+        assert code == 0
+        assert opened.count(str(book)) == 1
+        assert [path.name for path in output_dir.glob("*.epub")] == [
+            "Le Guin, Ursula K. - A Wizard of Earthsea.epub"
+        ]
+
+    def test_naming_runs_in_the_pool(self, tmp_path, output_dir, monkeypatch):
+        # Two opens that each wait for the other finish only if they run at
+        # the same time. In the orphan check's loop the first times out.
+        library = tmp_path / "lib"
+        library.mkdir()
+        for name in ("One.epub", "Two.epub"):
+            _book_with_metadata(library / name)
+        both_opened = threading.Barrier(2, timeout=5)
+
+        def meet_then_open(file, *args, **kwargs):
+            both_opened.wait()
+            return ZipFile(file, *args, **kwargs)
+
+        monkeypatch.setattr(planning, "ZipFile", meet_then_open)
+
+        code = run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                "-w",
+                "2",
+                *AUTHOR_TITLE,
+                "-q",
+            ]
+        )
+
+        assert code == 0
+
+    def test_skip_incomplete_leaves_an_evicted_book_unopened_all_run(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        evicted = library / "Earthsea.epub"
+        _book_with_metadata(evicted)
+        _evict(monkeypatch, evicted)
+        opened = _count_opens(monkeypatch)
+
+        code = run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                *AUTHOR_TITLE,
+                "--skip-incomplete",
+                "-q",
+            ]
+        )
+
+        assert code == 0
+        assert opened == []
+        assert "1 not downloaded" in capsys.readouterr().out
+
+    def test_the_listing_leaves_it_unopened_too(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        evicted = library / "Earthsea.epub"
+        _book_with_metadata(evicted)
+        _evict(monkeypatch, evicted)
+        opened = _count_opens(monkeypatch)
+
+        code = run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "--list",
+                *AUTHOR_TITLE,
+                "--skip-incomplete",
+            ]
+        )
+
+        assert code == 0
+        assert opened == []
+
+    def test_a_book_that_could_not_be_named_is_owned_up_to(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Its copy may well be on the shelf, and nothing short of downloading
+        # the source can say which file that is. So the run says so, rather
+        # than letting the orphan count stand unexplained.
+        library = tmp_path / "lib"
+        library.mkdir()
+        evicted = library / "Earthsea.epub"
+        _book_with_metadata(evicted)
+        (output_dir / "Le Guin, Ursula K. - A Wizard of Earthsea.epub").write_bytes(
+            evicted.read_bytes()
+        )
+        _evict(monkeypatch, evicted)
+
+        run.main(
+            [
+                "-s",
+                str(library),
+                "-o",
+                str(output_dir),
+                "-m",
+                "0",
+                *AUTHOR_TITLE,
+                "--skip-incomplete",
+                "-q",
+            ]
+        )
+
+        captured = capsys.readouterr()
+        assert "could not be named" in captured.out + captured.err

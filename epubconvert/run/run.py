@@ -52,6 +52,7 @@ from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
 from .cli import parse_args
 from .convert import (
+    CopyPlan,
     ExportOptions,
     OutputLockedError,
     Report,
@@ -63,6 +64,7 @@ from .convert import (
     filter_packages,
     format_summary,
     output_lock,
+    plan_copies,
     progress_for,
     sweep_partials,
 )
@@ -70,7 +72,6 @@ from .planning import (
     CollisionMode,
     PlanOptions,
     assign_names,
-    copy_target_name,
     find_orphans,
     orphan_decisions,
     plan_exports,
@@ -146,6 +147,35 @@ def _shared_names(
     return assign_names(discovered, policy, on_collision)
 
 
+def _plan_copies(args: argparse.Namespace, policy: NamingPolicy) -> CopyPlan:
+    """
+    Find the files to take along and name them, once, for every caller.
+
+    The orphan check, the copy and the ignored count all read this one plan.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+
+    :return: The plan, empty under ``--no-copy-through``. When some files went
+        unnamed, the run is told what that costs rather than left with an
+        orphan count it cannot explain.
+    """
+    plan = plan_copies(
+        [] if args.no_copy_through else collect_copyable(args.source_dir),
+        policy,
+        max_workers=args.workers,
+        skip_incomplete=args.skip_incomplete,
+    )
+    if plan.unnamed:
+        logger.warning(
+            "%d book(s) not downloaded from iCloud could not be named without "
+            "downloading them; a copy of one already on the shelf is counted "
+            "as an orphan.",
+            plan.unnamed,
+        )
+    return plan
+
+
 def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     """
     Render the plan without converting anything.
@@ -156,7 +186,7 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     :return: A process exit code.
     """
     discovered = collect_package_dirs(args.source_dir)
-    copyable = [] if args.no_copy_through else collect_copyable(args.source_dir)
+    copies = _plan_copies(args, policy)
     packages = filter_packages(discovered, args.match)
     shared = _shared_names(packages, discovered, policy, args.on_collision)
     decisions = plan_exports(
@@ -171,12 +201,12 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=[copy_target_name(path, policy) for path in copyable],
+            claimed_extra=copies.claimed,
             assigned=shared,
         )
     )
     print(render_listing(decisions + orphans, args.as_json))
-    ignored = count_ignored(args.source_dir, discovered) - len(copyable)
+    ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
     if ignored and not args.as_json:
         print(f"{ignored} ignored (not books)")
     return 0
@@ -586,8 +616,8 @@ def _run_export(
     # Held here rather than inside the exporter so the partial counts survive
     # a Ctrl-C.
     report = Report()
-    copyable = [] if args.no_copy_through else collect_copyable(args.source_dir)
-    report.ignored = count_ignored(args.source_dir, discovered) - len(copyable)
+    copies = _plan_copies(args, policy)
+    report.ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
     shared = _shared_names(packages, discovered, policy, args.on_collision)
     # The names this run actually uses, computed once. plan_exports would
     # otherwise work them out again from the same inputs.
@@ -602,7 +632,7 @@ def _run_export(
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=[copy_target_name(path, policy) for path in copyable],
+            claimed_extra=copies.claimed,
             assigned=shared,
         )
     )
@@ -644,12 +674,7 @@ def _run_export(
         try:
             if not args.dry_run:
                 copy_through_all(
-                    copyable,
-                    args.output_dir,
-                    policy,
-                    report,
-                    max_workers=args.workers,
-                    skip_incomplete=args.skip_incomplete,
+                    copies, args.output_dir, report, max_workers=args.workers
                 )
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
