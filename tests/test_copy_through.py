@@ -462,10 +462,11 @@ class TestCopiesRunConcurrently:
 
         monkeypatch.setattr(convert, "copy_through", counted)
 
-        run.main(
+        code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "1", "-q"]
         )
 
+        assert code == 0
         assert running["peak"] == 1
         assert len(list(output_dir.glob("*.pdf"))) == 4
 
@@ -497,9 +498,10 @@ class TestSameNamedCopiesStayDeterministic:
 
         monkeypatch.setattr(convert, "copy_through", slow_first)
 
-        run.main(
+        code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "2", "-q"]
         )
 
+        assert code == 0
         assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4\nfirst\n"
         assert "1 copied" in capsys.readouterr().out
