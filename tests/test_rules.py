@@ -51,6 +51,31 @@ def _inside(tree: ast.Module, node: ast.AST, function: str) -> bool:
 
 SURROGATE = "Bad\udce9Name.epub"
 
+#: The functions allowed to call ``.encode`` and ``.decode``, as (file,
+#: function). naming.py's pair is the surrogate-safe path every name is measured
+#: through. The URL modules are the other exception, and they measure no name:
+#: the URL and Encoding Standards define percent-encoding over UTF-8 and IDNA
+#: over punycode. utf8_encode replaces lone surrogates first and the decoder
+#: replaces malformed bytes, so neither can raise; the punycode pair sees only
+#: prepared labels or letters, digits and hyphens, and its one failure, an
+#: incomplete punycode string, is caught by its caller.
+_ENCODERS = frozenset(
+    {
+        ("naming.py", "encode_name"),
+        ("percent.py", "utf8_encode"),
+        ("urlhost.py", "_punycode_encode"),
+        ("urlhost.py", "_punycode_decode"),
+    }
+)
+_DECODERS = frozenset(
+    {
+        ("naming.py", "truncate_bytes"),
+        ("percent.py", "utf8_decode_without_bom"),
+        ("urlhost.py", "_punycode_encode"),
+        ("urlhost.py", "_punycode_decode"),
+    }
+)
+
 
 class TestRuleInspectBeforeWriting:
     """A book is inspected for DRM and stubs before anything is written.
@@ -298,7 +323,10 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                     continue
                 if node.func.attr != "encode":
                     continue
-                if path.name == "naming.py" and _inside(tree, node, "encode_name"):
+                if any(
+                    path.name == name and _inside(tree, node, function)
+                    for name, function in _ENCODERS
+                ):
                     continue
                 offenders.append(f"{path}:{node.lineno}")
 
@@ -315,7 +343,10 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                     continue
                 if node.func.attr != "decode":
                     continue
-                if path.name == "naming.py" and _inside(tree, node, "truncate_bytes"):
+                if any(
+                    path.name == name and _inside(tree, node, function)
+                    for name, function in _DECODERS
+                ):
                     continue
                 offenders.append(f"{path}:{node.lineno}")
 
