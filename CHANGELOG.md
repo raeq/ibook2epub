@@ -41,7 +41,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `-m 0`, books an interrupt or a full disk left unattempted at a rerun, and
   failed books at the errors above.
   ([#15](https://github.com/raeq/ibook2epub/issues/15))
->>>>>>> e23ad73 (Say why books remain, instead of one hint for all of them)
 
 ## [2.3.0] - 2026-09-09
 
