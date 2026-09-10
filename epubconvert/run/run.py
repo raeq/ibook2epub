@@ -34,7 +34,6 @@ from ..collect.validate import (
 from ..export.archive import (
     collect_copyable,
     collect_package_dirs,
-    copy_through,
     count_ignored,
     replace_annotations,
 )
@@ -57,6 +56,7 @@ from .convert import (
     OutputLockedError,
     Report,
     cap_exports,
+    copy_through_all,
     count_pending_decisions,
     exit_code,
     export_planned,
@@ -643,7 +643,9 @@ def _run_export(
         pending_before = 0
         try:
             if not args.dry_run:
-                _copy_through_all(copyable, args.output_dir, policy, report)
+                copy_through_all(
+                    copyable, args.output_dir, policy, report, max_workers=args.workers
+                )
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
             # a cloud shelf, and a Ctrl-C there produced a raw traceback with
@@ -778,37 +780,6 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
     if args.verify:
         return _run_verify(args)
     return None
-
-
-def _copy_through_all(
-    copyable: Sequence[Path], output_dir: Path, policy: NamingPolicy, report: Report
-) -> None:
-    """
-    Put already-valid books on the shelf without converting them.
-
-    Rerun-safe on the same terms as everything else: a file already there is
-    left alone rather than rewritten, so a second run does nothing and says
-    nothing.
-
-    :param copyable: Files found beside the packages.
-    :param output_dir: Directory to copy into.
-    :param policy: Naming policy, so a copied file is named the same way a
-        converted one is.
-    :param report: Counted into as each file lands, rather than totalled and
-        returned at the end. A Ctrl-C part-way through left the summary saying
-        nothing was copied while the files were already on disk.
-    """
-    for source in copyable:
-        target = output_dir / copy_target_name(source, policy)
-        if target.exists():
-            continue
-        try:
-            copy_through(source, target)
-        except OSError as exc:
-            logger.error("Could not copy %s: %s", printable(source.name), exc)
-            continue
-        report.copied += 1
-        logger.info("Copied %s", printable(source.name))
 
 
 def _check_environment(args: argparse.Namespace) -> int | None:

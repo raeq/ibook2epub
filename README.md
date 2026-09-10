@@ -186,11 +186,12 @@ Convert Apple iBooks epub packages to zipped epub files.
 options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
-  -w, --workers N       Number of compression threads (default: 4x the CPU
-                        count, capped at 64). The work blocks on iCloud
-                        rather than on the CPU, so raising this well past the
-                        CPU count is what helps; 48-64 is reasonable for a
-                        cloud library.
+  -w, --workers N       Number of worker threads, for converting books and
+                        for copying PDFs and already-zipped books (default:
+                        4x the CPU count, capped at 64). The work blocks on
+                        iCloud rather than on the CPU, so raising this well
+                        past the CPU count is what helps; 48-64 is reasonable
+                        for a cloud library.
 
 Choosing books:
   Which books this run considers.
