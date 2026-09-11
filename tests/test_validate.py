@@ -5,6 +5,9 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import importlib.util
+import sys
+import zlib
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
@@ -574,6 +577,34 @@ class TestSortNameFromEpub3Refines:
         from_archive, _ = _read_both_ways(tmp_path, _opf_with(metadata))
 
         assert from_archive.creator_sort is None
+
+
+class TestDecompressorsThatMayBeMissing:
+    """
+    CPython builds ``lzma`` only where liblzma is present, and zipfile imports
+    it only when a member needs it. validate must import without it.
+    """
+
+    def test_validate_imports_without_lzma(self, monkeypatch):
+        # From Copilot's review of #22: UNREADABLE_MEMBER named lzma.LZMAError
+        # unconditionally, so on a Python built without liblzma validate could
+        # not be imported, and with it no command could run.
+        monkeypatch.setitem(sys.modules, "lzma", None)
+        spec = importlib.util.spec_from_file_location(
+            "epubconvert.collect._validate_without_lzma", validate.__file__
+        )
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        # dataclass looks its class's module up in sys.modules while it runs.
+        monkeypatch.setitem(sys.modules, spec.name, module)
+
+        spec.loader.exec_module(module)
+
+        assert zlib.error in module.UNREADABLE_MEMBER
+        assert not any(
+            error.__name__ == "LZMAError" for error in module.UNREADABLE_MEMBER
+        )
 
 
 class TestMalformedArchives:

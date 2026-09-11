@@ -40,13 +40,28 @@ module, so this map saves a search:
 ``spec`` is exercised through the modules that use it rather than directly.
 """
 
-import lzma
 import os
 import zlib
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
+from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
+
+from epubconvert.collect.validate import UNREADABLE_MEMBER
+
+# lzma is optional in CPython, so its case is skipped, not failed, on a Python
+# built without it.
+try:
+    from lzma import LZMAError
+except ImportError:
+    _LZMA_CASE = pytest.param(
+        ZIP_LZMA,
+        None,
+        id="lzma",
+        marks=pytest.mark.skip(reason="this Python was built without lzma"),
+    )
+else:
+    _LZMA_CASE = pytest.param(ZIP_LZMA, LZMAError, id="lzma")
 
 #: Root ignores permission bits, so a test that revokes them asserts nothing.
 #: hasattr guards Windows, which has no geteuid at all.
@@ -59,8 +74,7 @@ needs_permissions = pytest.mark.skipif(
 #: stream. Neither is a BadZipFile or an OSError (#21).
 damaged_streams = pytest.mark.parametrize(
     ("method", "raising"),
-    [(ZIP_DEFLATED, zlib.error), (ZIP_LZMA, lzma.LZMAError)],
-    ids=["deflate", "lzma"],
+    [pytest.param(ZIP_DEFLATED, zlib.error, id="deflate"), _LZMA_CASE],
 )
 
 # Files every synthetic package gets. The bogus ``mimetype`` and the Apple
@@ -213,6 +227,6 @@ def corrupt_member(path: Path, member: str, raising: type[Exception]) -> Path:
                 archive.read(member)
         except raising:
             return path
-        except (BadZipFile, EOFError, zlib.error, lzma.LZMAError):
+        except UNREADABLE_MEMBER:
             continue
     raise AssertionError(f"no one-byte flip of {member} raises {raising.__name__}")

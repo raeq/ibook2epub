@@ -18,7 +18,6 @@ metadata out of it.
 
 from __future__ import annotations
 
-import lzma
 import posixpath
 import re
 import shutil
@@ -37,6 +36,17 @@ from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
 from ..utils.opf import Package
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
+
+# CPython builds lzma only where liblzma is present, and zipfile imports it
+# only when a member needs it. Without it no member can raise LZMAError, so
+# there is nothing to catch -- but importing it unconditionally would stop
+# this module, and every command, from loading at all.
+try:
+    from lzma import LZMAError
+except ImportError:
+    _LZMA_ERRORS: tuple[type[Exception], ...] = ()
+else:
+    _LZMA_ERRORS = (LZMAError,)
 
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
@@ -64,7 +74,7 @@ UNREADABLE_MEMBER: tuple[type[Exception], ...] = (
     RuntimeError,
     ValueError,
     zlib.error,
-    lzma.LZMAError,
+    *_LZMA_ERRORS,
 )
 
 EPUBCHECK = "epubcheck"
