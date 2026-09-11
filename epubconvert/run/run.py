@@ -883,10 +883,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     :param argv: Argument list, defaulting to ``sys.argv[1:]``.
 
-    :return: A process exit code. 0 success; 1 an export failed, the output
-        directory could not be created, or --verify found damage; 2 portable
-        naming is unavailable or --verify was given a directory that is not
-        there; 3 another run holds the output lock; 130 interrupted.
+    :return: A process exit code, one defined with its meaning in
+        :mod:`epubconvert.utils.exits` and listed in the README's exit-code
+        table. A bad command line never returns here: argparse exits with
+        :data:`~epubconvert.utils.exits.USAGE` itself.
     """
     args = parse_args(argv)
 
