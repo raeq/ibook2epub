@@ -20,7 +20,7 @@ RSC-030  a ``file:`` URL
 RSC-007  a reference to a file the book does not contain
 RSC-008  a reference to a file the book contains but does not declare
 RSC-012  a link to a fragment the target document does not define
-RSC-001  a manifest item whose file is missing
+RSC-001  a missing file the manifest lists, or no package document
 HTM-025  a link whose scheme is not registered (a warning)
 RSC-007w a metadata link whose file is missing (a warning, EPUB 3)
 RSC-016  a document that is not well formed, read up to the error
@@ -212,7 +212,7 @@ def _fragment_id(fragment: str, svg: bool) -> str | None:
 
 
 def _css_references(text: str, source: str, first_line: int) -> Iterator[Reference]:
-    """Every ``url()`` and ``@import`` in a stylesheet, with its line."""
+    """Every ``url()`` and ``@import`` in a stylesheet naming more than a fragment."""
     blanked = _CSS_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), text)
     for pattern in (_CSS_URL, _CSS_IMPORT):
         for match in pattern.finditer(blanked):
@@ -633,7 +633,7 @@ class _MarkupHandler(_Handler):
 
 @dataclass
 class Report:
-    """The findings for one book, and how many references were checked."""
+    """The findings for one book, and how many references were found in it."""
 
     findings: list[Finding] = field(default_factory=list)
     references: int = 0
@@ -645,7 +645,8 @@ def check_archive(archive: ZipFile) -> Report:
 
     :param archive: The archive.
 
-    :return: The findings, in the order the book's documents were read.
+    :return: The findings: problems reading documents, in the order they were
+        read, then problems with references, in the order they were found.
     """
     book = _Book(archive)
     if book.read_package():

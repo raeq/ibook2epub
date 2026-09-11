@@ -57,8 +57,8 @@ SURROGATE = "Bad\udce9Name.epub"
 #: the URL and Encoding Standards define percent-encoding over UTF-8 and IDNA
 #: over punycode. utf8_encode replaces lone surrogates first and the decoder
 #: replaces malformed bytes, so neither can raise; the punycode pair sees only
-#: prepared labels or letters, digits and hyphens, and its one failure, an
-#: incomplete punycode string, is caught by its caller.
+#: prepared labels or letters, digits and hyphens, and decoding, the half that
+#: can fail, raises UnicodeError whatever the reason, which its caller catches.
 _ENCODERS = frozenset(
     {
         ("naming.py", "encode_name"),

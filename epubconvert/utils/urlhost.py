@@ -5,19 +5,29 @@ A URL's host is parsed by rules of its own, section 3 of the WHATWG URL
 Standard (https://url.spec.whatwg.org/, read at commit 8e14777 of 2026-09-10).
 This module holds them: the host types and their serializer, the IPv4 and IPv6
 parsers, and the domain parser with its IDNA step. The host parser that chooses
-between them is in :mod:`epubconvert.utils.url`, because it percent-decodes its
-input first, and that module re-exports the host types.
+between them is in :mod:`epubconvert.utils.url`, because its opaque-host branch
+checks each code point against the URL code points defined there, and that
+module re-exports the host types.
 
 The one deliberate departure from the standard is IDNA. The standard maps
 non-ASCII domains with UTS #46, which the standard library does not implement.
-ASCII domains -- nearly every domain a book links to -- follow the standard
-exactly. Non-ASCII labels go through RFC 3491 nameprep built from the standard
-library's ``stringprep`` tables, with UTS #46's own exception that ``ß`` and
-``ς`` are kept rather than folded: the one difference the conformance suite
-exposed, where ``faß.example`` must become ``xn--fa-hia.example``, not
-``fass.example``. What remains different is narrow: zero-width joiners, which
-nameprep deletes and UTS #46 checks in context, and code points newer than
-Unicode 3.2, which nameprep refuses.
+ASCII domains -- nearly every domain a book links to -- parse exactly as the
+standard says; only an ``xn--`` label's validation error can differ, because
+checking one runs its decoded form through the steps below. Non-ASCII labels go
+through RFC 3491 nameprep built from the standard library's ``stringprep``
+tables, with UTS #46's own exception that ``ß`` and ``ς`` are kept rather than
+folded: the one difference the conformance suite exposed, where ``faß.example``
+must become ``xn--fa-hia.example``, not ``fass.example``. What remains
+different:
+
+- zero-width joiners and non-joiners, which nameprep deletes and UTS #46
+  allows only in context;
+- code points newer than Unicode 3.2, which nameprep refuses;
+- a label that begins with a combining mark, which UTS #46 refuses and
+  nameprep accepts;
+- the bidirectional rule: RFC 3454's, which nameprep applies, refuses a
+  right-to-left label that ends in a digit, and RFC 5893's, which UTS #46
+  applies, allows one.
 
 Every parser here appends to the list of validation errors its caller is
 collecting, so the errors of a whole URL come out in the order the standard

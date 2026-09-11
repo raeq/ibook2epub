@@ -10,9 +10,9 @@ same problems -- once the structural check has passed. That second step used to
 run the external epubcheck, which needed a Java runtime and took a median 2.8 s
 a book on a 2,798-book shelf, where the built-in check took a median 23 ms.
 
-The choice lives here, above both checks, because the reference checker reads
+The choice lives here, above both checks, because the reference checker finds
 the package document through :mod:`epubconvert.collect.validate`, which
-therefore cannot call it.
+therefore cannot import it back.
 """
 
 from __future__ import annotations
