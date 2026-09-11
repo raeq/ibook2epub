@@ -12,6 +12,7 @@ something", "fix the path" and "a book is broken" are four different responses.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import re
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -221,6 +222,15 @@ class TestARefusalHasItsOwnCode:
 
 class TestTheDocumentedTableMatchesTheCode:
     """The README is the contract a script author reads."""
+
+    def test_run_main_names_no_code_by_number(self):
+        # Its docstring listed codes by number, and four of them had moved on:
+        # 5 was given as 1 and as 2, 7 as 1, and 6 as 2 (#23). exits defines
+        # every code once, so the docstring points there instead.
+        returns = (run.main.__doc__ or "").split(":return:", 1)[1]
+
+        assert "exits" in returns
+        assert re.findall(r"\b\d+\b", returns) == []
 
     def test_every_code_appears_in_the_readme(self):
         readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(
