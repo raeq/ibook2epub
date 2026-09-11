@@ -1,5 +1,5 @@
 """
-The parsing expression grammar engine in ``epubconvert.utils.peg``.
+The parsing expression grammar engine in ``epubconvert.grammar``.
 
 Every piece of the notation, the shape of a parse, and each rule a grammar must
 pass before it is used: a grammar that breaks one is refused when it is built,
@@ -20,8 +20,7 @@ from collections.abc import Callable
 
 import pytest
 
-from epubconvert.utils import grammars, peg
-from epubconvert.utils.peg import Grammar, GrammarError
+from epubconvert.grammar import Grammar, GrammarError, expressions, syntaxes
 from tests.conftest import peak_memory
 
 
@@ -164,12 +163,14 @@ class TestInputThatNestsTooDeep:
         return "(" * levels + "x" + ")" * levels
 
     def test_input_at_the_limit_still_matches(self):
-        assert Grammar(self.GRAMMAR).match(self._nested(peg.MAX_DEPTH)) is not None
+        assert (
+            Grammar(self.GRAMMAR).match(self._nested(expressions.MAX_DEPTH)) is not None
+        )
 
     def test_input_past_the_limit_is_no_match_rather_than_a_crash(self):
         grammar = Grammar(self.GRAMMAR)
 
-        assert grammar.match(self._nested(peg.MAX_DEPTH + 1)) is None
+        assert grammar.match(self._nested(expressions.MAX_DEPTH + 1)) is None
         assert grammar.match(self._nested(5000)) is None
 
     def test_a_token_that_nests_counts_towards_the_limit(self):
@@ -284,7 +285,7 @@ class TestARunOfOneCharacterIsScannedInOneCall:
     @staticmethod
     def _assert_agree(source: str, texts: list[str], monkeypatch) -> None:
         scanning = Grammar(source)
-        monkeypatch.setattr(peg, "_SCAN_RUNS", False)
+        monkeypatch.setattr(expressions, "SCAN_RUNS", False)
         per_call = Grammar(source)
         for text in texts:
             for rule in scanning.rules:
@@ -312,7 +313,7 @@ class TestARunOfOneCharacterIsScannedInOneCall:
         "name", ["CFI", "FRAGMENTS", "IDENTIFIERS", "NOTES", "PACKAGE"]
     )
     def test_the_scan_answers_as_the_per_call_path_does(self, name, monkeypatch):
-        source = getattr(grammars, name).source
+        source = getattr(syntaxes, name).source
         self._assert_agree(source, self._texts(name), monkeypatch)
 
     @pytest.mark.parametrize("source", EXTRA)

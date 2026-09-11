@@ -56,7 +56,7 @@ from unicodedata import normalize
 from xml.parsers import expat
 from zipfile import ZipFile
 
-from ..utils.grammars import FRAGMENTS, PACKAGE
+from ..grammar import FRAGMENTS, PACKAGE
 from ..utils.percent import (
     percent_decode,
     utf8_decode_without_bom,
@@ -204,7 +204,7 @@ def _fragment_id(fragment: str, svg: bool) -> str | None:
     The id a fragment names, or None when it names something else.
 
     Sorted as epubcheck 5.3.0 sorts fragments, by
-    :data:`~epubconvert.utils.grammars.FRAGMENTS`: a fragment directive, a
+    :data:`~epubconvert.grammar.syntaxes.FRAGMENTS`: a fragment directive, a
     scheme-based pointer, a media fragment or an SVG view names no id.
     """
     parsed = FRAGMENTS.match(fragment, "svg_fragment" if svg else "html_fragment")

@@ -31,10 +31,10 @@ from typing import Any, NamedTuple
 
 from ..collect.annotations import for_book, index_by_book
 from ..collect.validate import isbn13_of
+from ..grammar import NOTES
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import collapse, printable
-from ..utils.grammars import NOTES
 from ..utils.policy import Assignment
 from .archive import write_atomically
 from .naming import encode_name
@@ -46,7 +46,7 @@ from .naming import encode_name
 END_MARKER = "<!-- ibook2epub end — your notes below this line are never modified -->"
 
 #: Carries the digest of the generated region. Both markers are recognised by
-#: :data:`~epubconvert.utils.grammars.NOTES`.
+#: :data:`~epubconvert.grammar.syntaxes.NOTES`.
 START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
 
 #: Largest note this will read back. A note of a few hundred highlights is

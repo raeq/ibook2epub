@@ -15,7 +15,7 @@ expat for XML.
 
 from __future__ import annotations
 
-from .peg import Grammar
+from .engine import Grammar
 
 __all__ = ["CFI", "FRAGMENTS", "IDENTIFIERS", "NOTES", "PACKAGE", "WHITESPACE"]
 

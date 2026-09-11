@@ -27,11 +27,10 @@ from xml.etree import ElementTree
 from xml.parsers import expat
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
+from ..grammar import IDENTIFIERS, PACKAGE, Node
 from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
-from ..utils.grammars import IDENTIFIERS, PACKAGE
 from ..utils.opf import Package
-from ..utils.peg import Node
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
 # CPython builds lzma only where liblzma is present, and zipfile imports it
@@ -128,7 +127,7 @@ def canonical_identifier(value: str) -> str:
     and reshaping an opaque string is a claim about it.
 
     What counts as either is the grammar
-    :data:`~epubconvert.utils.grammars.IDENTIFIERS`, which also accepts the
+    :data:`~epubconvert.grammar.syntaxes.IDENTIFIERS`, which also accepts the
     labels and separators above; only the check digits are computed here.
 
     :param value: The identifier the package document declares.
@@ -590,7 +589,7 @@ def _declares(properties: str | None, wanted: str) -> bool:
     Whether a manifest item's ``properties`` attribute lists an unprefixed value.
 
     The attribute is a list of values separated by white space, read by
-    :data:`~epubconvert.utils.grammars.PACKAGE`, so "cover-image" is one value
+    :data:`~epubconvert.grammar.syntaxes.PACKAGE`, so "cover-image" is one value
     among them and never a substring: an item whose properties are
     "not-cover-image" is not a cover.
 

@@ -928,8 +928,9 @@ class TestRuleEveryEncryptedBlockNamesItsAlgorithm:
 
 class TestRuleImportsRunDownhill:
     """
-    The package is four layers, and each may import only its own and those
-    below it: ``utils``, then ``collect``, then ``export``, then ``run``.
+    The package is five layers, and each may import only its own and those
+    below it: ``utils`` and ``grammar``, which import nothing of ours, then
+    ``collect``, then ``export``, then ``run``.
 
     The layers exist to say what depends on what, which they do only while
     something checks. Two edges pointed the wrong way before the split --
@@ -943,7 +944,7 @@ class TestRuleImportsRunDownhill:
     """
 
     #: Bottom to top. A module may import from its own layer and any earlier.
-    LAYERS = ("utils", "collect", "export", "run")
+    LAYERS = ("utils", "grammar", "collect", "export", "run")
 
     @staticmethod
     def _crossings(layer: str, allowed: frozenset[str]) -> list[str]:
@@ -971,6 +972,12 @@ class TestRuleImportsRunDownhill:
     def test_utils_imports_no_layer(self):
         self._check("utils")
 
+    def test_grammar_imports_no_layer(self):
+        # Stricter than its place in LAYERS: like utils it imports nothing of
+        # ours, so any layer may use it (#28).
+        crossings = self._crossings("grammar", frozenset())
+        assert crossings == [], f"grammar may import nothing of ours: {crossings}"
+
     def test_collect_imports_only_utils(self):
         self._check("collect")
 
@@ -981,8 +988,8 @@ class TestRuleImportsRunDownhill:
         self._check("run")
 
     def test_every_layer_on_disk_is_named_here(self):
-        # A fifth directory added without a rule would be unchecked, and the
-        # four tests above would still pass.
+        # A directory added without a rule would be unchecked, and the tests
+        # above would still pass.
         on_disk = {
             path.name
             for path in Path("epubconvert").iterdir()

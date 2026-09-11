@@ -43,10 +43,10 @@ from typing import Any
 from urllib.parse import quote
 
 from .. import __version__
+from ..grammar import CFI
 from ..utils import schema
 from ..utils.app_logger import logger
 from ..utils.contained import escapes
-from ..utils.grammars import CFI
 from ..utils.opf import Package
 from ..utils.policy import NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -156,7 +156,7 @@ def _assertion_of(cfi: str) -> str | None:
 
     It is the assertion on the step just before the first "!", the step that
     names the spine item the rest of the CFI points inside; the CFI is read by
-    :data:`~epubconvert.utils.grammars.CFI`. An assertion further left, as in
+    :data:`~epubconvert.grammar.syntaxes.CFI`. An assertion further left, as in
     ``/6[spine]/46[ch15.xhtml]!``, names no document. Escapes such as ``^]``
     are undone, so an id holding a bracket is looked up as the manifest writes
     it.

@@ -1,5 +1,5 @@
 """
-The grammars in ``epubconvert.utils.grammars``, each tested on its own.
+The grammars in ``epubconvert.grammar.syntaxes``, each tested on its own.
 
 A grammar is validated here against the examples its specification gives,
 apart from the code that reads its parse, so a grammar that stops matching its
@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-from epubconvert.utils.grammars import (
+from epubconvert.grammar import Grammar
+from epubconvert.grammar.syntaxes import (
     CFI,
     FRAGMENTS,
     IDENTIFIERS,
@@ -24,7 +25,6 @@ from epubconvert.utils.grammars import (
     PACKAGE,
     WHITESPACE,
 )
-from epubconvert.utils.peg import Grammar
 
 
 class TestWhitespace:
