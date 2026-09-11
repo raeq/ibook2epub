@@ -25,6 +25,11 @@ begins with an upper-case letter is a token: it matches but leaves no node, and
 its text is part of the node above it. Every rule's result is remembered by
 position (packrat parsing), so a parse takes time linear in its input.
 
+Rules nest at most :data:`MAX_DEPTH` deep in one parse, and input that nests
+deeper is no match. The input is usually a book's or Apple's, so a crafted
+string must cost its own parse, never the interpreter's stack and with it the
+run.
+
 A grammar is checked when it is built, and each of these is a
 :class:`GrammarError` rather than a parse that fails or never ends: a rule used
 but not defined, or defined twice; a rule that can reach itself without
@@ -39,11 +44,22 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-__all__ = ["Grammar", "GrammarError", "Node"]
+__all__ = ["MAX_DEPTH", "Grammar", "GrammarError", "Node"]
+
+#: The deepest rules may nest in one parse. A rule level costs the interpreter
+#: about four frames, so its default limit of 1,000 frames allows some 248
+#: levels, and this leaves the caller room. A CFI with 100 indirections went
+#: past that and raised RecursionError (#25); the deepest real input measured
+#: is a CFI with one indirection, 8 levels deep, and 20 indirections reach 64.
+MAX_DEPTH = 100
 
 
 class GrammarError(ValueError):
     """A grammar that cannot be run: bad notation, or rules that cannot work."""
+
+
+class _TooDeepError(Exception):
+    """Raised inside a parse whose rules nest past :data:`MAX_DEPTH`."""
 
 
 @dataclass(frozen=True)
@@ -110,11 +126,15 @@ class Node:
 
 @dataclass(slots=True)
 class _State:
-    """One parse: its input, the nodes made so far, and what each rule matched."""
+    """
+    One parse: its input, the nodes made so far, what each rule matched, and
+    how deeply the rules running now are nested.
+    """
 
     source: str
     nodes: list[Node] = field(default_factory=list)
     memo: dict[int, tuple[int, tuple[Node, ...]]] = field(default_factory=dict)
+    depth: int = 0
 
 
 #: A compiled expression: given a parse and a position, the position after its
@@ -383,7 +403,12 @@ class _Lookahead(_Expression):
 
 
 def _rule(index: int, count: int, name: str, body: _Matcher) -> _Matcher:
-    """A rule: its body, remembered by position, kept as a node if lower-case."""
+    """
+    A rule: its body, remembered by position, kept as a node if lower-case.
+
+    Running the body is one level of nesting; a result looked up in the memo
+    is none, because it runs nothing.
+    """
     capture = name[0].islower()
 
     def rule(state: _State, pos: int) -> int:
@@ -392,9 +417,13 @@ def _rule(index: int, count: int, name: str, body: _Matcher) -> _Matcher:
         if remembered is not None:
             state.nodes.extend(remembered[1])
             return remembered[0]
+        state.depth += 1
+        if state.depth > MAX_DEPTH:
+            raise _TooDeepError
         nodes = state.nodes
         mark = len(nodes)
         end = body(state, pos)
+        state.depth -= 1
         found: tuple[Node, ...] = ()
         if end >= 0:
             found = tuple(nodes[mark:])
@@ -732,7 +761,8 @@ class Grammar:
         :param text: The input.
         :param rule: The rule to match; the grammar's first rule by default.
 
-        :return: The parse, or None when the rule does not match all of it.
+        :return: The parse, or None when the rule does not match all of it or
+            the input nests rules more than :data:`MAX_DEPTH` deep.
         """
         return self._parse(text, rule, whole=True)
 
@@ -743,7 +773,8 @@ class Grammar:
         :param text: The input.
         :param rule: The rule to match; the grammar's first rule by default.
 
-        :return: The parse, whose ``end`` is where it stopped, or None.
+        :return: The parse, whose ``end`` is where it stopped, or None, as for
+            :meth:`match`.
         """
         return self._parse(text, rule, whole=False)
 
@@ -753,7 +784,10 @@ class Grammar:
         if index is None:
             raise GrammarError(f"the grammar has no rule {name!r}")
         state = _State(text)
-        end = self._bodies[index](state, 0)
+        try:
+            end = self._bodies[index](state, 0)
+        except _TooDeepError:
+            return None
         if end < 0 or (whole and end != len(text)):
             return None
         return Node(text, name, 0, end, tuple(state.nodes))

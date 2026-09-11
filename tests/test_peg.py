@@ -17,6 +17,7 @@ import re
 
 import pytest
 
+from epubconvert.utils import peg
 from epubconvert.utils.peg import Grammar, GrammarError
 
 
@@ -143,6 +144,34 @@ class TestTheParse:
 
         assert parse is not None
         assert [node.name for node in parse.walk()] == ["rest"]
+
+
+class TestInputThatNestsTooDeep:
+    """
+    Each rule level costs the interpreter a few frames, so input that nests
+    without limit would exhaust its stack: a CFI with 100 indirections did
+    (#25). Past ``MAX_DEPTH`` levels the input is no match instead.
+    """
+
+    GRAMMAR = "nested <- '(' nested ')' / 'x'"
+
+    @staticmethod
+    def _nested(levels: int) -> str:
+        return "(" * levels + "x" + ")" * levels
+
+    def test_input_at_the_limit_still_matches(self):
+        assert Grammar(self.GRAMMAR).match(self._nested(peg.MAX_DEPTH)) is not None
+
+    def test_input_past_the_limit_is_no_match_rather_than_a_crash(self):
+        grammar = Grammar(self.GRAMMAR)
+
+        assert grammar.match(self._nested(peg.MAX_DEPTH + 1)) is None
+        assert grammar.match(self._nested(5000)) is None
+
+    def test_a_token_that_nests_counts_towards_the_limit(self):
+        grammar = Grammar("s <- NESTED\nNESTED <- '(' NESTED ')' / 'x'")
+
+        assert grammar.match(self._nested(5000)) is None
 
 
 class TestGrammarsThatCannotWork:

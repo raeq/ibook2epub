@@ -237,6 +237,30 @@ class TestCfiResolution:
         cfi = "epubcfi(/6/46[ch^[15^].xhtml]!/4/2/1:0)"
         assert annotations._assertion_of(cfi) == "ch[15].xhtml"
 
+    DEEP = "epubcfi(/6/4[chap.xhtml]" + "!/4" * 100 + ")"
+
+    def test_a_cfi_nested_past_any_real_book_names_no_document(self):
+        # 100 indirections exhausted the interpreter's stack (#25). The deepest
+        # real CFI measured has one; past the parser's limit a CFI names nothing.
+        assert annotations._assertion_of(self.DEEP) is None
+
+    def test_a_cfi_nested_too_deep_costs_its_href_not_the_export(self, tmp_path):
+        # #25: one such row raised RecursionError out of collect(), which
+        # catches only an unusable row's TypeError, ValueError and OSError.
+        book = make_metadata_package(
+            tmp_path / "lib", "Leviathan Wakes.epub", title="Leviathan Wakes"
+        )
+        container = make_databases(
+            tmp_path / "container",
+            rows=[highlight(uuid="GOOD"), highlight(uuid="DEEP", location=self.DEEP)],
+            books=[library_row(path=str(book))],
+        )
+
+        found = annotations.collect(container)
+
+        assert sorted(item["id"] for item in found) == ["DEEP", "GOOD"]
+        assert "href" not in next(item for item in found if item["id"] == "DEEP")
+
 
 class TestHrefsStayInsideTheBook:
     def test_a_manifest_href_that_climbs_out_is_refused(self):
