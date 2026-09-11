@@ -28,6 +28,14 @@ one place. A token's result is not remembered: a token is a run of characters,
 which costs no more to run again than to look up, and remembering it at every
 character held memory in proportion to a long input (#26).
 
+A repeat of something that consumes one character at a time and makes no
+node -- ``WS*``, ``[0-9]+``, ``(!':~:' .)+`` -- is scanned by one regular
+expression rather than by calls for every character, which took hundreds of
+times as long (#27). The translation is made only where it means the same:
+every part of the repeated item consumes a fixed number of characters, so
+PEG's ordered choice and a regular expression's backtracking cannot reach
+different answers. Anything else runs as written.
+
 Rules nest at most :data:`MAX_DEPTH` deep in one parse, and input that nests
 deeper is no match. The input is usually a book's or Apple's, so a crafted
 string must cost its own parse, never the interpreter's stack and with it the
@@ -42,6 +50,7 @@ that can match nothing, repeated without bound.
 
 from __future__ import annotations
 
+import re
 import string
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -56,6 +65,11 @@ __all__ = ["MAX_DEPTH", "Grammar", "GrammarError", "Node"]
 #: is a CFI with one indirection, 8 levels deep, and 20 indirections reach 64.
 MAX_DEPTH = 100
 
+#: Whether a repeat of one character at a time is scanned by a regular
+#: expression. Only the tests turn it off, to hold the scan to the answers of
+#: the per-call path it stands in for (#27).
+_SCAN_RUNS = True
+
 
 class GrammarError(ValueError):
     """A grammar that cannot be run: bad notation, or rules that cannot work."""
@@ -63,6 +77,10 @@ class GrammarError(ValueError):
 
 class _TooDeepError(Exception):
     """Raised inside a parse whose rules nest past :data:`MAX_DEPTH`."""
+
+
+class _UntranslatableError(Exception):
+    """Raised for an expression no regular expression means the same as."""
 
 
 @dataclass(frozen=True)
@@ -147,10 +165,14 @@ _Matcher: TypeAlias = Callable[[_State, int], int]
 
 @dataclass
 class _Table:
-    """Where a reference finds the rule it names, once every rule is compiled."""
+    """
+    Where a reference finds the rule it names, once every rule is compiled,
+    and the rules as written, where a scan finds a token's body (#27).
+    """
 
     index: dict[str, int]
     matchers: list[_Matcher]
+    rules: dict[str, _Expression]
 
 
 # ------------------------------------------------------------------ expressions
@@ -191,6 +213,24 @@ class _Expression:
             found |= part.leftmost(empty)
         return found
 
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        """
+        Translate this into a regular expression, where that means the same.
+
+        Only an expression that makes no node and always consumes the same
+        number of characters translates: then PEG's ordered choice and a
+        regular expression's backtracking cannot reach different answers.
+
+        :param table: Where a token's body is found.
+        :param seen: The tokens already being translated, so that one reaching
+            itself is left alone.
+
+        :return: The pattern and how many characters it consumes.
+
+        :raises _UntranslatableError: If no regular expression means the same.
+        """
+        raise NotImplementedError  # pragma: no cover - every expression has one
+
     def compile(self, table: _Table) -> _Matcher:
         """
         Turn this into a matcher.
@@ -203,6 +243,11 @@ class _Expression:
 
 
 _ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def _escape(char: str) -> str:
+    """A code point as a regular expression escape, safe in a class or out."""
+    return f"\\U{ord(char):08x}"
 
 
 @dataclass(frozen=True)
@@ -231,6 +276,17 @@ class _Literal(_Expression):
 
         return exact
 
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        del table, seen
+        folded = self.ignore_case
+        pattern = "".join(
+            f"[{char.lower()}{char.upper()}]"
+            if folded and char in string.ascii_letters
+            else _escape(char)
+            for char in self.text
+        )
+        return pattern, len(self.text)
+
 
 @dataclass(frozen=True)
 class _Class(_Expression):
@@ -254,6 +310,18 @@ class _Class(_Expression):
 
         return one_of
 
+    def pattern(self) -> str:
+        """The class as a regular expression character class."""
+        members = "".join(
+            _escape(low) if low == high else f"{_escape(low)}-{_escape(high)}"
+            for low, high in self.ranges
+        )
+        return f"[{'^' if self.negated else ''}{members}]"
+
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        del table, seen
+        return self.pattern(), 1
+
 
 @dataclass(frozen=True)
 class _Any(_Expression):
@@ -264,6 +332,10 @@ class _Any(_Expression):
             return pos + 1 if pos < len(state.source) else -1
 
         return anything
+
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        del table, seen
+        return "(?s:.)", 1
 
 
 @dataclass(frozen=True)
@@ -284,6 +356,13 @@ class _Reference(_Expression):
             return matchers[index](state, pos)
 
         return call
+
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        # A rule that makes a node cannot be skipped over; a token that reaches
+        # itself cannot be written out.
+        if self.name[0].islower() or self.name in seen:
+            raise _UntranslatableError
+        return table.rules[self.name].as_regex(table, seen | {self.name})
 
 
 @dataclass(frozen=True)
@@ -319,6 +398,15 @@ class _Sequence(_Expression):
 
         return in_order
 
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        patterns: list[str] = []
+        width = 0
+        for item in self.items:
+            pattern, consumed = item.as_regex(table, seen)
+            patterns.append(f"(?:{pattern})")
+            width += consumed
+        return "".join(patterns), width
+
 
 @dataclass(frozen=True)
 class _Choice(_Expression):
@@ -342,6 +430,15 @@ class _Choice(_Expression):
 
         return first_of
 
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        # Options of one width end in one place, so which of them PEG picks
+        # cannot change what follows; options of different widths could.
+        translated = [option.as_regex(table, seen) for option in self.options]
+        widths = {width for _, width in translated}
+        if len(widths) != 1:
+            raise _UntranslatableError
+        return f"(?:{'|'.join(pattern for pattern, _ in translated)})", widths.pop()
+
 
 @dataclass(frozen=True)
 class _Repeat(_Expression):
@@ -355,7 +452,16 @@ class _Repeat(_Expression):
     def nullable(self, empty: frozenset[str]) -> bool:
         return self.low == 0 or self.item.nullable(empty)
 
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        # A repeat's width depends on its input, and PEG's repeat never gives
+        # back what it took, where a regular expression's does.
+        del table, seen
+        raise _UntranslatableError
+
     def compile(self, table: _Table) -> _Matcher:
+        scan = self._scan(table) if _SCAN_RUNS else None
+        if scan is not None:
+            return scan
         item, low, high = self.item.compile(table), self.low, self.high
 
         def repeatedly(state: _State, pos: int) -> int:
@@ -378,6 +484,48 @@ class _Repeat(_Expression):
             return pos
 
         return repeatedly
+
+    def _scan(self, table: _Table) -> _Matcher | None:
+        """
+        Scan the whole run in one regular expression call, when the item
+        always consumes exactly one character (#27).
+
+        Such a repeat takes characters until the item first fails, up to its
+        upper bound. An item that is one character class is repeated as a
+        regex class, which the regex engine runs keeping nothing per
+        character. Any other item, such as a character behind a lookahead, is
+        found by searching for its first failure, ``(?!item)``: repeating that
+        as a regular expression kept a backtracking record for every character.
+        """
+        unit = _unit_class(self.item, table, frozenset())
+        if unit is not None:
+            bound = "" if self.high is None else str(self.high)
+            match = re.compile(f"{unit}{{{self.low},{bound}}}").match
+
+            def running(state: _State, pos: int) -> int:
+                found = match(state.source, pos)
+                return found.end() if found else -1
+
+            return running
+        try:
+            pattern, width = self.item.as_regex(table, frozenset())
+        except _UntranslatableError:
+            return None
+        if width != 1:
+            return None
+        search = re.compile(f"(?!{pattern})").search
+        low, high = self.low, self.high
+
+        def scanning(state: _State, pos: int) -> int:
+            # The item needs a character, so the search stops at the end at
+            # the latest.
+            stop = search(state.source, pos)
+            end = stop.start() if stop else len(state.source)
+            if end - pos < low:
+                return -1
+            return end if high is None else min(end, pos + high)
+
+        return scanning
 
 
 @dataclass(frozen=True)
@@ -403,6 +551,43 @@ class _Lookahead(_Expression):
             return pos if found is positive else -1
 
         return looking
+
+    def as_regex(self, table: _Table, seen: frozenset[str]) -> tuple[str, int]:
+        pattern, _ = self.item.as_regex(table, seen)
+        return f"(?{'=' if self.positive else '!'}{pattern})", 0
+
+
+#: "." as a regular expression character class: every code point.
+_ANY_CLASS = f"[{_escape(chr(0))}-{_escape(chr(0x10FFFF))}]"
+
+
+def _unit_class(
+    expression: _Expression, table: _Table, seen: frozenset[str]
+) -> str | None:
+    """
+    The one regular expression character class *expression* is, if it is one.
+
+    A class is the one thing the regex engine repeats without keeping a record
+    for every character, so a run of one is scanned that way (#27): a class,
+    ".", a one-character literal, or a token that is one of these.
+    """
+    # A token stands for its body; one that reaches itself cannot be written out.
+    while isinstance(expression, _Reference):
+        name = expression.name
+        if name[0].islower() or name in seen:
+            return None
+        seen = seen | {name}
+        expression = table.rules[name]
+    if isinstance(expression, _Class):
+        return expression.pattern()
+    if isinstance(expression, _Any):
+        return _ANY_CLASS
+    if not isinstance(expression, _Literal) or len(expression.text) != 1:
+        return None
+    char = expression.text
+    if expression.ignore_case and char in string.ascii_letters:
+        return f"[{char.lower()}{char.upper()}]"
+    return f"[{_escape(char)}]"
 
 
 def _rule(index: int, count: int, name: str, body: _Matcher) -> _Matcher:
@@ -748,10 +933,14 @@ class Grammar:
     """
 
     def __init__(self, source: str) -> None:
+        #: The notation the grammar was built from.
+        self.source = source
         rules = _Reader(source).rules()
         _check(rules)
         self._names = tuple(rules)
-        table = _Table({name: index for index, name in enumerate(self._names)}, [])
+        table = _Table(
+            {name: index for index, name in enumerate(self._names)}, [], rules
+        )
         self._bodies = [rules[name].compile(table) for name in self._names]
         table.matchers.extend(
             _rule(index, len(self._names), name, body)

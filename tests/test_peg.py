@@ -13,11 +13,14 @@ never discovered when some input fails to parse.
 
 from __future__ import annotations
 
+import random
 import re
+import time
+from collections.abc import Callable
 
 import pytest
 
-from epubconvert.utils import peg
+from epubconvert.utils import grammars, peg
 from epubconvert.utils.peg import Grammar, GrammarError
 from tests.conftest import peak_memory
 
@@ -186,6 +189,137 @@ class TestALongInputHoldsNoMemoryPerCharacter:
         text = "a" * 100_000
 
         assert peak_memory(lambda: grammar.match(text)) < 1_000_000
+
+    def test_a_long_run_of_a_character_behind_a_lookahead(self):
+        # Scanned by a regular expression repeat, a run like this held the
+        # regex engine's backtracking record for every character (#27).
+        grammar = Grammar("run <- (!':~:' .)* !.")
+        text = "a" * 100_000
+
+        assert peak_memory(lambda: grammar.match(text)) < 1_000_000
+
+
+def _fastest(call: Callable[[], object]) -> float:
+    """The quickest of three runs of *call*, in seconds."""
+    times = []
+    for _ in range(3):
+        start = time.perf_counter()
+        call()
+        times.append(time.perf_counter() - start)
+    return min(times)
+
+
+class TestARunOfOneCharacterIsScannedInOneCall:
+    """
+    A repeat cost several Python calls per character, 930 times what ``re``
+    takes over a run of a million (#27). A repeat of something that consumes
+    one character at a time is scanned by a regular expression now, and it must
+    answer exactly as the per-call path does.
+    """
+
+    #: Repeats that take the scan, and some that must not: a choice whose
+    #: options differ in width, and a repeat inside a lookahead.
+    EXTRA = [
+        "s <- [a-c]* !.",
+        "s <- [^a-c]{2,4} .*",
+        "s <- ('x'i)+ 'y'?",
+        "s <- (!'ab' .)* 'ab'?",
+        "s <- (&[a-m] .)+ .*",
+        "s <- ('a' / 'b' / [c-d])* !.",
+        "s <- ('\\u00e9' / .)*",
+        "s <- HEX{3} HEX{2,}\nHEX <- [0-9A-Fa-f]",
+        "s <- (!END .)* END?\nEND <- ':~:' / !.",
+        "s <- (!('a' / 'bc') .)*",
+        "s <- (!('a'+ 'b') .)* .*",
+        "s <- ('ab')* 'a'?",
+    ]
+    #: Real inputs to mutate, and the pieces a mutation inserts.
+    SEEDS = [
+        "epubcfi(/6/46[ch15.xhtml]!/4,/80/2/1:25,/82/2/1:25)",
+        "book.epub#epubcfi(/6/44[n-1]!,/4:0,/4/16[p7]:0)",
+        "epubcfi(/6/46[ch^[15^].xhtml;s=b]!/4/2/1:0.5)",
+        "urn:isbn:978-0-553-38304-1",
+        "ISBN 0-553-38304-X",
+        "urn:uuid:0f7e4b56-3b1f-4c5e-9d8a-1a2b3c4d5e6f",
+        "name:~:text=foo",
+        "t=10,20&track=a",
+        "xywh=0,0,5,5",
+        "svgView(viewBox(0,0,1,1))",
+        " 3.0 ",
+        "nav cover-image x:y",
+        "<!-- ibook2epub sha256=0123456789abcdef -->  ",
+        "<!-- ibook2epub end",
+        "---",
+        "  12. item",
+    ]
+    PIECES = [
+        *"abcxXy0F3-_.:;,=()[]^!/@~&# \t é",
+        "ab",
+        "bc",
+        ":~:",
+        "epubcfi(",
+        "urn:isbn:",
+        "svgView(",
+        "t=",
+        "xywh=",
+        " -->",
+        "---",
+    ]
+
+    @classmethod
+    def _texts(cls, seed: str) -> list[str]:
+        generator = random.Random(seed)
+        texts = []
+        for _ in range(300):
+            text = generator.choice(cls.SEEDS) if generator.random() < 0.5 else ""
+            for _ in range(generator.randint(0, 4)):
+                at = generator.randint(0, len(text))
+                if text and generator.random() < 0.4:
+                    text = text[:at] + text[at + 1 :]
+                else:
+                    text = text[:at] + generator.choice(cls.PIECES) + text[at:]
+            texts.append(text)
+        return texts
+
+    @staticmethod
+    def _assert_agree(source: str, texts: list[str], monkeypatch) -> None:
+        scanning = Grammar(source)
+        monkeypatch.setattr(peg, "_SCAN_RUNS", False)
+        per_call = Grammar(source)
+        for text in texts:
+            for rule in scanning.rules:
+                assert scanning.match(text, rule) == per_call.match(text, rule), (
+                    rule,
+                    text,
+                )
+                assert scanning.match_prefix(text, rule) == per_call.match_prefix(
+                    text, rule
+                ), (rule, text)
+
+    def test_a_long_run_takes_little_longer_than_re(self):
+        grammar = Grammar("run <- A* !.\nA <- [a]")
+        pattern = re.compile("[a]*")
+        text = "a" * 1_000_000
+
+        engine = _fastest(lambda: grammar.match(text))
+        regex = _fastest(lambda: pattern.fullmatch(text))
+
+        # It was 930 times; the slack is for the parse's fixed cost and a busy
+        # machine.
+        assert engine < 10 * regex + 0.02
+
+    @pytest.mark.parametrize(
+        "name", ["CFI", "FRAGMENTS", "IDENTIFIERS", "NOTES", "PACKAGE"]
+    )
+    def test_the_scan_answers_as_the_per_call_path_does(self, name, monkeypatch):
+        source = getattr(grammars, name).source
+        self._assert_agree(source, self._texts(name), monkeypatch)
+
+    @pytest.mark.parametrize("source", EXTRA)
+    def test_the_scan_and_the_per_call_path_agree_on_the_notation(
+        self, source, monkeypatch
+    ):
+        self._assert_agree(source, self._texts(source), monkeypatch)
 
 
 class TestGrammarsThatCannotWork:
