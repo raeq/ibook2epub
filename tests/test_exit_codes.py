@@ -227,8 +227,9 @@ class TestTheDocumentedTableMatchesTheCode:
         # Its docstring listed codes by number, and four of them had moved on:
         # 5 was given as 1 and as 2, 7 as 1, and 6 as 2 (#23). exits defines
         # every code once, so the docstring points there instead.
-        returns = (run.main.__doc__ or "").split(":return:", 1)[1]
+        _, marker, returns = (run.main.__doc__ or "").partition(":return:")
 
+        assert marker
         assert "exits" in returns
         assert re.findall(r"\b\d+\b", returns) == []
 
