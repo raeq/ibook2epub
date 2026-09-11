@@ -18,10 +18,12 @@ metadata out of it.
 
 from __future__ import annotations
 
+import lzma
 import posixpath
 import re
 import shutil
 import subprocess
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -45,6 +47,25 @@ DC_NS = "http://purl.org/dc/elements/1.1/"
 #: can still expand to something far larger, and this limit does not prevent
 #: that. It exists to reject implausible files early, not as a memory bound.
 MAX_XML_BYTES = 16 * 1024 * 1024
+
+#: What reading a damaged member can raise. A bad CRC is a BadZipFile, but a
+#: damaged compressed stream raises out of its decompressor instead: zlib.error
+#: for deflate and lzma.LZMAError for LZMA, neither of them a BadZipFile or an
+#: OSError (bzip2's is an OSError). zipfile also raises NotImplementedError for
+#: a method it does not implement, RuntimeError for an encrypted member, and
+#: EOFError when a member holds less data than the directory declares. Every
+#: caller that must survive a damaged archive catches this one set, so the next
+#: such error is added in one place (#21).
+UNREADABLE_MEMBER: tuple[type[Exception], ...] = (
+    BadZipFile,
+    OSError,
+    EOFError,
+    NotImplementedError,
+    RuntimeError,
+    ValueError,
+    zlib.error,
+    lzma.LZMAError,
+)
 
 EPUBCHECK = "epubcheck"
 
@@ -319,7 +340,7 @@ class _ArchiveMembers:  # pylint: disable=too-few-public-methods
             )
         try:
             return self.archive.read(name)
-        except (BadZipFile, OSError) as exc:
+        except UNREADABLE_MEMBER as exc:
             raise ValidationError(f"could not read {name}: {exc}") from exc
 
 
@@ -696,12 +717,11 @@ def validate_archive(path: Path) -> list[str]:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
         return [f"could not open: {exc}"]
-    except (EOFError, NotImplementedError, RuntimeError, ValueError) as exc:
-        # zipfile raises NotImplementedError for a compression method it does
-        # not implement, RuntimeError for an encrypted member, and EOFError
-        # when a member holds less data than the directory declares. --verify is
-        # the one command whose job is finding damage, so it must report a
-        # hostile archive rather than die on it and check nothing further.
+    except UNREADABLE_MEMBER as exc:
+        # Everything else a damaged member raises: BadZipFile and OSError are
+        # caught above, each with its own wording. --verify is the one command
+        # whose job is finding damage, so it must report a hostile archive
+        # rather than die on it and check nothing further.
         return [f"unreadable archive: {exc}"]
 
     return problems

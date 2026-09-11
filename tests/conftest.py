@@ -40,8 +40,11 @@ module, so this map saves a search:
 ``spec`` is exercised through the modules that use it rather than directly.
 """
 
+import lzma
 import os
+import zlib
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 import pytest
 
@@ -50,6 +53,14 @@ import pytest
 needs_permissions = pytest.mark.skipif(
     not hasattr(os, "geteuid") or os.geteuid() == 0,
     reason="root ignores permission bits, so this test cannot fail",
+)
+
+#: Each compression method, with what its decompressor raises for a damaged
+#: stream. Neither is a BadZipFile or an OSError (#21).
+damaged_streams = pytest.mark.parametrize(
+    ("method", "raising"),
+    [(ZIP_DEFLATED, zlib.error), (ZIP_LZMA, lzma.LZMAError)],
+    ids=["deflate", "lzma"],
 )
 
 # Files every synthetic package gets. The bogus ``mimetype`` and the Apple
@@ -160,3 +171,48 @@ def remove_tree(path: Path) -> None:
         else:
             child.rmdir()
     path.rmdir()
+
+
+def recompress(path: Path, method: int) -> Path:
+    """Rewrite an archive with every member but ``mimetype`` compressed by *method*."""
+    with ZipFile(path) as reading:
+        members = [(info, reading.read(info.filename)) for info in reading.infolist()]
+    with ZipFile(path, "w") as writing:
+        for info, data in members:
+            fresh = ZipInfo(info.filename, date_time=info.date_time)
+            fresh.compress_type = ZIP_STORED if info.filename == "mimetype" else method
+            writing.writestr(fresh, data)
+    return path
+
+
+def corrupt_member(path: Path, member: str, raising: type[Exception]) -> Path:
+    """
+    Damage one member's compressed data so that reading it raises *raising*.
+
+    A flipped byte in a stored member is a CRC mismatch, which zipfile reports
+    as BadZipFile. In a deflated or LZMA member a flip can break the stream
+    instead, and then the decompressor raises its own error. The first byte
+    whose flip does that is the one left flipped.
+    """
+    raw = path.read_bytes()
+    with ZipFile(path) as archive:
+        info = archive.getinfo(member)
+    header = info.header_offset
+    start = (
+        header
+        + 30
+        + int.from_bytes(raw[header + 26 : header + 28], "little")
+        + int.from_bytes(raw[header + 28 : header + 30], "little")
+    )
+    for offset in range(info.compress_size):
+        damaged = bytearray(raw)
+        damaged[start + offset] ^= 0xFF
+        path.write_bytes(bytes(damaged))
+        try:
+            with ZipFile(path) as archive:
+                archive.read(member)
+        except raising:
+            return path
+        except (BadZipFile, EOFError, zlib.error, lzma.LZMAError):
+            continue
+    raise AssertionError(f"no one-byte flip of {member} raises {raising.__name__}")

@@ -15,6 +15,7 @@ from epubconvert.export.archive import zip_package
 from epubconvert.run import run
 from epubconvert.utils import exits
 from epubconvert.utils.opf import Package
+from tests.conftest import corrupt_member, damaged_streams, recompress
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0"
@@ -591,8 +592,8 @@ class TestMalformedArchives:
 
     def test_a_corrupt_member_is_named(self, tmp_path):
         # Stored rather than deflated: flipping a byte then gives the CRC
-        # mismatch testzip() reports, where corrupting a deflate stream raises
-        # out of zlib instead and never reaches the check.
+        # mismatch testzip() reports by name. A damaged deflate or LZMA stream
+        # raises from its decompressor instead, which the next test covers.
         path = tmp_path / "Corrupt.epub"
         with ZipFile(path, "w", ZIP_STORED) as archive:
             archive.writestr("mimetype", "application/epub+zip")
@@ -606,6 +607,30 @@ class TestMalformedArchives:
         problems = validate.validate_archive(path)
 
         assert any(problem.startswith("corrupt member:") for problem in problems)
+
+    @damaged_streams
+    def test_a_corrupt_compressed_member_is_reported(self, tmp_path, method, raising):
+        # Regression (#21): testzip() inflates every member, and a damaged
+        # stream raised zlib.error or lzma.LZMAError straight out of the check.
+        path = recompress(write_epub(tmp_path / "Corrupt.epub"), method)
+        corrupt_member(path, "OEBPS/content.opf", raising)
+
+        problems = validate.validate_archive(path)
+
+        assert any(problem.startswith("unreadable archive:") for problem in problems)
+
+    @damaged_streams
+    def test_a_corrupt_package_document_is_a_validation_error(
+        self, tmp_path, method, raising
+    ):
+        # read_package is how a zipped book in the library is named from its
+        # own metadata, and that caller treats ValidationError as a book that
+        # cannot describe itself.
+        path = recompress(write_epub(tmp_path / "Corrupt.epub"), method)
+        corrupt_member(path, "OEBPS/content.opf", raising)
+
+        with ZipFile(path) as archive, pytest.raises(validate.ValidationError):
+            validate.read_package(archive)
 
     def test_an_oversized_package_document_is_refused(self, tmp_path, monkeypatch):
         # A hostile or broken book should not be parsed into memory whole.

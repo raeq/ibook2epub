@@ -19,7 +19,6 @@ from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
-from zipfile import BadZipFile
 
 from ..collect.annotations import STDOUT
 from ..collect.annotations import collect as collect_annotations
@@ -27,6 +26,7 @@ from ..collect.annotations import for_book as annotations_for_book
 from ..collect.annotations import index_by_book as index_annotations
 from ..collect.coredata import ContainerUnavailableError
 from ..collect.validate import (
+    UNREADABLE_MEMBER,
     ArchiveInvalidError,
     ValidationOptions,
     epubcheck_available,
@@ -512,11 +512,12 @@ def _embed_in_shelf(
                         len(mine),
                         printable(target.name),
                     )
-            except (OSError, BadZipFile, ArchiveInvalidError) as exc:
+            except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
                 # BadZipFile is not an OSError, so one damaged archive used to
                 # abort the whole refresh and every book after it went
-                # untouched. A damaged archive is an expected state: --verify
-                # exists to find them.
+                # untouched; nor is what a damaged compressed stream raises,
+                # which did the same until #21. A damaged archive is an
+                # expected state: --verify exists to find them.
                 logger.error("Could not refresh %s: %s", printable(target.name), exc)
     if converted:
         logger.info("Refreshed annotations in %d book(s).", changed)
