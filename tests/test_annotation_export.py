@@ -36,7 +36,12 @@ from epubconvert.export.naming import (
 )
 from epubconvert.run import run
 from epubconvert.utils.policy import NamingPolicy
-from tests.conftest import make_metadata_package
+from tests.conftest import (
+    corrupt_member,
+    damaged_streams,
+    make_metadata_package,
+    recompress,
+)
 from tests.test_annotations import (
     highlight,
     library_row,
@@ -429,6 +434,23 @@ class TestRefreshingAnnotationsWithoutConverting:
         # Added to the library after the conversion, so it is not on the shelf
         # and this mode must not put it there.
         assert not (output_dir / "Third.epub").exists()
+
+    @damaged_streams
+    def test_a_damaged_archive_is_reported_and_left_alone(
+        self, tmp_path, output_dir, monkeypatch, method, raising
+    ):
+        # Regression (#21): replace_annotations raised zlib.error or
+        # lzma.LZMAError, which the refresh did not catch, so one damaged
+        # archive ended the refresh for every book after it.
+        library = self._shelf(tmp_path, output_dir, monkeypatch)
+        target = output_dir / "Leviathan Wakes.epub"
+        corrupt_member(recompress(target, method), "OEBPS/content.opf", raising)
+        damaged = target.read_bytes()
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
+
+        assert code == 0
+        assert target.read_bytes() == damaged
 
 
 class TestAnnotationsOnly:

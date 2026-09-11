@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- A damaged compressed member no longer ends a run with a traceback. Reading
+  one raises `zlib.error` for deflate or `lzma.LZMAError` for LZMA, and nothing
+  caught either. `--verify` stopped at the first such archive instead of
+  reporting it; a run naming zipped books from their own metadata, as
+  `--name-by author-title` does, stopped on one damaged book in the library
+  before writing anything; and `-ar` gave up on every book after a damaged
+  archive. Now `--verify` counts the archive as damaged, the book keeps its own
+  filename, and the refresh names the archive it could not update and goes on.
+  ([#21](https://github.com/raeq/ibook2epub/issues/21))
+
 ## [2.3.1] - 2026-09-11
 
 ### Changed

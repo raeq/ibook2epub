@@ -26,7 +26,14 @@ from epubconvert.export.archive import (
 )
 from epubconvert.export.naming import PortableNaming, StripNaming
 from epubconvert.run import cli, planning, run
-from tests.conftest import make_package, needs_permissions
+from epubconvert.utils import exits
+from tests.conftest import (
+    corrupt_member,
+    damaged_streams,
+    make_package,
+    needs_permissions,
+    recompress,
+)
 
 disarm = pytest.importorskip("disarm", reason="portable naming needs the disarm extra")
 
@@ -274,6 +281,22 @@ class TestVerifySurvivesAnUnreadableArchive:
 
         assert checked == 2
         assert damaged == 1
+
+    @damaged_streams
+    def test_a_corrupt_compressed_member_is_reported_not_raised(
+        self, tmp_path, output_dir, method, raising
+    ):
+        # Regression (#21): a damaged deflate or LZMA stream raises from its
+        # decompressor rather than as BadZipFile, and --verify died on the first.
+        _minimal_archive(output_dir / "Good.epub")
+        bad = recompress(_minimal_archive(output_dir / "Bad.epub"), method)
+        corrupt_member(bad, "content.opf", raising)
+        source = tmp_path / "lib"
+        source.mkdir()
+
+        code = run.main(["-s", str(source), "-o", str(output_dir), "--verify", "-q"])
+
+        assert code == exits.DAMAGED
 
 
 class TestVerifyRefusesAMissingDirectory:

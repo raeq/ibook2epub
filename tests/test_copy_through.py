@@ -23,7 +23,7 @@ from zipfile import ZipFile
 from epubconvert.collect import source as source_module
 from epubconvert.export import archive, naming
 from epubconvert.run import convert, planning, run
-from tests.conftest import make_package
+from tests.conftest import corrupt_member, damaged_streams, make_package, recompress
 
 
 def _zipped_book(path: Path) -> bytes:
@@ -835,3 +835,34 @@ class TestCopiesAreNamedOnce:
 
         captured = capsys.readouterr()
         assert "could not be named" in captured.out + captured.err
+
+
+class TestADamagedZippedBookIsStillTakenAlong:
+    """
+    A zipped book whose package document cannot be inflated cannot be named
+    from its metadata. It keeps its own filename, and the run goes on around it.
+    """
+
+    @damaged_streams
+    def test_a_corrupt_package_document_does_not_stop_the_run(
+        self, tmp_path, output_dir, method, raising
+    ):
+        # Regression (#21): naming read content.opf through a reader that
+        # caught BadZipFile and OSError only, so one damaged book raised
+        # zlib.error or lzma.LZMAError and the run wrote nothing at all.
+        library = tmp_path / "lib"
+        library.mkdir()
+        _book_with_metadata(library / "Earthsea.epub")
+        damaged = library / "Damaged.epub"
+        _book_with_metadata(damaged)
+        corrupt_member(recompress(damaged, method), "content.opf", raising)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", *AUTHOR_TITLE, "-q"]
+        )
+
+        assert code == 0
+        assert sorted(path.name for path in output_dir.glob("*.epub")) == [
+            "Damaged.epub",
+            "Le Guin, Ursula K. - A Wizard of Earthsea.epub",
+        ]

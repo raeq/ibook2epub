@@ -5,6 +5,9 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import importlib.util
+import sys
+import zlib
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
@@ -15,6 +18,7 @@ from epubconvert.export.archive import zip_package
 from epubconvert.run import run
 from epubconvert.utils import exits
 from epubconvert.utils.opf import Package
+from tests.conftest import corrupt_member, damaged_streams, recompress
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0"
@@ -575,6 +579,34 @@ class TestSortNameFromEpub3Refines:
         assert from_archive.creator_sort is None
 
 
+class TestDecompressorsThatMayBeMissing:
+    """
+    CPython builds ``lzma`` only where liblzma is present, and zipfile imports
+    it only when a member needs it. validate must import without it.
+    """
+
+    def test_validate_imports_without_lzma(self, monkeypatch):
+        # From Copilot's review of #22: UNREADABLE_MEMBER named lzma.LZMAError
+        # unconditionally, so on a Python built without liblzma validate could
+        # not be imported, and with it no command could run.
+        monkeypatch.setitem(sys.modules, "lzma", None)
+        spec = importlib.util.spec_from_file_location(
+            "epubconvert.collect._validate_without_lzma", validate.__file__
+        )
+        assert spec is not None
+        assert spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        # dataclass looks its class's module up in sys.modules while it runs.
+        monkeypatch.setitem(sys.modules, spec.name, module)
+
+        spec.loader.exec_module(module)
+
+        assert zlib.error in module.UNREADABLE_MEMBER
+        assert not any(
+            error.__name__ == "LZMAError" for error in module.UNREADABLE_MEMBER
+        )
+
+
 class TestMalformedArchives:
     """
     Structural checks over books that are wrong in ways a real library
@@ -591,8 +623,8 @@ class TestMalformedArchives:
 
     def test_a_corrupt_member_is_named(self, tmp_path):
         # Stored rather than deflated: flipping a byte then gives the CRC
-        # mismatch testzip() reports, where corrupting a deflate stream raises
-        # out of zlib instead and never reaches the check.
+        # mismatch testzip() reports by name. A damaged deflate or LZMA stream
+        # raises from its decompressor instead, which the next test covers.
         path = tmp_path / "Corrupt.epub"
         with ZipFile(path, "w", ZIP_STORED) as archive:
             archive.writestr("mimetype", "application/epub+zip")
@@ -606,6 +638,30 @@ class TestMalformedArchives:
         problems = validate.validate_archive(path)
 
         assert any(problem.startswith("corrupt member:") for problem in problems)
+
+    @damaged_streams
+    def test_a_corrupt_compressed_member_is_reported(self, tmp_path, method, raising):
+        # Regression (#21): testzip() inflates every member, and a damaged
+        # stream raised zlib.error or lzma.LZMAError straight out of the check.
+        path = recompress(write_epub(tmp_path / "Corrupt.epub"), method)
+        corrupt_member(path, "OEBPS/content.opf", raising)
+
+        problems = validate.validate_archive(path)
+
+        assert any(problem.startswith("unreadable archive:") for problem in problems)
+
+    @damaged_streams
+    def test_a_corrupt_package_document_is_a_validation_error(
+        self, tmp_path, method, raising
+    ):
+        # read_package is how a zipped book in the library is named from its
+        # own metadata, and that caller treats ValidationError as a book that
+        # cannot describe itself.
+        path = recompress(write_epub(tmp_path / "Corrupt.epub"), method)
+        corrupt_member(path, "OEBPS/content.opf", raising)
+
+        with ZipFile(path) as archive, pytest.raises(validate.ValidationError):
+            validate.read_package(archive)
 
     def test_an_oversized_package_document_is_refused(self, tmp_path, monkeypatch):
         # A hostile or broken book should not be parsed into memory whole.

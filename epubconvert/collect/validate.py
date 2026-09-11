@@ -22,6 +22,7 @@ import posixpath
 import re
 import shutil
 import subprocess
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -36,6 +37,17 @@ from ..utils.contained import is_remote, open_contained, resolve
 from ..utils.opf import Package
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
+# CPython builds lzma only where liblzma is present, and zipfile imports it
+# only when a member needs it. Without it no member can raise LZMAError, so
+# there is nothing to catch -- but importing it unconditionally would stop
+# this module, and every command, from loading at all.
+try:
+    from lzma import LZMAError
+except ImportError:
+    _LZMA_ERRORS: tuple[type[Exception], ...] = ()
+else:
+    _LZMA_ERRORS = (LZMAError,)
+
 CONTAINER_NS = "urn:oasis:names:tc:opendocument:xmlns:container"
 OPF_NS = "http://www.idpf.org/2007/opf"
 DC_NS = "http://purl.org/dc/elements/1.1/"
@@ -45,6 +57,25 @@ DC_NS = "http://purl.org/dc/elements/1.1/"
 #: can still expand to something far larger, and this limit does not prevent
 #: that. It exists to reject implausible files early, not as a memory bound.
 MAX_XML_BYTES = 16 * 1024 * 1024
+
+#: What reading a damaged member can raise. A bad CRC is a BadZipFile, but a
+#: damaged compressed stream raises out of its decompressor instead: zlib.error
+#: for deflate and lzma.LZMAError for LZMA, neither of them a BadZipFile or an
+#: OSError (bzip2's is an OSError). zipfile also raises NotImplementedError for
+#: a method it does not implement, RuntimeError for an encrypted member, and
+#: EOFError when a member holds less data than the directory declares. Every
+#: caller that must survive a damaged archive catches this one set, so the next
+#: such error is added in one place (#21).
+UNREADABLE_MEMBER: tuple[type[Exception], ...] = (
+    BadZipFile,
+    OSError,
+    EOFError,
+    NotImplementedError,
+    RuntimeError,
+    ValueError,
+    zlib.error,
+    *_LZMA_ERRORS,
+)
 
 EPUBCHECK = "epubcheck"
 
@@ -319,7 +350,7 @@ class _ArchiveMembers:  # pylint: disable=too-few-public-methods
             )
         try:
             return self.archive.read(name)
-        except (BadZipFile, OSError) as exc:
+        except UNREADABLE_MEMBER as exc:
             raise ValidationError(f"could not read {name}: {exc}") from exc
 
 
@@ -696,12 +727,11 @@ def validate_archive(path: Path) -> list[str]:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
         return [f"could not open: {exc}"]
-    except (EOFError, NotImplementedError, RuntimeError, ValueError) as exc:
-        # zipfile raises NotImplementedError for a compression method it does
-        # not implement, RuntimeError for an encrypted member, and EOFError
-        # when a member holds less data than the directory declares. --verify is
-        # the one command whose job is finding damage, so it must report a
-        # hostile archive rather than die on it and check nothing further.
+    except UNREADABLE_MEMBER as exc:
+        # Everything else a damaged member raises: BadZipFile and OSError are
+        # caught above, each with its own wording. --verify is the one command
+        # whose job is finding damage, so it must report a hostile archive
+        # rather than die on it and check nothing further.
         return [f"unreadable archive: {exc}"]
 
     return problems

@@ -41,15 +41,40 @@ module, so this map saves a search:
 """
 
 import os
+import zlib
 from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
+
+from epubconvert.collect.validate import UNREADABLE_MEMBER
+
+# lzma is optional in CPython, so its case is skipped, not failed, on a Python
+# built without it.
+try:
+    from lzma import LZMAError
+except ImportError:
+    _LZMA_CASE = pytest.param(
+        ZIP_LZMA,
+        None,
+        id="lzma",
+        marks=pytest.mark.skip(reason="this Python was built without lzma"),
+    )
+else:
+    _LZMA_CASE = pytest.param(ZIP_LZMA, LZMAError, id="lzma")
 
 #: Root ignores permission bits, so a test that revokes them asserts nothing.
 #: hasattr guards Windows, which has no geteuid at all.
 needs_permissions = pytest.mark.skipif(
     not hasattr(os, "geteuid") or os.geteuid() == 0,
     reason="root ignores permission bits, so this test cannot fail",
+)
+
+#: Each compression method, with what its decompressor raises for a damaged
+#: stream. Neither is a BadZipFile or an OSError (#21).
+damaged_streams = pytest.mark.parametrize(
+    ("method", "raising"),
+    [pytest.param(ZIP_DEFLATED, zlib.error, id="deflate"), _LZMA_CASE],
 )
 
 # Files every synthetic package gets. The bogus ``mimetype`` and the Apple
@@ -160,3 +185,48 @@ def remove_tree(path: Path) -> None:
         else:
             child.rmdir()
     path.rmdir()
+
+
+def recompress(path: Path, method: int) -> Path:
+    """Rewrite an archive with every member but ``mimetype`` compressed by *method*."""
+    with ZipFile(path) as reading:
+        members = [(info, reading.read(info.filename)) for info in reading.infolist()]
+    with ZipFile(path, "w") as writing:
+        for info, data in members:
+            fresh = ZipInfo(info.filename, date_time=info.date_time)
+            fresh.compress_type = ZIP_STORED if info.filename == "mimetype" else method
+            writing.writestr(fresh, data)
+    return path
+
+
+def corrupt_member(path: Path, member: str, raising: type[Exception]) -> Path:
+    """
+    Damage one member's compressed data so that reading it raises *raising*.
+
+    A flipped byte in a stored member is a CRC mismatch, which zipfile reports
+    as BadZipFile. In a deflated or LZMA member a flip can break the stream
+    instead, and then the decompressor raises its own error. The first byte
+    whose flip does that is the one left flipped.
+    """
+    raw = path.read_bytes()
+    with ZipFile(path) as archive:
+        info = archive.getinfo(member)
+    header = info.header_offset
+    start = (
+        header
+        + 30
+        + int.from_bytes(raw[header + 26 : header + 28], "little")
+        + int.from_bytes(raw[header + 28 : header + 30], "little")
+    )
+    for offset in range(info.compress_size):
+        damaged = bytearray(raw)
+        damaged[start + offset] ^= 0xFF
+        path.write_bytes(bytes(damaged))
+        try:
+            with ZipFile(path) as archive:
+                archive.read(member)
+        except raising:
+            return path
+        except UNREADABLE_MEMBER:
+            continue
+    raise AssertionError(f"no one-byte flip of {member} raises {raising.__name__}")
