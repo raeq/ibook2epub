@@ -31,7 +31,8 @@ from .planning import COLLISION_MODES, SKIP, STATUSES
 #: because a flag the user typed that changes nothing is a run doing something
 #: other than what was asked, silently. One list for both modes, so the next
 #: conversion flag is not forgotten by one of them. --epubcheck comes before
-#: --validate, which it implies, so the flag named is the one typed. Judged
+#: --check-references, its newer name, and both come before --validate, which
+#: they imply, so the flag named is the one typed. Judged
 #: against the parser's defaults rather than by truthiness, so a flag with a
 #: real default -- --min-free, -m -- is caught too; one typed *as* its default
 #: is indistinguishable from untyped and passes, which changes nothing.
@@ -47,6 +48,7 @@ CONVERSION_ONLY = (
     ("verify", "--verify"),
     ("covers", "--covers"),
     ("epubcheck", "--epubcheck"),
+    ("check_references", "--check-references"),
     ("validate", "--validate"),
     ("refresh", "--refresh"),
     ("skip_incomplete", "--skip-incomplete"),
@@ -407,13 +409,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     integrity.add_argument(
-        "--epubcheck",
+        "--check-references",
         action="store_true",
         help=(
-            "Also run the external 'epubcheck' tool on each archive. Implies "
-            "--validate and requires epubcheck on PATH."
+            "Also check the references inside each archive: links and their "
+            "fragments, images, stylesheets and fonts, by the URL Standard and "
+            "EPUB 3.3, under epubcheck's message IDs. Built in, so nothing else "
+            "needs installing. Implies --validate. --epubcheck is an older name "
+            "for it."
         ),
     )
+    # The name from when this ran the external epubcheck, kept so a script that
+    # passes it still works. It runs the built-in check now.
+    integrity.add_argument("--epubcheck", action="store_true", help=argparse.SUPPRESS)
     integrity.add_argument(
         "--verify",
         action="store_true",
@@ -639,6 +647,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--list and --verify cannot be combined")
 
     if args.epubcheck:
+        args.check_references = True
+    if args.check_references:
         args.validate = True
 
     _check_annotation_flags(parser, args)

@@ -37,13 +37,13 @@ from __future__ import annotations
 
 import contextlib
 import json
-import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from .. import __version__
+from ..grammar import CFI
 from ..utils import schema
 from ..utils.app_logger import logger
 from ..utils.contained import escapes
@@ -62,12 +62,6 @@ STDOUT = "-"
 #: than trust the number, rows are filtered on having text, which is the thing
 #: that actually makes an annotation exportable.
 HIGHLIGHT_TYPE = 2
-
-#: The document a CFI names, when it names one: the bracketed assertion in the
-#: step before the "!" that separates the spine path from the path within it.
-#: Anchored on the *last* such assertion. Taking the first matched a spine-level
-#: assertion in ``/6[spine]/46[ch15.xhtml]!``, which resolves to nothing.
-CFI_DOCUMENT = re.compile(r"\[([^\]]+)\](?=[^!\[\]]*!)")
 
 #: Characters a text fragment leaves alone. The rest are percent-encoded.
 FRAGMENT_SAFE = ""
@@ -160,12 +154,35 @@ def _assertion_of(cfi: str) -> str | None:
     """
     Pull the ID assertion out of a CFI.
 
+    It is the assertion on the step just before the first "!", the step that
+    names the spine item the rest of the CFI points inside; the CFI is read by
+    :data:`~epubconvert.grammar.syntaxes.CFI`. An assertion further left, as in
+    ``/6[spine]/46[ch15.xhtml]!``, names no document. Escapes such as ``^]``
+    are undone, so an id holding a bracket is looked up as the manifest writes
+    it.
+
     :param cfi: The CFI Apple recorded.
 
-    :return: What it asserts, or None if it asserts nothing.
+    :return: What it asserts, or None if it asserts nothing or is no CFI.
     """
-    found = CFI_DOCUMENT.findall(cfi)
-    return found[-1] if found else None
+    parsed = CFI.match(cfi)
+    indirection = None if parsed is None else parsed.find("redirected_path")
+    if parsed is None or indirection is None:
+        return None
+    step = next(
+        (step for step in parsed.find_all("step") if step.end == indirection.start),
+        None,
+    )
+    assertion = None if step is None else step.find("assertion")
+    if assertion is None:
+        return None
+    value = assertion.children[0]
+    if value.name != "value" or value.start != assertion.start:
+        return None
+    return "".join(
+        part.child("special").text if part.name == "escaped" else part.text
+        for part in value.children
+    )
 
 
 def _href_of(cfi: str, book: Package | None) -> str | None:

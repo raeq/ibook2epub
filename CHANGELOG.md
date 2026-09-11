@@ -7,6 +7,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- `--check-references` checks the references inside each archive: links and
+  their fragments, images, stylesheets and fonts. It parses every URL by the
+  WHATWG URL Standard, applies EPUB 3.3's rule for URLs that leave the
+  container, and reports under epubcheck's message IDs, with nothing else to
+  install. It implies `--validate`, runs once the structural check has passed,
+  and fails a book on an error but not on a warning. Replayed over one
+  2,798-book library it took 11.6 s on 10 processes and agreed with epubcheck
+  exactly on RSC-012, RSC-030, RSC-033 and HTM-025.
+
+### Changed
+
+- `--epubcheck` no longer runs the external epubcheck. It is now an older name
+  for `--check-references`, so a script that passes it keeps working without a
+  Java runtime, but it gets the reference check alone: epubcheck's schema, CSS
+  and metadata rules are no longer applied. A run no longer stops with exit
+  code `6` when epubcheck is not on `PATH`, so `6` now means only that a
+  required extra is not installed.
+
 ### Fixed
 
 - A damaged compressed member no longer ends a run with a traceback. Reading
@@ -18,6 +38,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   archive. Now `--verify` counts the archive as damaged, the book keeps its own
   filename, and the refresh names the archive it could not update and goes on.
   ([#21](https://github.com/raeq/ibook2epub/issues/21))
+
+- The small syntaxes a book carries are read by grammars rather than by
+  regular expressions and string splitting: book identifiers, EPUB CFIs, the
+  fragments of links, and the package document's `version` and `properties`.
+  Six answers change. A manifest item whose `properties` only contain the
+  word, such as `not-cover-image`, is no longer taken for the cover. A CFI
+  whose ID assertion holds an escaped bracket resolves to its document. An
+  identifier of superscript digits no longer stops the run with a
+  `ValueError`. A note line that starts with a non-ASCII digit no longer gets a
+  backslash that Markdown shows. A forged start marker followed by white space
+  is escaped like any other. And the reference check applies EPUB 3's rules
+  only to a package whose `version` is a 3, with leading zeros, dotted digits
+  and surrounding white space allowed: `" 3.0"` and `"03.0"` now count as EPUB
+  3, and `"30"`, `"3x"` and `"3.0beta"`, which only began with a 3, no longer
+  do.
 
 ## [2.3.1] - 2026-09-11
 

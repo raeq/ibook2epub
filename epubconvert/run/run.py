@@ -24,13 +24,9 @@ from ..collect.annotations import STDOUT
 from ..collect.annotations import collect as collect_annotations
 from ..collect.annotations import for_book as annotations_for_book
 from ..collect.annotations import index_by_book as index_annotations
+from ..collect.checks import ValidationOptions
 from ..collect.coredata import ContainerUnavailableError
-from ..collect.validate import (
-    UNREADABLE_MEMBER,
-    ArchiveInvalidError,
-    ValidationOptions,
-    epubcheck_available,
-)
+from ..collect.validate import UNREADABLE_MEMBER, ArchiveInvalidError
 from ..export.archive import (
     collect_copyable,
     collect_package_dirs,
@@ -566,7 +562,9 @@ def _run_verify(args: argparse.Namespace) -> int:
         logger.critical("Output directory does not exist: %s", args.output_dir)
         return exits.NO_OUTPUT
 
-    checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
+    checked, damaged, broken = verify_output(
+        args.output_dir, references=args.check_references
+    )
     if not checked:
         print(f"No archives found in {args.output_dir}.")
         return 0
@@ -664,7 +662,9 @@ def _run_export(
     options = ExportOptions(
         covers=args.covers,
         min_free_mb=args.min_free,
-        validation=ValidationOptions(enabled=args.validate, epubcheck=args.epubcheck),
+        validation=ValidationOptions(
+            enabled=args.validate, references=args.check_references
+        ),
         plan=_plan_options(args),
         annotations=(
             index_annotations(found)
@@ -867,13 +867,6 @@ def _check_environment(args: argparse.Namespace) -> int | None:
             logger.critical("Source directory does not exist: %s", args.source_dir)
         return exits.NO_SOURCE
 
-    if args.epubcheck and not epubcheck_available():
-        logger.critical(
-            "--epubcheck needs the 'epubcheck' tool on PATH "
-            "(brew install epubcheck, or see w3c.github.io/epubcheck)"
-        )
-        return exits.MISSING_TOOL
-
     return None
 
 
@@ -901,7 +894,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         policy = build_policy(args.portable_names, args.name_by)
     except PortableNamesUnavailableError as exc:
         logger.critical("%s", exc)
-        return exits.MISSING_TOOL
+        return exits.MISSING_EXTRA
 
     _log_preamble(args, policy)
 

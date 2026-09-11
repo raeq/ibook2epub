@@ -51,6 +51,31 @@ def _inside(tree: ast.Module, node: ast.AST, function: str) -> bool:
 
 SURROGATE = "Bad\udce9Name.epub"
 
+#: The functions allowed to call ``.encode`` and ``.decode``, as (file,
+#: function). naming.py's pair is the surrogate-safe path every name is measured
+#: through. The URL modules are the other exception, and they measure no name:
+#: the URL and Encoding Standards define percent-encoding over UTF-8 and IDNA
+#: over punycode. utf8_encode replaces lone surrogates first and the decoder
+#: replaces malformed bytes, so neither can raise; the punycode pair sees only
+#: prepared labels or letters, digits and hyphens, and decoding, the half that
+#: can fail, raises UnicodeError whatever the reason, which its caller catches.
+_ENCODERS = frozenset(
+    {
+        ("naming.py", "encode_name"),
+        ("percent.py", "utf8_encode"),
+        ("urlhost.py", "_punycode_encode"),
+        ("urlhost.py", "_punycode_decode"),
+    }
+)
+_DECODERS = frozenset(
+    {
+        ("naming.py", "truncate_bytes"),
+        ("percent.py", "utf8_decode_without_bom"),
+        ("urlhost.py", "_punycode_encode"),
+        ("urlhost.py", "_punycode_decode"),
+    }
+)
+
 
 class TestRuleInspectBeforeWriting:
     """A book is inspected for DRM and stubs before anything is written.
@@ -298,7 +323,10 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                     continue
                 if node.func.attr != "encode":
                     continue
-                if path.name == "naming.py" and _inside(tree, node, "encode_name"):
+                if any(
+                    path.name == name and _inside(tree, node, function)
+                    for name, function in _ENCODERS
+                ):
                     continue
                 offenders.append(f"{path}:{node.lineno}")
 
@@ -315,7 +343,10 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                     continue
                 if node.func.attr != "decode":
                     continue
-                if path.name == "naming.py" and _inside(tree, node, "truncate_bytes"):
+                if any(
+                    path.name == name and _inside(tree, node, function)
+                    for name, function in _DECODERS
+                ):
                     continue
                 offenders.append(f"{path}:{node.lineno}")
 
@@ -897,8 +928,9 @@ class TestRuleEveryEncryptedBlockNamesItsAlgorithm:
 
 class TestRuleImportsRunDownhill:
     """
-    The package is four layers, and each may import only its own and those
-    below it: ``utils``, then ``collect``, then ``export``, then ``run``.
+    The package is five layers, and each may import only its own and those
+    below it: ``utils`` and ``grammar``, which import nothing of ours, then
+    ``collect``, then ``export``, then ``run``.
 
     The layers exist to say what depends on what, which they do only while
     something checks. Two edges pointed the wrong way before the split --
@@ -912,7 +944,7 @@ class TestRuleImportsRunDownhill:
     """
 
     #: Bottom to top. A module may import from its own layer and any earlier.
-    LAYERS = ("utils", "collect", "export", "run")
+    LAYERS = ("utils", "grammar", "collect", "export", "run")
 
     @staticmethod
     def _crossings(layer: str, allowed: frozenset[str]) -> list[str]:
@@ -940,6 +972,12 @@ class TestRuleImportsRunDownhill:
     def test_utils_imports_no_layer(self):
         self._check("utils")
 
+    def test_grammar_imports_no_layer(self):
+        # Stricter than its place in LAYERS: like utils it imports nothing of
+        # ours, so any layer may use it (#28).
+        crossings = self._crossings("grammar", frozenset())
+        assert crossings == [], f"grammar may import nothing of ours: {crossings}"
+
     def test_collect_imports_only_utils(self):
         self._check("collect")
 
@@ -950,8 +988,8 @@ class TestRuleImportsRunDownhill:
         self._check("run")
 
     def test_every_layer_on_disk_is_named_here(self):
-        # A fifth directory added without a rule would be unchecked, and the
-        # four tests above would still pass.
+        # A directory added without a rule would be unchecked, and the tests
+        # above would still pass.
         on_disk = {
             path.name
             for path in Path("epubconvert").iterdir()

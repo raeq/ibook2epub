@@ -117,11 +117,10 @@
       "description": "Manifest items must exist as members. Spine idrefs must exist in the manifest. Neither list may be empty.\n\nProblems are capped at five per category with an \"…and N more\" line, because a systematically broken book would otherwise print thousands."
     },
     {
-      "title": "The stricter check, when asked",
-      "file": "epubconvert/validate.py",
-      "line": 475,
-      "pattern": "def run_epubcheck\\(path: Path, timeout: int = 120\\) -> list\\[str\\]:",
-      "description": "The external `epubcheck` tool, run through `subprocess` with a fixed executable resolved by `shutil.which`, no shell, and a timeout.\n\n`ValidationOptions.check` (line 89) only reaches it when the structural checks passed — no point running a two-minute validator over an archive already known to be broken. `cli.py` verifies the tool is on `PATH` at argument-parsing time, so the run fails before doing any work rather than on the first book."
+      "title": "The reference check, when asked",
+      "file": "epubconvert/collect/references.py",
+      "pattern": "def check_file\\(path: Path\\) -> Report:",
+      "description": "The check `--check-references` adds, built in where the external `epubcheck` used to run. It reads every document with expat, never parses a parameter entity, refuses a member over 16 MiB before inflating it, and returns findings rather than raising, so a hostile book costs one refused archive, not the run.\n\n`ValidationOptions.check` in `collect/checks.py` only reaches it when the structural checks passed. Nothing has to be found on `PATH` first, so a run no longer stops for a missing tool."
     }
   ]
 }

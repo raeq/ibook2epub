@@ -178,8 +178,9 @@ usage: ibook2epub [-h] [-m N] [-o OUTPUT_DIR] [-s SOURCE_DIR] [-d]
                   [--no-isbn] [--unknown-shelf SHELF]
                   [--name-by {passthrough,author-title}]
                   [--on-collision {skip,suffix}] [--min-free MB]
-                  [--no-copy-through] [--covers] [--validate] [--epubcheck]
-                  [--verify] [--no-shuffle] [-v] [-q] [--log-file PATH]
+                  [--no-copy-through] [--covers] [--validate]
+                  [--check-references] [--verify] [--no-shuffle] [-v] [-q]
+                  [--log-file PATH]
 
 Convert Apple iBooks epub packages to zipped epub files.
 
@@ -283,9 +284,12 @@ Checking the result:
                         the package document lists is really present. A book
                         that fails is not written, so it is retried on the
                         next run.
-  --epubcheck           Also run the external 'epubcheck' tool on each
-                        archive. Implies --validate and requires epubcheck on
-                        PATH.
+  --check-references    Also check the references inside each archive: links
+                        and their fragments, images, stylesheets and fonts,
+                        by the URL Standard and EPUB 3.3, under epubcheck's
+                        message IDs. Built in, so nothing else needs
+                        installing. Implies --validate. --epubcheck is an
+                        older name for it.
   --verify              Check the archives already in the output directory
                         and report any that are damaged, then exit without
                         converting anything.
@@ -969,7 +973,7 @@ output directory back off disk.
 | `3` | Another run holds the output lock. Retry later. |
 | `4` | The source directory does not exist, or no library was found. |
 | `5` | The output directory could not be created, opened or found. |
-| `6` | A required extra or external tool is not installed. |
+| `6` | A required extra is not installed. |
 | `7` | --verify found at least one damaged archive. |
 | `8` | macOS refused access to the Books library; the terminal needs Full Disk Access. |
 | `130` | Stopped with Ctrl-C. Finished books are intact. |

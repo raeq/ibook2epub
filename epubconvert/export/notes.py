@@ -25,13 +25,13 @@ otherwise forge the marker that ends the generated region.
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..collect.annotations import for_book, index_by_book
 from ..collect.validate import isbn13_of
+from ..grammar import NOTES
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import collapse, printable
@@ -45,13 +45,9 @@ from .naming import encode_name
 #: than putting their first paragraph inside the generated region.
 END_MARKER = "<!-- ibook2epub end — your notes below this line are never modified -->"
 
-#: Matched on a stable prefix, so the human-readable tail above can be reworded
-#: without orphaning every note already in a vault.
-END_PATTERN = re.compile(r"^<!-- ibook2epub end")
-
-#: Carries the digest of the generated region.
+#: Carries the digest of the generated region. Both markers are recognised by
+#: :data:`~epubconvert.grammar.syntaxes.NOTES`.
 START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
-START_PATTERN = re.compile(r"^<!-- ibook2epub sha256=([0-9a-f]{16,64}) -->$")
 
 #: Largest note this will read back. A note of a few hundred highlights is
 #: tens of kilobytes; anything past this is a runaway or a planted file, and
@@ -72,11 +68,6 @@ SIDECAR_SUFFIX = ".md.new"
 #: concern and short enough to read.
 DIGEST_LENGTH = 16
 
-#: Characters that open a block element at the start of a line. A ``> `` prefix
-#: does not neutralise them: inside a blockquote they still open a heading, a
-#: list or a nested quote.
-BLOCK_OPENERS = re.compile(r"^(\s*)([#>+*-]|\d+[.)])")
-
 #: Frontmatter keys this tool owns, which are safe to emit bare because no book
 #: supplies them.
 LITERALS = {"category": "book", "tags": "[books]", "source": "ibook2epub"}
@@ -96,9 +87,15 @@ def _escape(line: str) -> str:
     # A forged end marker would hand the rest of the generated body to the
     # reader's region on the next run. Highlights are already safe because
     # every line carries "> ", but nothing else was.
-    if END_PATTERN.match(line) or START_PATTERN.match(line):
+    if NOTES.match_prefix(line, "end_marker") or NOTES.match(line, "start_marker"):
         return "\\" + line
-    return BLOCK_OPENERS.sub(r"\1\\\2", line, count=1)
+    # A "> " prefix does not neutralise a block opener: inside a blockquote it
+    # still opens a heading, a list or a nested quote.
+    opener = NOTES.match_prefix(line, "block_opener")
+    if opener is None:
+        return line
+    at = opener.child("opener").start
+    return f"{line[:at]}\\{line[at:]}"
 
 
 def _lines(value: object) -> list[str]:
@@ -230,23 +227,23 @@ def split(text: str) -> Split | None:
     :return: The regions, or None when this file is not one of ours.
     """
     lines = normalise(text).split("\n")
-    if not lines or lines[0].rstrip() != "---":
+    if not lines or NOTES.match(lines[0], "fence") is None:
         return None
     for index in range(1, len(lines)):
-        if lines[index].rstrip() != "---":
+        if NOTES.match(lines[index], "fence") is None:
             continue
         if index + 1 >= len(lines):
             return None
-        found = START_PATTERN.match(lines[index + 1].rstrip())
+        found = NOTES.match(lines[index + 1], "start_marker")
         if not found:
             return None
         head = "\n".join(lines[: index + 1]) + "\n"
         rest = lines[index + 2 :]
         for offset, line in enumerate(rest):
-            if END_PATTERN.match(line.rstrip()):
+            if NOTES.match_prefix(line, "end_marker"):
                 return Split(
                     head,
-                    found.group(1),
+                    found.child("digest").text,
                     "\n".join(rest[:offset]) + "\n" if rest[:offset] else "",
                     "\n".join(rest[offset:]),
                 )
@@ -339,12 +336,12 @@ def wrote_it(existing: str) -> bool:
     :return: True when it carries this tool's start marker.
     """
     lines = normalise(existing).split("\n")
-    if not lines or lines[0].rstrip() != "---":
+    if not lines or NOTES.match(lines[0], "fence") is None:
         return False
     for index in range(1, len(lines)):
-        if lines[index].rstrip() == "---":
+        if NOTES.match(lines[index], "fence") is not None:
             return index + 1 < len(lines) and bool(
-                START_PATTERN.match(lines[index + 1].rstrip())
+                NOTES.match(lines[index + 1], "start_marker")
             )
     return False
 
