@@ -39,6 +39,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   filename, and the refresh names the archive it could not update and goes on.
   ([#21](https://github.com/raeq/ibook2epub/issues/21))
 
+- The small syntaxes a book carries are read by grammars rather than by
+  regular expressions and string splitting: book identifiers, EPUB CFIs, the
+  fragments of links, and the package document's `version` and `properties`.
+  Five answers change. A manifest item whose `properties` only contain the
+  word, such as `not-cover-image`, is no longer taken for the cover. A CFI
+  whose ID assertion holds an escaped bracket resolves to its document. An
+  identifier of superscript digits no longer stops the run with a
+  `ValueError`. A note line that starts with a non-ASCII digit no longer gets a
+  backslash that Markdown shows. A forged start marker followed by white space
+  is escaped like any other.
+
 ## [2.3.1] - 2026-09-11
 
 ### Changed

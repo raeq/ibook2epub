@@ -56,6 +56,7 @@ from unicodedata import normalize
 from xml.parsers import expat
 from zipfile import ZipFile
 
+from ..utils.grammars import FRAGMENTS, PACKAGE
 from ..utils.percent import (
     percent_decode,
     utf8_decode_without_bom,
@@ -109,9 +110,6 @@ _SEGMENT_ENCODE_SET = frozenset(chr(point) for point in range(0x7F)) - frozenset
 _CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
 _CSS_URL = re.compile(r"""url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"'\s]*))\s*\)""", re.I)
 _CSS_IMPORT = re.compile(r"""@import\s+(?:"([^"]*)"|'([^']*)')""", re.I)
-#: Fragments that are not ids: a scheme-based pointer such as ``epubcfi(...)``
-#: and the media fragments, which epubcheck also leaves unchecked.
-_NOT_AN_ID = re.compile(r"^(?:[A-Za-z][\w.-]*\(.*\)|(?:t|xywh|track|id|xyn|xyr)=)")
 
 
 class Kind(Enum):
@@ -202,13 +200,18 @@ def _decode_segment(segment: str) -> str:
 
 
 def _fragment_id(fragment: str, svg: bool) -> str | None:
-    """The id a fragment names, or None when it names something else."""
-    fragment = fragment.split(":~:", 1)[0]
-    if not fragment or _NOT_AN_ID.match(fragment):
+    """
+    The id a fragment names, or None when it names something else.
+
+    Sorted as epubcheck 5.3.0 sorts fragments, by
+    :data:`~epubconvert.utils.grammars.FRAGMENTS`: a fragment directive, a
+    scheme-based pointer, a media fragment or an SVG view names no id.
+    """
+    parsed = FRAGMENTS.match(fragment, "svg_fragment" if svg else "html_fragment")
+    name = None if parsed is None else parsed.find("svg_name" if svg else "html_name")
+    if name is None:
         return None
-    if svg:
-        fragment = fragment.split("&", 1)[0]
-    return _decode_segment(fragment) or None
+    return _decode_segment(name.text) or None
 
 
 def _css_references(text: str, source: str, first_line: int) -> Iterator[Reference]:
@@ -532,7 +535,8 @@ class _PackageHandler(_Handler):
         if namespace != OPF_NS:
             return
         if local == "package":
-            self.book.epub3 = attributes.get("version", "").startswith("3")
+            version = attributes.get("version", "")
+            self.book.epub3 = PACKAGE.match(version, "epub3_version") is not None
         elif local == "item" and "href" in attributes:
             href = attributes["href"]
             self._add(href, Kind.MANIFEST)

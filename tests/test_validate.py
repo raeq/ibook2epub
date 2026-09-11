@@ -928,3 +928,28 @@ class TestTheValidatorRunsWhatItWasAskedFor:
 
         assert "archive is empty" in options.check(broken)
         assert called == []
+
+
+class TestTheCoverIsAPropertyValueNotASubstring:
+    @staticmethod
+    def _cover_of(tmp_path: Path, properties: str) -> str | None:
+        manifest = (
+            '<item id="ch1" href="text/chapter1.xhtml"'
+            ' media-type="application/xhtml+xml"/>'
+            '<item id="art" href="images/cover.jpg" media-type="image/jpeg"'
+            f' properties="{properties}"/>'
+        )
+        path = _book_declaring(tmp_path, manifest, '<itemref idref="ch1"/>')
+        with ZipFile(path) as archive:
+            return validate.read_package(archive).cover_id
+
+    @pytest.mark.parametrize("properties", ["cover-image", " nav  cover-image "])
+    def test_cover_image_among_the_values_is_the_cover(self, tmp_path, properties):
+        assert self._cover_of(tmp_path, properties) == "art"
+
+    @pytest.mark.parametrize(
+        "properties", ["not-cover-image", "cover-images", "x:cover-image", ""]
+    )
+    def test_a_value_that_only_contains_the_word_is_not(self, tmp_path, properties):
+        # The substring test this replaced took each of these for a cover.
+        assert self._cover_of(tmp_path, properties) is None

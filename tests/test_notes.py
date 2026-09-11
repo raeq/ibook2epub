@@ -257,6 +257,16 @@ class TestEscaping:
             line_.startswith("<!-- ibook2epub end") for line_ in body.split("\n")
         )
 
+    def test_a_note_cannot_forge_the_start_marker_with_trailing_space(self):
+        # A reader's editor may leave white space after a marker, so the note's
+        # reader accepts one; a line from the book must not pass for one.
+        forged = "<!-- ibook2epub sha256=0123456789abcdef -->  "
+        body = notes.body([_annotation(note=f"first\n{forged}")])
+
+        assert not any(
+            line_.startswith("<!-- ibook2epub sha256=") for line_ in body.split("\n")
+        )
+
     def test_a_note_cannot_forge_the_end_marker(self):
         # The blockquote prefix protects highlights; notes had no rule at all,
         # so their second line sat at column zero in the generated region.
