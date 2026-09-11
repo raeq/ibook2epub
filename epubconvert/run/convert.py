@@ -28,8 +28,8 @@ from random import shuffle
 from typing import TextIO
 
 from ..collect.annotations import for_book as annotations_for_book
+from ..collect.checks import ValidationOptions
 from ..collect.source import is_dataless
-from ..collect.validate import ValidationOptions
 from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, copy_through, zip_package
 from ..export.inspect_output import extract_cover, free_megabytes
 from ..export.naming import PassthroughNaming, filesystem_key

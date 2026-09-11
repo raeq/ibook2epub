@@ -566,6 +566,7 @@ class TestTheFlagsRefuseWhatTheyCannotDo:
             ["--verify"],
             ["--covers"],
             ["--validate"],
+            ["--check-references"],
             ["--epubcheck"],
             ["--refresh"],
             ["--skip-incomplete"],

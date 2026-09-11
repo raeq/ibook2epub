@@ -27,6 +27,10 @@ RSC-016  a document that is not well formed, read up to the error
 PKG-008  a member that cannot be read, or is too large to check
 ======== ================================================================
 
+``--check-references`` runs it on each archive once the structural check has
+passed, through :mod:`epubconvert.collect.checks`. An error or a fatal error
+fails the archive; a warning does not.
+
 What counts as a reference, and the order of the checks, follow epubcheck 5.3.0
 where the specification leaves them open: the elements and attributes it
 collects, EPUB 3's additions, only the NCX the spine names, one RSC-001 per
@@ -143,6 +147,11 @@ class Finding:
     path: str
     line: int | None
     message: str
+
+    def __str__(self) -> str:
+        """The finding as epubcheck prints one: severity, ID, place, message."""
+        where = self.path if self.line is None else f"{self.path}({self.line})"
+        return f"{self.severity.upper()}({self.code}): {where}: {self.message}"
 
 
 @dataclass

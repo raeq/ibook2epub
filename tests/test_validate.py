@@ -13,7 +13,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert.collect import validate
+from epubconvert.collect import checks, validate
 from epubconvert.export.archive import zip_package
 from epubconvert.run import run
 from epubconvert.utils import exits
@@ -246,13 +246,13 @@ class TestValidationOptions:
         path = tmp_path / "junk.epub"
         path.write_bytes(b"not a zip")
 
-        assert validate.ValidationOptions(enabled=False).check(path) == []
+        assert checks.ValidationOptions(enabled=False).check(path) == []
 
     def test_enabled_reports_problems(self, tmp_path):
         path = tmp_path / "junk.epub"
         path.write_bytes(b"not a zip")
 
-        assert validate.ValidationOptions(enabled=True).check(path)
+        assert checks.ValidationOptions(enabled=True).check(path)
 
 
 class TestValidateDuringExport:
@@ -263,7 +263,7 @@ class TestValidateDuringExport:
         count = zip_package(
             source,
             output_dir / "Book.epub",
-            validate.ValidationOptions(enabled=True),
+            checks.ValidationOptions(enabled=True),
         )
 
         assert count > 0
@@ -276,7 +276,7 @@ class TestValidateDuringExport:
         target = output_dir / "Bad.epub"
 
         with pytest.raises(validate.ArchiveInvalidError):
-            zip_package(source, target, validate.ValidationOptions(enabled=True))
+            zip_package(source, target, checks.ValidationOptions(enabled=True))
 
         # The whole point of validating before the replace: nothing lands, so
         # the book is retried rather than recorded as done.
@@ -896,33 +896,35 @@ class TestManifestAndSpineProblemsAreSummarised:
 
 
 class TestTheValidatorRunsWhatItWasAskedFor:
-    def test_epubcheck_runs_only_after_the_structural_check_passes(
+    def test_the_reference_check_runs_only_after_the_structural_check_passes(
         self, good_epub, monkeypatch
     ):
         called: list[Path] = []
 
-        def record(path: Path, **_options: object) -> list[str]:
+        def record(path: Path) -> list[str]:
             called.append(path)
             return []
 
-        monkeypatch.setattr(validate, "run_epubcheck", record)
-        options = validate.ValidationOptions(enabled=True, epubcheck=True)
+        monkeypatch.setattr(checks, "reference_problems", record)
+        options = checks.ValidationOptions(enabled=True, references=True)
 
         assert options.check(good_epub) == []
         assert called == [good_epub]
 
-    def test_a_structural_failure_skips_epubcheck(self, tmp_path, monkeypatch):
+    def test_a_structural_failure_skips_the_reference_check(
+        self, tmp_path, monkeypatch
+    ):
         called: list[Path] = []
 
-        def record(path: Path, **_options: object) -> list[str]:
+        def record(path: Path) -> list[str]:
             called.append(path)
             return []
 
-        monkeypatch.setattr(validate, "run_epubcheck", record)
+        monkeypatch.setattr(checks, "reference_problems", record)
         broken = tmp_path / "Empty.epub"
         with ZipFile(broken, "w"):
             pass
-        options = validate.ValidationOptions(enabled=True, epubcheck=True)
+        options = checks.ValidationOptions(enabled=True, references=True)
 
         assert "archive is empty" in options.check(broken)
         assert called == []

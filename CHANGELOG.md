@@ -7,6 +7,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- `--check-references` checks the references inside each archive: links and
+  their fragments, images, stylesheets and fonts. It parses every URL by the
+  WHATWG URL Standard, applies EPUB 3.3's rule for URLs that leave the
+  container, and reports under epubcheck's message IDs, with nothing else to
+  install. It implies `--validate`, runs once the structural check has passed,
+  and fails a book on an error but not on a warning. Replayed over one
+  2,798-book library it took 11.6 s on 10 processes and agreed with epubcheck
+  exactly on RSC-012, RSC-030, RSC-033 and HTM-025.
+
+### Changed
+
+- `--epubcheck` no longer runs the external epubcheck. It is now an older name
+  for `--check-references`, so a script that passes it keeps working without a
+  Java runtime, but it gets the reference check alone: epubcheck's schema, CSS
+  and metadata rules are no longer applied. A run no longer stops with exit
+  code `6` when epubcheck is not on `PATH`.
+
 ### Fixed
 
 - A damaged compressed member no longer ends a run with a traceback. Reading

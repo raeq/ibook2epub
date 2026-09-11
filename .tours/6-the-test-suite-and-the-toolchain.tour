@@ -85,7 +85,7 @@
       "file": "tests/test_cli.py",
       "line": 17,
       "pattern": "class TestParseArgs:",
-      "description": "Rejections (negative caps, zero workers, output inside source), `--epubcheck` implying `--validate`, and the source-discovery fallbacks.\n\n`TestLoggerConfiguration`, `TestMain`, `TestSourceDiscovery` and `TestLockDiagnostics` follow — the last of which is where the lock file's PID line is asserted to be readable."
+      "description": "Rejections (negative caps, zero workers, output inside source), `--check-references` implying `--validate`, and the source-discovery fallbacks.\n\n`TestLoggerConfiguration`, `TestMain`, `TestSourceDiscovery` and `TestLockDiagnostics` follow — the last of which is where the lock file's PID line is asserted to be readable."
     },
     {
       "title": "Two runs at once",

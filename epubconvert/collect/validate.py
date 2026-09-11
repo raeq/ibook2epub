@@ -20,10 +20,7 @@ from __future__ import annotations
 
 import posixpath
 import re
-import shutil
-import subprocess
 import zlib
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import unquote, urldefrag
@@ -31,7 +28,6 @@ from xml.etree import ElementTree
 from xml.parsers import expat
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
-from ..utils.app_logger import logger
 from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
 from ..utils.opf import Package
@@ -76,9 +72,6 @@ UNREADABLE_MEMBER: tuple[type[Exception], ...] = (
     zlib.error,
     *_LZMA_ERRORS,
 )
-
-EPUBCHECK = "epubcheck"
-
 
 #: Values that appear where a ``dc:identifier`` should be but identify nothing.
 #: Every one was found in a real 2,805-book library: ``none`` is the identifier
@@ -286,29 +279,6 @@ class ArchiveInvalidError(Exception):
         shown = "; ".join(problems[:3])
         extra = f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""
         super().__init__(f"{shown}{extra}")
-
-
-@dataclass(frozen=True)
-class ValidationOptions:
-    """How thoroughly to check an archive after writing it."""
-
-    enabled: bool = False
-    epubcheck: bool = False
-
-    def check(self, path: Path) -> list[str]:
-        """
-        Run the configured checks over *path*.
-
-        :param path: The archive to check.
-
-        :return: A list of problems; empty means it passed.
-        """
-        if not self.enabled:
-            return []
-        problems = validate_archive(path)
-        if problems or not self.epubcheck:
-            return problems
-        return run_epubcheck(path)
 
 
 class _Members(Protocol):  # pylint: disable=too-few-public-methods
@@ -804,48 +774,3 @@ def _check_manifest(members: set[str], package: Package) -> list[str]:
         problems.append(f"{package.opf_path} declares no spine")
 
     return problems
-
-
-def epubcheck_available() -> bool:
-    """
-    Report whether the external ``epubcheck`` tool is on PATH.
-
-    :return: True if it can be run.
-    """
-    return shutil.which(EPUBCHECK) is not None
-
-
-def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
-    """
-    Run the external ``epubcheck`` validator over an archive.
-
-    This is a much stricter check than the structural one, and is only
-    attempted when the user asks for it.
-
-    :param path: The epub file to check.
-    :param timeout: Seconds to allow before giving up.
-
-    :return: A list of problems; empty means epubcheck was happy.
-    """
-    executable = shutil.which(EPUBCHECK)
-    if executable is None:
-        return ["epubcheck is not on PATH"]
-
-    try:
-        completed = subprocess.run(  # noqa: S603 - fixed executable, no shell
-            [executable, str(path)],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return [f"epubcheck could not be run: {exc}"]
-
-    if completed.returncode == 0:
-        return []
-
-    output = (completed.stderr or completed.stdout).strip().splitlines()
-    errors = [line.strip() for line in output if "ERROR" in line]
-    logger.debug("epubcheck exited %d for %s", completed.returncode, path.name)
-    return errors[:10] or [f"epubcheck failed with exit code {completed.returncode}"]
