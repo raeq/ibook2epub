@@ -19,6 +19,7 @@ import pytest
 
 from epubconvert.utils import peg
 from epubconvert.utils.peg import Grammar, GrammarError
+from tests.conftest import peak_memory
 
 
 def matches(grammar: str, text: str) -> bool:
@@ -172,6 +173,19 @@ class TestInputThatNestsTooDeep:
         grammar = Grammar("s <- NESTED\nNESTED <- '(' NESTED ')' / 'x'")
 
         assert grammar.match(self._nested(5000)) is None
+
+
+class TestALongInputHoldsNoMemoryPerCharacter:
+    """
+    Every rule's result was remembered at every position, so a token repeated
+    over a long input held an entry per character: 170 MB for a million (#26).
+    """
+
+    def test_a_long_run_of_a_token(self):
+        grammar = Grammar("run <- A* !.\nA <- [a]")
+        text = "a" * 100_000
+
+        assert peak_memory(lambda: grammar.match(text)) < 1_000_000
 
 
 class TestGrammarsThatCannotWork:

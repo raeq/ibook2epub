@@ -20,7 +20,7 @@ from zipfile import ZipFile
 import pytest
 
 from epubconvert.collect import references
-from tests.conftest import corrupt_member, damaged_streams, recompress
+from tests.conftest import corrupt_member, damaged_streams, peak_memory, recompress
 
 XHTML = "application/xhtml+xml"
 CSS = "text/css"
@@ -537,6 +537,16 @@ class TestItNeverRaises:
         corrupt_member(recompress(book, method), "OEBPS/c1.xhtml", raising)
 
         assert findings(book) == [("PKG-008", "OEBPS/c1.xhtml", None)]
+
+    def test_a_long_fragment_holds_no_memory_per_character(self):
+        # A fragment of 100,000 letters held 19 MB while its grammar was read,
+        # an entry per character; the code it replaced needed 0.3 MB (#26).
+        # The rule lives in the private helper, and the whole check would count
+        # the book's own reading too.
+        fragment_id = references._fragment_id  # pylint: disable=protected-access
+        fragment = "a" * 100_000
+
+        assert peak_memory(lambda: fragment_id(fragment, False)) < 2_000_000
 
     def test_a_document_that_is_not_well_formed_is_rsc_016_at_its_line(self, tmp_path):
         book = write_book(tmp_path, {"c1.xhtml": "<html>\n<body>\n<p></body></html>"})

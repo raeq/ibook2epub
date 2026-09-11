@@ -43,7 +43,7 @@ from epubconvert.export import archive
 from epubconvert.run import cli
 from epubconvert.run.run import main
 from epubconvert.utils.opf import Package
-from tests.conftest import make_metadata_package
+from tests.conftest import make_metadata_package, peak_memory
 from tests.test_annotations import highlight, library_row, make_databases
 
 # ---------------------------------------------------------------- Apple's data
@@ -960,3 +960,14 @@ class TestIdentifierDigitsOutsideAscii:
     def test_arabic_indic_digits_are_not_called_an_isbn(self):
         declared = "".join(chr(0x0660 + int(digit)) for digit in "9780553383041")
         assert canonical_identifier(declared) == declared
+
+    def test_a_long_identifier_holds_no_memory_per_character(self):
+        # 100,000 spaces held 19 MB while the grammar read them, an entry per
+        # character, where the code it replaced only stripped them (#26).
+        declared = " " * 100_000 + "x"
+        found: list[str] = []
+
+        peak = peak_memory(lambda: found.append(canonical_identifier(declared)))
+
+        assert found == ["x"]
+        assert peak < 1_000_000

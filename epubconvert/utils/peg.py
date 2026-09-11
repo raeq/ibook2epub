@@ -22,8 +22,11 @@ with the additions most PEG tools make:
 A rule whose name begins with a lower-case letter becomes a :class:`Node` in
 the parse, holding the nodes of the rules matched inside it. One whose name
 begins with an upper-case letter is a token: it matches but leaves no node, and
-its text is part of the node above it. Every rule's result is remembered by
-position (packrat parsing), so a parse takes time linear in its input.
+its text is part of the node above it. A rule that makes a node has its result
+remembered by position (packrat parsing), so backtracking never runs it twice at
+one place. A token's result is not remembered: a token is a run of characters,
+which costs no more to run again than to look up, and remembering it at every
+character held memory in proportion to a long input (#26).
 
 Rules nest at most :data:`MAX_DEPTH` deep in one parse, and input that nests
 deeper is no match. The input is usually a book's or Apple's, so a crafted
@@ -127,8 +130,8 @@ class Node:
 @dataclass(slots=True)
 class _State:
     """
-    One parse: its input, the nodes made so far, what each rule matched, and
-    how deeply the rules running now are nested.
+    One parse: its input, the nodes made so far, what each rule that makes a
+    node matched, and how deeply the rules running now are nested.
     """
 
     source: str
@@ -404,12 +407,23 @@ class _Lookahead(_Expression):
 
 def _rule(index: int, count: int, name: str, body: _Matcher) -> _Matcher:
     """
-    A rule: its body, remembered by position, kept as a node if lower-case.
+    A rule: its body, kept as a node and remembered by position if lower-case.
 
-    Running the body is one level of nesting; a result looked up in the memo
-    is none, because it runs nothing.
+    A token is neither: it runs its body each time it is called (#26).
+    Running a body is one level of nesting for either kind; a result looked up
+    in the memo is none, because it runs nothing.
     """
-    capture = name[0].islower()
+    if not name[0].islower():
+
+        def token(state: _State, pos: int) -> int:
+            state.depth += 1
+            if state.depth > MAX_DEPTH:
+                raise _TooDeepError
+            end = body(state, pos)
+            state.depth -= 1
+            return end
+
+        return token
 
     def rule(state: _State, pos: int) -> int:
         key = pos * count + index
@@ -426,11 +440,9 @@ def _rule(index: int, count: int, name: str, body: _Matcher) -> _Matcher:
         state.depth -= 1
         found: tuple[Node, ...] = ()
         if end >= 0:
-            found = tuple(nodes[mark:])
-            if capture:
-                del nodes[mark:]
-                found = (Node(state.source, name, pos, end, found),)
-                nodes.extend(found)
+            found = (Node(state.source, name, pos, end, tuple(nodes[mark:])),)
+            del nodes[mark:]
+            nodes.extend(found)
         state.memo[key] = (end, found)
         return end
 
