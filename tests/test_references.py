@@ -20,6 +20,7 @@ from zipfile import ZipFile
 import pytest
 
 from epubconvert.collect import references
+from tests.conftest import corrupt_member, damaged_streams, recompress
 
 XHTML = "application/xhtml+xml"
 CSS = "text/css"
@@ -523,6 +524,17 @@ class TestItNeverRaises:
         book.write_bytes(
             book.read_bytes().replace(b"original words", b"damaged words!")
         )
+
+        assert findings(book) == [("PKG-008", "OEBPS/c1.xhtml", None)]
+
+    @damaged_streams
+    def test_a_member_whose_stream_is_damaged_is_reported_and_skipped(
+        self, tmp_path, method, raising
+    ):
+        # A damaged deflate or LZMA stream raises from its decompressor, not as
+        # the BadZipFile a bad checksum gives, and it escaped the check (#21).
+        book = write_book(tmp_path, {"c1.xhtml": page("original words")})
+        corrupt_member(recompress(book, method), "OEBPS/c1.xhtml", raising)
 
         assert findings(book) == [("PKG-008", "OEBPS/c1.xhtml", None)]
 

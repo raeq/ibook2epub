@@ -54,7 +54,7 @@ from enum import Enum, auto
 from pathlib import Path
 from unicodedata import normalize
 from xml.parsers import expat
-from zipfile import BadZipFile, ZipFile
+from zipfile import ZipFile
 
 from ..utils.percent import (
     percent_decode,
@@ -63,7 +63,7 @@ from ..utils.percent import (
     utf8_percent_encode,
 )
 from ..utils.url import URL, Domain, parse
-from .validate import MAX_XML_BYTES, ValidationError, find_opf_path
+from .validate import MAX_XML_BYTES, UNREADABLE_MEMBER, ValidationError, find_opf_path
 
 XHTML_NS = "http://www.w3.org/1999/xhtml"
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -262,7 +262,7 @@ class _Book:
                 self._report("PKG-008", "error", member, None, "too large to check")
                 return None
             return self.archive.read(name)
-        except (BadZipFile, OSError, EOFError, RuntimeError, ValueError) as exc:
+        except UNREADABLE_MEMBER as exc:
             self._report("PKG-008", "error", member, None, f"could not read: {exc}")
             return None
 
@@ -666,7 +666,7 @@ def check_file(path: Path) -> Report:
     try:
         with ZipFile(path) as archive:
             return check_archive(archive)
-    except (BadZipFile, OSError, EOFError, RuntimeError, ValueError) as exc:
+    except UNREADABLE_MEMBER as exc:
         return Report(
             [Finding("PKG-008", "fatal", path.name, None, f"unreadable: {exc}")]
         )
