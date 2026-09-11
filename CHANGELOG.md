@@ -42,13 +42,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - The small syntaxes a book carries are read by grammars rather than by
   regular expressions and string splitting: book identifiers, EPUB CFIs, the
   fragments of links, and the package document's `version` and `properties`.
-  Five answers change. A manifest item whose `properties` only contain the
+  Six answers change. A manifest item whose `properties` only contain the
   word, such as `not-cover-image`, is no longer taken for the cover. A CFI
   whose ID assertion holds an escaped bracket resolves to its document. An
   identifier of superscript digits no longer stops the run with a
   `ValueError`. A note line that starts with a non-ASCII digit no longer gets a
   backslash that Markdown shows. A forged start marker followed by white space
-  is escaped like any other.
+  is escaped like any other. And the reference check applies EPUB 3's rules
+  only to a package whose `version` is a 3, with leading zeros, dotted digits
+  and surrounding white space allowed: `" 3.0"` and `"03.0"` now count as EPUB
+  3, and `"30"`, `"3x"` and `"3.0beta"`, which only began with a 3, no longer
+  do.
 
 ## [2.3.1] - 2026-09-11
 
