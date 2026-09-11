@@ -973,7 +973,7 @@ output directory back off disk.
 | `3` | Another run holds the output lock. Retry later. |
 | `4` | The source directory does not exist, or no library was found. |
 | `5` | The output directory could not be created, opened or found. |
-| `6` | A required extra or external tool is not installed. |
+| `6` | A required extra is not installed. |
 | `7` | --verify found at least one damaged archive. |
 | `8` | macOS refused access to the Books library; the terminal needs Full Disk Access. |
 | `130` | Stopped with Ctrl-C. Finished books are intact. |

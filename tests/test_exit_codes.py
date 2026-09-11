@@ -88,7 +88,7 @@ class TestEachFailureHasItsOwnCode:
             ["-s", str(library), "-o", str(tmp_path / "out"), "-p", "romanize", "-q"]
         )
 
-        assert code == exits.MISSING_TOOL
+        assert code == exits.MISSING_EXTRA
 
     def test_a_verify_target_that_is_not_there_has_its_own_code(self, tmp_path):
         source = tmp_path / "lib"

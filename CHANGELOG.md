@@ -24,7 +24,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   for `--check-references`, so a script that passes it keeps working without a
   Java runtime, but it gets the reference check alone: epubcheck's schema, CSS
   and metadata rules are no longer applied. A run no longer stops with exit
-  code `6` when epubcheck is not on `PATH`.
+  code `6` when epubcheck is not on `PATH`, so `6` now means only that a
+  required extra is not installed.
 
 ### Fixed
 

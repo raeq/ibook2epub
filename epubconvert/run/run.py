@@ -894,7 +894,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         policy = build_policy(args.portable_names, args.name_by)
     except PortableNamesUnavailableError as exc:
         logger.critical("%s", exc)
-        return exits.MISSING_TOOL
+        return exits.MISSING_EXTRA
 
     _log_preamble(args, policy)
 
