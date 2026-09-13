@@ -33,6 +33,7 @@ import pytest
 
 from epubconvert.export import notes
 from epubconvert.export.archive import write_atomically
+from epubconvert.grammar import NOTES
 from epubconvert.utils import app_logger
 from epubconvert.utils.policy import Assignment
 
@@ -680,3 +681,31 @@ class TestTheDocumentedSidecarNameIsTheRealOne:
 
     def test_the_suffix_is_what_sidecar_for_actually_appends(self):
         assert notes.sidecar_for(Path("Book.md")).name == "Book" + notes.SIDECAR_SUFFIX
+
+
+class TestTheMarkersTheGrammarReadsAreTheOnesNotesWrites:
+    """
+    The writer's literals and the reader's grammar are in different packages.
+
+    ``grammar`` imports nothing of this project by rule, so ``NOTES`` restates
+    the marker text that ``notes`` defines and no import can hold the two
+    together. Before the grammar existed the pattern sat two lines below the
+    template it matched. Reword ``START_TEMPLATE`` or ``END_MARKER`` without
+    ``syntaxes.py`` and the tool stops recognising its own output: a note
+    already in a vault is read as the reader's prose and appended to instead
+    of updated. Six tests across ``test_notes`` and ``test_notes_cli`` do fail
+    when that happens, but each reports a symptom -- a lost highlight, a
+    sidecar written -- and none names the drift. These assertions name it.
+    """
+
+    def test_the_start_marker_written_is_the_one_matched(self):
+        line = notes.START_TEMPLATE.format(digest="0" * 64)
+
+        assert NOTES.match(line, "start_marker") is not None
+
+    def test_the_end_marker_written_is_the_one_matched(self):
+        assert NOTES.match_prefix(notes.END_MARKER, "end_marker") is not None
+
+    def test_a_composed_note_is_read_back_as_ours(self):
+        # The round trip the two rules exist for, through the real writer.
+        assert notes.is_ours(notes.compose([_annotation()])) is True

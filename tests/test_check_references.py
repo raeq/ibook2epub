@@ -18,16 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert.collect import checks, validate
+from epubconvert.collect import checks, references, validate
 from epubconvert.collect.references import Finding, Report
 from epubconvert.export.archive import zip_package
 from epubconvert.export.inspect_output import verify_output
+from tests.conftest import CONTAINER
 
-CONTAINER = (
-    '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
-    '<rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles>'
-    "</container>"
-)
 OPF = (
     '<package xmlns="http://www.idpf.org/2007/opf" version="3.0"'
     ' unique-identifier="bid">'
@@ -109,7 +105,7 @@ def _report_with(*findings: Finding):
 class TestWhatCountsAsAProblem:
     def test_a_warning_does_not_fail_a_book(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            checks,
+            references,
             "check_file",
             _report_with(
                 Finding("HTM-025", "warning", "a.xhtml", 3, "unregistered scheme"),
@@ -123,7 +119,7 @@ class TestWhatCountsAsAProblem:
 
     def test_a_fatal_error_fails_a_book(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            checks,
+            references,
             "check_file",
             _report_with(Finding("RSC-016", "fatal", "a.xhtml", 9, "not well-formed")),
         )
@@ -134,7 +130,7 @@ class TestWhatCountsAsAProblem:
 
     def test_a_finding_with_no_line_names_the_file_alone(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            checks,
+            references,
             "check_file",
             _report_with(Finding("PKG-008", "error", "big.xhtml", None, "too large")),
         )
@@ -148,7 +144,7 @@ class TestWhatCountsAsAProblem:
             Finding("RSC-012", "error", "a.xhtml", line, "no such id")
             for line in range(1, 26)
         ]
-        monkeypatch.setattr(checks, "check_file", _report_with(*many))
+        monkeypatch.setattr(references, "check_file", _report_with(*many))
 
         problems = checks.reference_problems(tmp_path / "Book.epub")
 

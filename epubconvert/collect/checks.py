@@ -20,7 +20,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .references import check_file
 from .validate import validate_archive
 
 #: The most reference problems named for one archive. One book on that shelf
@@ -63,6 +62,13 @@ def reference_problems(path: Path) -> list[str]:
 
     :return: At most :data:`MAX_REPORTED` problems, then a count of the rest.
     """
+    # Imported here, not above: references pulls in the grammar package and the
+    # URL parser, and this is the only thing that calls it. Importing run.cli
+    # measured 84 ms with it at module level and 76 ms with it here (min of 9,
+    # in this container), a cost a conversion without --check-references --
+    # and --help -- paid on every invocation.
+    from .references import check_file  # pylint: disable=import-outside-toplevel
+
     errors = [
         str(finding)
         for finding in check_file(path).findings

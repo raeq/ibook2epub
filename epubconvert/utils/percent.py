@@ -22,6 +22,7 @@ __all__ = [
     "USERINFO_PERCENT_ENCODE_SET",
     "is_hex_pair_at",
     "percent_decode",
+    "percent_decode_string",
     "to_scalar_value_string",
     "utf8_decode_without_bom",
     "utf8_encode",
@@ -130,6 +131,29 @@ def percent_decode(data: bytes) -> bytes:
         output.append(byte)
         index += 1
     return bytes(output)
+
+
+def percent_decode_string(text: str) -> str:
+    """
+    Percent-decode a string, as the URL Standard section 1.3 defines it.
+
+    UTF-8 encode, percent-decode the bytes, then UTF-8 decode without a BOM.
+    Written here rather than at the two call sites because this module is the
+    one place the URL modules turn text into bytes or bytes into text, and the
+    surrogate policy that choice implies should be stated once.
+
+    :param text: The text to decode.
+
+    :return: The decoded text.
+    """
+    if "%" not in text and text.isascii():
+        # The round trip cannot change plain ASCII without a "%": utf8_encode
+        # only rewrites lone surrogates and percent_decode only "%" escapes,
+        # and this rules out both. Worth the test because the reference checker
+        # runs it per path segment of every reference -- 80,146 times on a
+        # synthetic 200-chapter book -- and member names are almost all this.
+        return text
+    return utf8_decode_without_bom(percent_decode(utf8_encode(text)))
 
 
 def _is_hex_pair(data: bytes, start: int) -> bool:

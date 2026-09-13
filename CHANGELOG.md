@@ -16,7 +16,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   install. It implies `--validate`, runs once the structural check has passed,
   and fails a book on an error but not on a warning. Replayed over one
   2,798-book library it took 11.6 s on 10 processes and agreed with epubcheck
-  exactly on RSC-012, RSC-030, RSC-033 and HTM-025.
+  exactly on RSC-012, RSC-030, RSC-033 and HTM-025. Everything it prints is
+  escaped first: a finding quotes the reference as the book wrote it, and a
+  stylesheet could otherwise carry control characters that erase the line
+  reporting it and forge a second finding under it.
 
 ### Changed
 
