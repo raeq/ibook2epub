@@ -19,6 +19,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   filename, and the refresh names the archive it could not update and goes on.
   ([#21](https://github.com/raeq/ibook2epub/issues/21))
 
+- A manifest item whose `properties` only contain the word `cover-image`, such
+  as `not-cover-image` or `x:cover-image`, is no longer taken for the cover; the
+  attribute is a list of values and only a whole value counts.
+
+- A book identifier made of superscript digits no longer stops the run with a
+  `ValueError`, and one in Arabic-Indic digits is no longer written back as an
+  ISBN. Only ASCII digits make an ISBN.
+
+- A highlight whose CFI names its document with an escaped character, such as
+  `[ch^[15^].xhtml]`, resolves to that document, and an ID assertion followed by
+  parameters (`[ch15.xhtml;s=b]`) is looked up without them.
+
+- In an exported note, a line starting with a digit from another script, such as
+  `١.`, no longer gets a backslash that Markdown shows, and a line that forges
+  the start marker followed by white space is escaped like any other.
+
 ## [2.3.1] - 2026-09-11
 
 ### Changed

@@ -67,7 +67,17 @@ HIGHLIGHT_TYPE = 2
 #: step before the "!" that separates the spine path from the path within it.
 #: Anchored on the *last* such assertion. Taking the first matched a spine-level
 #: assertion in ``/6[spine]/46[ch15.xhtml]!``, which resolves to nothing.
-CFI_DOCUMENT = re.compile(r"\[([^\]]+)\](?=[^!\[\]]*!)")
+#: A "^" escapes the character after it (EPUB CFI 1.1, section 3.1), so an
+#: escaped bracket belongs to the assertion rather than ending it: stopping at
+#: the first "]" cut ``[ch^[15^].xhtml]`` short.
+CFI_DOCUMENT = re.compile(r"(?<!\^)\[((?:\^.|[^\]^])+)\](?=[^!\[\]]*!)")
+
+#: The ID part of an assertion: everything before the first unescaped "," (a
+#: text-location assertion) or ";" (a parameter).
+CFI_ID = re.compile(r"(?:\^.|[^,;^])*")
+
+#: A CFI escape, and the character it stands for.
+CFI_ESCAPE = re.compile(r"\^(.)")
 
 #: Characters a text fragment leaves alone. The rest are percent-encoded.
 FRAGMENT_SAFE = ""
@@ -162,10 +172,14 @@ def _assertion_of(cfi: str) -> str | None:
 
     :param cfi: The CFI Apple recorded.
 
-    :return: What it asserts, or None if it asserts nothing.
+    :return: What it asserts, unescaped, or None if it asserts nothing.
     """
     found = CFI_DOCUMENT.findall(cfi)
-    return found[-1] if found else None
+    if not found:
+        return None
+    match = CFI_ID.match(found[-1])
+    identifier = CFI_ESCAPE.sub(r"\1", match.group(0)) if match else ""
+    return identifier or None
 
 
 def _href_of(cfi: str, book: Package | None) -> str | None:

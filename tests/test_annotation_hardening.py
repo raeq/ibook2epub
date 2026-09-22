@@ -212,6 +212,34 @@ class TestCfiResolution:
     def test_a_cfi_with_no_assertion_resolves_to_nothing(self):
         assert annotations._assertion_of("epubcfi(/6/46!/4/2/1:0)") is None
 
+    @pytest.mark.parametrize("cfi", ["chapter-15", "epubcfi(/6/46[ch15.xhtml])"])
+    def test_what_leads_into_no_document_resolves_to_nothing(self, cfi):
+        assert annotations._assertion_of(cfi) is None
+
+    def test_an_assertion_of_parameters_alone_names_no_document(self):
+        assert annotations._assertion_of("epubcfi(/6/46[;s=b]!/4/2/1:0)") is None
+
+    def test_parameters_after_the_id_are_not_part_of_it(self):
+        cfi = "epubcfi(/6/46[ch15.xhtml;s=b]!/4/2/1:0)"
+        assert annotations._assertion_of(cfi) == "ch15.xhtml"
+
+    @pytest.mark.parametrize(
+        "cfi",
+        [
+            "1234.ibooks#epubcfi(/6/44[n-1]!/4/4/2:0)",
+            "epubcfi(/6/44[n-1]!,/4:0,/4/16[p7]:0)",
+        ],
+    )
+    def test_the_shapes_apple_books_stores_still_resolve(self, cfi):
+        # Two of 108 annotations in one library: a book's address in front of
+        # the CFI, and a range that starts straight after the indirection.
+        assert annotations._assertion_of(cfi) == "n-1"
+
+    def test_an_escaped_bracket_in_the_id_is_looked_up_unescaped(self):
+        # Stopping at the first "]" missed an id holding an escaped bracket.
+        cfi = "epubcfi(/6/46[ch^[15^].xhtml]!/4/2/1:0)"
+        assert annotations._assertion_of(cfi) == "ch[15].xhtml"
+
 
 class TestHrefsStayInsideTheBook:
     def test_a_manifest_href_that_climbs_out_is_refused(self):
@@ -899,3 +927,15 @@ class TestIdentifiersAreCanonical:
         )
 
         assert annotations.schema_problems(document) == []
+
+
+class TestIdentifierDigitsOutsideAscii:
+    def test_a_superscript_run_is_kept_as_declared_rather_than_raising(self):
+        # str.isdigit() accepts a superscript two, which int() then refuses, so
+        # the check digit arithmetic raised ValueError and stopped the run.
+        declared = "\u00b2" * 13
+        assert canonical_identifier(declared) == declared
+
+    def test_arabic_indic_digits_are_not_called_an_isbn(self):
+        declared = "".join(chr(0x0660 + int(digit)) for digit in "9780553383041")
+        assert canonical_identifier(declared) == declared

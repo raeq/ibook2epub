@@ -74,8 +74,10 @@ DIGEST_LENGTH = 16
 
 #: Characters that open a block element at the start of a line. A ``> `` prefix
 #: does not neutralise them: inside a blockquote they still open a heading, a
-#: list or a nested quote.
-BLOCK_OPENERS = re.compile(r"^(\s*)([#>+*-]|\d+[.)])")
+#: list or a nested quote. An ordered list is numbered in ASCII digits
+#: (CommonMark 5.2); ``\d`` also matches digits in other scripts, which open
+#: nothing, so the backslash in front of them showed in the note.
+BLOCK_OPENERS = re.compile(r"^(\s*)([#>+*-]|[0-9]+[.)])")
 
 #: Frontmatter keys this tool owns, which are safe to emit bare because no book
 #: supplies them.
@@ -96,7 +98,10 @@ def _escape(line: str) -> str:
     # A forged end marker would hand the rest of the generated body to the
     # reader's region on the next run. Highlights are already safe because
     # every line carries "> ", but nothing else was.
-    if END_PATTERN.match(line) or START_PATTERN.match(line):
+    # Tested on the stripped line, as split() and wrote_it() read a marker: an
+    # editor may leave white space after one, so they accept it, and a forged
+    # marker with trailing white space would otherwise pass for the real one.
+    if END_PATTERN.match(line) or START_PATTERN.match(line.rstrip()):
         return "\\" + line
     return BLOCK_OPENERS.sub(r"\1\\\2", line, count=1)
 

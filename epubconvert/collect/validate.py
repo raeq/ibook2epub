@@ -190,9 +190,21 @@ def isbn13_of(identifier: object) -> str | None:
     return digits if _is_isbn13(digits) else None
 
 
+def _ascii_digits(text: str) -> bool:
+    """
+    Whether *text* is ASCII digits, and only those.
+
+    ``str.isdigit`` is not that test. It accepts a superscript two, which
+    ``int`` then refuses, so an identifier of superscript digits stopped the
+    run with a ValueError; and it accepts Arabic-Indic digits, which ``int``
+    reads, so such an identifier was written back as an ISBN in those digits.
+    """
+    return text.isascii() and text.isdigit()
+
+
 def _is_isbn13(digits: str) -> bool:
     """Whether *digits* is thirteen digits carrying a valid check digit."""
-    if len(digits) != 13 or not digits.isdigit():
+    if len(digits) != 13 or not _ascii_digits(digits):
         return False
     weighted = sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(digits))
     return weighted % 10 == 0
@@ -200,9 +212,9 @@ def _is_isbn13(digits: str) -> bool:
 
 def _is_isbn10(digits: str) -> bool:
     """Whether *digits* is ten characters carrying a valid check digit."""
-    if len(digits) != 10 or not digits[:9].isdigit():
+    if len(digits) != 10 or not _ascii_digits(digits[:9]):
         return False
-    if not (digits[9].isdigit() or digits[9] in "Xx"):
+    if not (_ascii_digits(digits[9]) or digits[9] in "Xx"):
         return False
     total = sum((10 - i) * int(c) for i, c in enumerate(digits[:9]))
     total += 10 if digits[9] in "Xx" else int(digits[9])
@@ -661,7 +673,9 @@ def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
             resolved = _resolve(opf_path, href)
             if resolved:
                 package.manifest[item_id] = resolved
-        if item_id and "cover-image" in (item.get("properties") or ""):
+        # A list of values separated by white space, so a whole value: the
+        # substring test took "not-cover-image" and "x:cover-image" for covers.
+        if item_id and "cover-image" in (item.get("properties") or "").split():
             package.cover_id = item_id
 
     for itemref in root.iter(f"{{{OPF_NS}}}itemref"):
