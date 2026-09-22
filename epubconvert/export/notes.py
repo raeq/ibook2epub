@@ -51,7 +51,10 @@ END_PATTERN = re.compile(r"^<!-- ibook2epub end")
 
 #: Carries the digest of the generated region.
 START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
-START_PATTERN = re.compile(r"^<!-- ibook2epub sha256=([0-9a-f]{16,64}) -->$")
+#: Trailing white space is part of the pattern, not stripped by each caller:
+#: an editor may leave some after the marker, and the one caller that did not
+#: strip it -- the escaper -- let a forged marker with a trailing space through.
+START_PATTERN = re.compile(r"^<!-- ibook2epub sha256=([0-9a-f]{16,64}) -->\s*$")
 
 #: Largest note this will read back. A note of a few hundred highlights is
 #: tens of kilobytes; anything past this is a runaway or a planted file, and
@@ -77,7 +80,7 @@ DIGEST_LENGTH = 16
 #: list or a nested quote. An ordered list is numbered in ASCII digits
 #: (CommonMark 5.2); ``\d`` also matches digits in other scripts, which open
 #: nothing, so the backslash in front of them showed in the note.
-BLOCK_OPENERS = re.compile(r"^(\s*)([#>+*-]|[0-9]+[.)])")
+BLOCK_OPENERS = re.compile(r"^(\s*)(?:([#>+*-])|([0-9]+)([.)]))")
 
 #: Frontmatter keys this tool owns, which are safe to emit bare because no book
 #: supplies them.
@@ -98,12 +101,20 @@ def _escape(line: str) -> str:
     # A forged end marker would hand the rest of the generated body to the
     # reader's region on the next run. Highlights are already safe because
     # every line carries "> ", but nothing else was.
-    # Tested on the stripped line, as split() and wrote_it() read a marker: an
-    # editor may leave white space after one, so they accept it, and a forged
-    # marker with trailing white space would otherwise pass for the real one.
-    if END_PATTERN.match(line) or START_PATTERN.match(line.rstrip()):
+    if END_PATTERN.match(line) or START_PATTERN.match(line):
         return "\\" + line
-    return BLOCK_OPENERS.sub(r"\1\\\2", line, count=1)
+    # CommonMark escapes only ASCII punctuation, so the backslash goes on the
+    # opener's punctuation: in front of a list number's digits it escapes
+    # nothing and shows, as "\1. first". "1\. first" is the literal text.
+    return BLOCK_OPENERS.sub(_escape_opener, line, count=1)
+
+
+def _escape_opener(match: re.Match[str]) -> str:
+    """Escape the punctuation that makes a block opener: ``\\#``, ``1\\.``."""
+    indent, mark, number, delimiter = match.groups()
+    if mark is not None:
+        return f"{indent}\\{mark}"
+    return f"{indent}{number}\\{delimiter}"
 
 
 def _lines(value: object) -> list[str]:
@@ -242,7 +253,7 @@ def split(text: str) -> Split | None:
             continue
         if index + 1 >= len(lines):
             return None
-        found = START_PATTERN.match(lines[index + 1].rstrip())
+        found = START_PATTERN.match(lines[index + 1])
         if not found:
             return None
         head = "\n".join(lines[: index + 1]) + "\n"
@@ -349,7 +360,7 @@ def wrote_it(existing: str) -> bool:
     for index in range(1, len(lines)):
         if lines[index].rstrip() == "---":
             return index + 1 < len(lines) and bool(
-                START_PATTERN.match(lines[index + 1].rstrip())
+                START_PATTERN.match(lines[index + 1])
             )
     return False
 

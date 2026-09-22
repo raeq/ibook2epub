@@ -34,6 +34,7 @@ from zipfile import ZIP_STORED, BadZipFile, ZipFile
 from ..utils.app_logger import logger
 from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
+from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
@@ -202,12 +203,21 @@ def _ascii_digits(text: str) -> bool:
     return text.isascii() and text.isdigit()
 
 
+def _isbn13_sum(digits: str) -> int:
+    """ISO 2108's ISBN-13 weighting: the digits weigh 1 and 3 alternately."""
+    return sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(digits))
+
+
+def _isbn10_sum(body: str) -> int:
+    """ISO 2108's ISBN-10 weighting of the nine body digits: 10 down to 2."""
+    return sum((10 - i) * int(c) for i, c in enumerate(body))
+
+
 def _is_isbn13(digits: str) -> bool:
     """Whether *digits* is thirteen digits carrying a valid check digit."""
     if len(digits) != 13 or not _ascii_digits(digits):
         return False
-    weighted = sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(digits))
-    return weighted % 10 == 0
+    return _isbn13_sum(digits) % 10 == 0
 
 
 def _is_isbn10(digits: str) -> bool:
@@ -216,9 +226,8 @@ def _is_isbn10(digits: str) -> bool:
         return False
     if not (_ascii_digits(digits[9]) or digits[9] in "Xx"):
         return False
-    total = sum((10 - i) * int(c) for i, c in enumerate(digits[:9]))
-    total += 10 if digits[9] in "Xx" else int(digits[9])
-    return total % 11 == 0
+    check = 10 if digits[9] in "Xx" else int(digits[9])
+    return (_isbn10_sum(digits[:9]) + check) % 11 == 0
 
 
 def isbn10_of(isbn13: str | None) -> str | None:
@@ -232,13 +241,19 @@ def isbn10_of(isbn13: str | None) -> str | None:
 
     :param isbn13: Thirteen digits, already verified, or None.
 
-    :return: The ten characters, or None.
+    :return: The ten characters, or None, including for anything that is not
+        thirteen ASCII digits: a prefix test alone made ``"978"`` into ``"0"``
+        and raised ValueError on ``"978abc..."``.
     """
-    if isbn13 is None or not isbn13.startswith("978"):
+    if (
+        isbn13 is None
+        or len(isbn13) != 13
+        or not _ascii_digits(isbn13)
+        or not isbn13.startswith("978")
+    ):
         return None
     body = isbn13[3:12]
-    total = sum((10 - position) * int(digit) for position, digit in enumerate(body))
-    check = (11 - total % 11) % 11
+    check = (11 - _isbn10_sum(body) % 11) % 11
     return body + ("X" if check == 10 else str(check))
 
 
@@ -251,8 +266,7 @@ def _as_isbn13(digits: str) -> str:
     :return: Thirteen digits.
     """
     body = f"978{digits[:9]}"
-    weighted = sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(body))
-    return f"{body}{(10 - weighted % 10) % 10}"
+    return f"{body}{(10 - _isbn13_sum(body) % 10) % 10}"
 
 
 #: Values a converter writes where a title should be. Narrower than
@@ -673,9 +687,12 @@ def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
             resolved = _resolve(opf_path, href)
             if resolved:
                 package.manifest[item_id] = resolved
-        # A list of values separated by white space, so a whole value: the
+        # A list of values separated by XML white space, so a whole value: the
         # substring test took "not-cover-image" and "x:cover-image" for covers.
-        if item_id and "cover-image" in (item.get("properties") or "").split():
+        # Not str.split(), which also splits on a no-break space and the rest
+        # of Unicode's white space, inside what XML reads as one value.
+        properties = _XML_WHITESPACE.split(item.get("properties") or "")
+        if item_id and "cover-image" in properties:
             package.cover_id = item_id
 
     for itemref in root.iter(f"{{{OPF_NS}}}itemref"):
@@ -820,6 +837,13 @@ def _check_manifest(members: set[str], package: Package) -> list[str]:
     return problems
 
 
+#: A line in which epubcheck reports a problem that fails a book.
+_EPUBCHECK_FAILURE = re.compile(r"\b(?:ERROR|FATAL)\b")
+
+#: What separates the values of an XML list attribute (XML 1.0, production 3).
+_XML_WHITESPACE = re.compile(r"[ \t\r\n]+")
+
+
 def epubcheck_available() -> bool:
     """
     Report whether the external ``epubcheck`` tool is on PATH.
@@ -839,7 +863,8 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
     :param path: The epub file to check.
     :param timeout: Seconds to allow before giving up.
 
-    :return: A list of problems; empty means epubcheck was happy.
+    :return: A list of problems; empty means epubcheck was happy, or that it
+        could not run at all, which is logged rather than blamed on the book.
     """
     executable = shutil.which(EPUBCHECK)
     if executable is None:
@@ -854,12 +879,24 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        return [f"epubcheck could not be run: {exc}"]
+        # Not a verdict on the book. Reported as a problem, it kept the book
+        # out of the output directory -- so a book slower to check than the
+        # timeout was retried and never written, on every run -- and made
+        # --verify count a sound archive as damaged.
+        logger.warning(
+            "epubcheck could not check %s, so it was not checked: %s",
+            printable(path.name),
+            exc,
+        )
+        return []
 
     if completed.returncode == 0:
         return []
 
-    output = (completed.stderr or completed.stdout).strip().splitlines()
-    errors = [line.strip() for line in output if "ERROR" in line]
+    # Both streams: a JVM writes notices such as "Picked up JAVA_TOOL_OPTIONS"
+    # to stderr, which hid every diagnostic on stdout when only one was read.
+    # FATAL is epubcheck's most severe level, and was dropped with the rest.
+    output = f"{completed.stderr}\n{completed.stdout}".splitlines()
+    errors = [line.strip() for line in output if _EPUBCHECK_FAILURE.search(line)]
     logger.debug("epubcheck exited %d for %s", completed.returncode, path.name)
     return errors[:10] or [f"epubcheck failed with exit code {completed.returncode}"]

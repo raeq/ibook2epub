@@ -131,22 +131,59 @@ class TestRunningEpubcheck:
 
         assert len(validate.run_epubcheck(tmp_path / "Book.epub")) == 10
 
-    def test_a_tool_that_cannot_be_run_is_reported(self, tmp_path, monkeypatch):
+    def test_a_tool_that_cannot_run_is_logged_not_blamed_on_the_book(
+        self, tmp_path, monkeypatch, caplog
+    ):
         self._installed(monkeypatch, raises=OSError("Exec format error"))
 
         problems = validate.run_epubcheck(tmp_path / "Book.epub")
 
-        assert problems == ["epubcheck could not be run: Exec format error"]
+        assert problems == []
+        assert "epubcheck could not check Book.epub" in caplog.text
+        assert "Exec format error" in caplog.text
 
-    def test_a_timeout_is_reported_rather_than_raised(self, tmp_path, monkeypatch):
-        # A book big enough to exceed the timeout must fail the check, not the
-        # run: everything already converted stays converted.
+    def test_a_timeout_is_logged_rather_than_raised_or_blamed_on_the_book(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        # A problem kept the book out of the output directory, so a book slower
+        # to check than the timeout was retried, and never written, on every
+        # run; and --verify counted a sound archive as damaged.
         self._installed(monkeypatch, raises=subprocess.TimeoutExpired("epubcheck", 120))
 
         problems = validate.run_epubcheck(tmp_path / "Book.epub")
 
-        assert len(problems) == 1
-        assert problems[0].startswith("epubcheck could not be run:")
+        assert problems == []
+        assert "epubcheck could not check Book.epub" in caplog.text
+
+    def test_a_fatal_line_is_a_reported_problem(self, tmp_path, monkeypatch):
+        stderr = "FATAL(PKG-008): Unable to read file\n"
+        self._installed(monkeypatch, _Completed(returncode=1, stderr=stderr))
+
+        assert validate.run_epubcheck(tmp_path / "Book.epub") == [
+            "FATAL(PKG-008): Unable to read file"
+        ]
+
+    def test_errors_on_stdout_are_read_when_stderr_holds_jvm_notices(
+        self, tmp_path, monkeypatch
+    ):
+        completed = _Completed(
+            returncode=1,
+            stderr="Picked up JAVA_TOOL_OPTIONS: -Xmx1g\n",
+            stdout="ERROR(RSC-005): bad markup\n",
+        )
+        self._installed(monkeypatch, completed)
+
+        assert validate.run_epubcheck(tmp_path / "Book.epub") == [
+            "ERROR(RSC-005): bad markup"
+        ]
+
+    def test_a_word_containing_error_is_not_a_problem(self, tmp_path, monkeypatch):
+        stderr = "INFO: no ERRORS found in metadata\nERROR(OPF-030): oops\n"
+        self._installed(monkeypatch, _Completed(returncode=1, stderr=stderr))
+
+        assert validate.run_epubcheck(tmp_path / "Book.epub") == [
+            "ERROR(OPF-030): oops"
+        ]
 
     def test_the_tool_is_invoked_on_the_archive_with_no_shell(
         self, tmp_path, monkeypatch

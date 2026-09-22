@@ -235,6 +235,42 @@ class TestCfiResolution:
         # the CFI, and a range that starts straight after the indirection.
         assert annotations._assertion_of(cfi) == "n-1"
 
+    @pytest.mark.parametrize(
+        "cfi",
+        [
+            "epubcfi(/6/4[chap01ref]!/4[body01]/16[svgimg]!/4/2)",
+            "epubcfi(/6/4[chap01ref]!/4/2[img]!/2:0)",
+        ],
+    )
+    def test_the_document_is_before_the_first_indirection_not_the_last(self, cfi):
+        # A second "!" enters an SVG or iframe inside the document; the id
+        # before it is an element there, not a manifest item.
+        assert annotations._assertion_of(cfi) == "chap01ref"
+
+    @pytest.mark.parametrize(
+        "cfi",
+        [
+            "epubcfi(/6/46[ch15.xhtml]/2!/4)",
+            "epubcfi(/6[spine]/46!/4/2/1:0)",
+            "epubcfi(/6/4[ch1]/2!/4/2:0)",
+        ],
+    )
+    def test_an_assertion_on_an_earlier_step_names_no_document(self, cfi):
+        # Only the step directly before the "!" is the spine item.
+        assert annotations._assertion_of(cfi) is None
+
+    @pytest.mark.parametrize(
+        "location", ["junk[x]!", "epubcfi[x]!", "x epubcfi(/6[a]!)"]
+    )
+    def test_what_is_not_a_cfi_names_no_document(self, location):
+        assert annotations._assertion_of(location) is None
+
+    def test_an_unescaped_special_character_makes_no_id(self):
+        assert annotations._assertion_of("epubcfi(/6/46[ch=1]!/4)") is None
+
+    def test_an_exclamation_mark_inside_an_assertion_is_not_the_indirection(self):
+        assert annotations._assertion_of("epubcfi(/6/46[wow!]!/4)") == "wow!"
+
     def test_an_escaped_bracket_in_the_id_is_looked_up_unescaped(self):
         # Stopping at the first "]" missed an id holding an escaped bracket.
         cfi = "epubcfi(/6/46[ch^[15^].xhtml]!/4/2/1:0)"

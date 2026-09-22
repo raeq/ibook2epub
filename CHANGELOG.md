@@ -21,19 +21,32 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - A manifest item whose `properties` only contain the word `cover-image`, such
   as `not-cover-image` or `x:cover-image`, is no longer taken for the cover; the
-  attribute is a list of values and only a whole value counts.
+  attribute is a list of values separated by XML white space, and only a whole
+  value counts.
 
 - A book identifier made of superscript digits no longer stops the run with a
   `ValueError`, and one in Arabic-Indic digits is no longer written back as an
   ISBN. Only ASCII digits make an ISBN.
 
-- A highlight whose CFI names its document with an escaped character, such as
-  `[ch^[15^].xhtml]`, resolves to that document, and an ID assertion followed by
-  parameters (`[ch15.xhtml;s=b]`) is looked up without them.
+- A highlight's document is read from the step just before the CFI's first
+  `!`. A CFI that also points inside an embedded SVG or iframe no longer
+  resolves to that element's id, and neither an assertion on an earlier step
+  nor a location that is not a CFI names a document. An ID written with an
+  escaped character, such as `[ch^[15^].xhtml]`, resolves to its document, and
+  one followed by parameters (`[ch15.xhtml;s=b]`) is looked up without them.
 
-- In an exported note, a line starting with a digit from another script, such as
-  `١.`, no longer gets a backslash that Markdown shows, and a line that forges
-  the start marker followed by white space is escaped like any other.
+- In an exported note, a line that would open a numbered list is escaped as
+  `1\.` rather than `\1.`, which Markdown showed with its backslash. A line
+  starting with a digit from another script, such as `١.`, is left alone, and a
+  line that forges the start marker followed by white space is escaped like any
+  other.
+
+- `--epubcheck` no longer fails a book it could not check. An epubcheck that
+  cannot be run, or runs past its timeout, is logged: a book that took longer
+  than the timeout was left out of the output directory and retried on every
+  run, and `--verify` counted it as damaged. A `FATAL` message is reported like
+  an `ERROR`, and both of epubcheck's output streams are read, so a JVM notice
+  on one no longer hides the errors on the other.
 
 ## [2.3.1] - 2026-09-11
 

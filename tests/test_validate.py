@@ -859,10 +859,20 @@ class TestTheCoverIsAPropertyValueNotASubstring:
         assert self._cover_of(tmp_path, properties) == "art"
 
     @pytest.mark.parametrize(
-        "properties", ["not-cover-image", "cover-images", "x:cover-image", ""]
+        "properties",
+        [
+            "not-cover-image",
+            "cover-images",
+            "x:cover-image",
+            "",
+            "nav\u00a0cover-image",
+            "cover-image\u00a0",
+        ],
     )
     def test_a_value_that_only_contains_the_word_is_not(self, tmp_path, properties):
-        # The substring test took each of these for a cover.
+        # The substring test took the first three for a cover, and str.split()
+        # the last two: XML separates list values with space, tab, CR and LF
+        # only, so a no-break space is part of the value.
         assert self._cover_of(tmp_path, properties) is None
 
 
@@ -951,3 +961,16 @@ class TestTheValidatorRunsWhatItWasAskedFor:
 
         assert "archive is empty" in options.check(broken)
         assert called == []
+
+
+class TestIsbn10OfRefusesWhatIsNotAnIsbn13:
+    def test_a_978_isbn13_has_an_isbn10(self):
+        assert validate.isbn10_of("9780553383041") == "0553383043"
+
+    @pytest.mark.parametrize(
+        "value", ["978", "978123", "978abcdefghij", "97805533830411", "9790553383041"]
+    )
+    def test_anything_else_has_none(self, value):
+        # A prefix test alone made "978" into "0" and raised ValueError on
+        # letters; a 979 ISBN was never given an ISBN-10.
+        assert validate.isbn10_of(value) is None
