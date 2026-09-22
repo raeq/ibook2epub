@@ -41,9 +41,7 @@ module, so this map saves a search:
 """
 
 import os
-import tracemalloc
 import zlib
-from collections.abc import Callable
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 
@@ -232,18 +230,3 @@ def corrupt_member(path: Path, member: str, raising: type[Exception]) -> Path:
         except UNREADABLE_MEMBER:
             continue
     raise AssertionError(f"no one-byte flip of {member} raises {raising.__name__}")
-
-
-def peak_memory(call: Callable[[], object]) -> int:
-    """
-    The most memory *call* held at once, in bytes, as tracemalloc counts it.
-
-    Tracing stops even when the call raises, so one failing test cannot leave
-    every test after it traced.
-    """
-    tracemalloc.start()
-    try:
-        call()
-        return tracemalloc.get_traced_memory()[1]
-    finally:
-        tracemalloc.stop()

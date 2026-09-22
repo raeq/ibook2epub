@@ -45,7 +45,7 @@
       "file": "epubconvert/cli.py",
       "line": 26,
       "pattern": "def build_parser\\(\\) -> argparse\\.ArgumentParser:",
-      "description": "Every flag lives in this one function, kept away from the conversion logic because argument definitions are long and change often.\n\nWorth reading in full at least once — the help text is where a lot of the design reasoning surfaced first. `--portable-names` (line 102) takes an optional value, so `-p` alone means `strip`. `--check-references` implies `--validate`, and so does `--epubcheck`, its older name."
+      "description": "Every flag lives in this one function, kept away from the conversion logic because argument definitions are long and change often.\n\nWorth reading in full at least once — the help text is where a lot of the design reasoning surfaced first. `--portable-names` (line 102) takes an optional value, so `-p` alone means `strip`. `--epubcheck` (line 188) implies `--validate`."
     },
     {
       "title": "Two guard rails, before anything runs",

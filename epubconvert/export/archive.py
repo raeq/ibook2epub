@@ -19,8 +19,7 @@ from pathlib import Path, PurePosixPath
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from ..collect.annotations import EMBEDDED_PATH, embedded_json
-from ..collect.checks import ValidationOptions
-from ..collect.validate import ArchiveInvalidError
+from ..collect.validate import ArchiveInvalidError, ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
 from ..utils.display import printable

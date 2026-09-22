@@ -4,10 +4,6 @@
 # got collection errors rather than tests.
 recursive-include tests *.py
 
-# The URL conformance cases are data, and the rule above ships only *.py, so
-# a suite run from the sdist would lose the file its URL tests read.
-recursive-include tests/data *.json
-
 include CONTRIBUTING.md
 include CHANGELOG.md
 

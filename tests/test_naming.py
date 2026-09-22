@@ -241,7 +241,7 @@ class TestMissingExtra:
 
         assert naming.build_policy(None).filename("Dune.epub") == "Dune.epub"
 
-    def test_cli_reports_a_missing_extra(self, tmp_path, output_dir):
+    def test_cli_reports_a_missing_tool(self, tmp_path, output_dir):
         monkeypatch = pytest.MonkeyPatch()
         source = tmp_path / "lib"
         make_package(source, "Dune.epub")
@@ -253,7 +253,7 @@ class TestMissingExtra:
         finally:
             monkeypatch.undo()
 
-        assert code == exits.MISSING_EXTRA
+        assert code == exits.MISSING_TOOL
         assert list(output_dir.iterdir()) == []
 
 
