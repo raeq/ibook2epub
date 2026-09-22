@@ -242,7 +242,7 @@ class TestEscaping:
         body = notes.body([_annotation(text=opener)])
         line = next(line_ for line_ in body.split("\n") if "not a" in line_)
 
-        assert line.startswith("> \\")
+        assert line.startswith("> \\") or line.startswith("> 1\\.")
 
     @pytest.mark.parametrize("opener", ["# not a heading", "- not a list"])
     def test_a_note_cannot_open_a_block_either(self, opener: str):
@@ -266,6 +266,32 @@ class TestEscaping:
         assert not any(
             line_.startswith("<!-- ibook2epub sha256=") for line_ in body.split("\n")
         )
+
+    def test_a_number_in_another_script_opens_no_list_and_is_left_alone(self):
+        # CommonMark numbers an ordered list in ASCII digits only, so a
+        # backslash in front of these would open nothing and show in the note.
+        assert notes._escape("\u0661. first") == "\u0661. first"
+
+    @pytest.mark.parametrize(
+        ("line", "escaped"),
+        [("1. first", "1\\. first"), ("12) x", "12\\) x"), ("  3. y", "  3\\. y")],
+    )
+    def test_a_list_number_is_escaped_on_its_delimiter(self, line, escaped):
+        # CommonMark escapes only ASCII punctuation. A backslash in front of the
+        # digits escaped nothing, so "\\1. first" showed its backslash.
+        assert notes._escape(line) == escaped
+
+    @pytest.mark.parametrize("line", ["1-x", "1x", ". x", "2026 was a year"])
+    def test_digits_that_open_no_list_are_left_alone(self, line):
+        assert notes._escape(line) == line
+
+    def test_the_note_reader_accepts_trailing_space_after_its_marker(self):
+        # The pattern holds the white space an editor may leave, so the reader
+        # and the escaper agree on what a marker is without each stripping it.
+        note = notes.compose([_annotation()])
+        marker = next(line for line in note.split("\n") if "sha256=" in line)
+
+        assert notes.is_ours(note.replace(marker, marker + " \t")) is True
 
     def test_a_note_cannot_forge_the_end_marker(self):
         # The blockquote prefix protects highlights; notes had no rule at all,

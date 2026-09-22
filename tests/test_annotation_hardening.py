@@ -43,7 +43,7 @@ from epubconvert.export import archive
 from epubconvert.run import cli
 from epubconvert.run.run import main
 from epubconvert.utils.opf import Package
-from tests.conftest import make_metadata_package, peak_memory
+from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 
 # ---------------------------------------------------------------- Apple's data
@@ -219,6 +219,10 @@ class TestCfiResolution:
     def test_an_assertion_of_parameters_alone_names_no_document(self):
         assert annotations._assertion_of("epubcfi(/6/46[;s=b]!/4/2/1:0)") is None
 
+    def test_parameters_after_the_id_are_not_part_of_it(self):
+        cfi = "epubcfi(/6/46[ch15.xhtml;s=b]!/4/2/1:0)"
+        assert annotations._assertion_of(cfi) == "ch15.xhtml"
+
     @pytest.mark.parametrize(
         "cfi",
         [
@@ -231,35 +235,46 @@ class TestCfiResolution:
         # the CFI, and a range that starts straight after the indirection.
         assert annotations._assertion_of(cfi) == "n-1"
 
+    @pytest.mark.parametrize(
+        "cfi",
+        [
+            "epubcfi(/6/4[chap01ref]!/4[body01]/16[svgimg]!/4/2)",
+            "epubcfi(/6/4[chap01ref]!/4/2[img]!/2:0)",
+        ],
+    )
+    def test_the_document_is_before_the_first_indirection_not_the_last(self, cfi):
+        # A second "!" enters an SVG or iframe inside the document; the id
+        # before it is an element there, not a manifest item.
+        assert annotations._assertion_of(cfi) == "chap01ref"
+
+    @pytest.mark.parametrize(
+        "cfi",
+        [
+            "epubcfi(/6/46[ch15.xhtml]/2!/4)",
+            "epubcfi(/6[spine]/46!/4/2/1:0)",
+            "epubcfi(/6/4[ch1]/2!/4/2:0)",
+        ],
+    )
+    def test_an_assertion_on_an_earlier_step_names_no_document(self, cfi):
+        # Only the step directly before the "!" is the spine item.
+        assert annotations._assertion_of(cfi) is None
+
+    @pytest.mark.parametrize(
+        "location", ["junk[x]!", "epubcfi[x]!", "x epubcfi(/6[a]!)"]
+    )
+    def test_what_is_not_a_cfi_names_no_document(self, location):
+        assert annotations._assertion_of(location) is None
+
+    def test_an_unescaped_special_character_makes_no_id(self):
+        assert annotations._assertion_of("epubcfi(/6/46[ch=1]!/4)") is None
+
+    def test_an_exclamation_mark_inside_an_assertion_is_not_the_indirection(self):
+        assert annotations._assertion_of("epubcfi(/6/46[wow!]!/4)") == "wow!"
+
     def test_an_escaped_bracket_in_the_id_is_looked_up_unescaped(self):
-        # The regular expression this replaced stopped at the first "]", so an
-        # id holding an escaped bracket came back cut short.
+        # Stopping at the first "]" missed an id holding an escaped bracket.
         cfi = "epubcfi(/6/46[ch^[15^].xhtml]!/4/2/1:0)"
         assert annotations._assertion_of(cfi) == "ch[15].xhtml"
-
-    DEEP = "epubcfi(/6/4[chap.xhtml]" + "!/4" * 100 + ")"
-
-    def test_a_cfi_nested_past_any_real_book_names_no_document(self):
-        # 100 indirections exhausted the interpreter's stack (#25). The deepest
-        # real CFI measured has one; past the parser's limit a CFI names nothing.
-        assert annotations._assertion_of(self.DEEP) is None
-
-    def test_a_cfi_nested_too_deep_costs_its_href_not_the_export(self, tmp_path):
-        # #25: one such row raised RecursionError out of collect(), which
-        # catches only an unusable row's TypeError, ValueError and OSError.
-        book = make_metadata_package(
-            tmp_path / "lib", "Leviathan Wakes.epub", title="Leviathan Wakes"
-        )
-        container = make_databases(
-            tmp_path / "container",
-            rows=[highlight(uuid="GOOD"), highlight(uuid="DEEP", location=self.DEEP)],
-            books=[library_row(path=str(book))],
-        )
-
-        found = annotations.collect(container)
-
-        assert sorted(item["id"] for item in found) == ["DEEP", "GOOD"]
-        assert "href" not in next(item for item in found if item["id"] == "DEEP")
 
 
 class TestHrefsStayInsideTheBook:
@@ -953,21 +968,10 @@ class TestIdentifiersAreCanonical:
 class TestIdentifierDigitsOutsideAscii:
     def test_a_superscript_run_is_kept_as_declared_rather_than_raising(self):
         # str.isdigit() accepts a superscript two, which int() then refuses, so
-        # the hand-written check raised where the grammar simply does not match.
+        # the check digit arithmetic raised ValueError and stopped the run.
         declared = "\u00b2" * 13
         assert canonical_identifier(declared) == declared
 
     def test_arabic_indic_digits_are_not_called_an_isbn(self):
         declared = "".join(chr(0x0660 + int(digit)) for digit in "9780553383041")
         assert canonical_identifier(declared) == declared
-
-    def test_a_long_identifier_holds_no_memory_per_character(self):
-        # 100,000 spaces held 19 MB while the grammar read them, an entry per
-        # character, where the code it replaced only stripped them (#26).
-        declared = " " * 100_000 + "x"
-        found: list[str] = []
-
-        peak = peak_memory(lambda: found.append(canonical_identifier(declared)))
-
-        assert found == ["x"]
-        assert peak < 1_000_000

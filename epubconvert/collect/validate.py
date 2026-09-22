@@ -19,7 +19,11 @@ metadata out of it.
 from __future__ import annotations
 
 import posixpath
+import re
+import shutil
+import subprocess
 import zlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib.parse import unquote, urldefrag
@@ -27,9 +31,10 @@ from xml.etree import ElementTree
 from xml.parsers import expat
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
 
-from ..grammar import IDENTIFIERS, PACKAGE, Node
+from ..utils.app_logger import logger
 from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
+from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME
 
@@ -73,6 +78,9 @@ UNREADABLE_MEMBER: tuple[type[Exception], ...] = (
     *_LZMA_ERRORS,
 )
 
+EPUBCHECK = "epubcheck"
+
+
 #: Values that appear where a ``dc:identifier`` should be but identify nothing.
 #: Every one was found in a real 2,805-book library: ``none`` is the identifier
 #: for 92 books, ``ISBN`` for three, ``unknown`` for one. Matched case-folded.
@@ -107,6 +115,18 @@ def usable_identifier(package: Package | None) -> str | None:
     return trimmed
 
 
+#: A UUID, whatever case it is written in.
+_UUID = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+#: The prefixes publishers put in front of the value itself. ``urn:`` scheme
+#: names are case-insensitive by RFC 8141, and this library holds both
+#: ``urn:isbn:`` and ``URN:ISBN:``.
+_IDENTIFIER_PREFIX = re.compile(r"(?i)^(urn:)?(isbn|uuid|ean)[:\s]+")
+
+
 def canonical_identifier(value: str) -> str:
     """
     Render an identifier the one way its book would always have written it.
@@ -126,27 +146,25 @@ def canonical_identifier(value: str) -> str:
     exactly as it came in, because the specification says this field is opaque
     and reshaping an opaque string is a claim about it.
 
-    What counts as either is the grammar
-    :data:`~epubconvert.grammar.syntaxes.IDENTIFIERS`, which also accepts the
-    labels and separators above; only the check digits are computed here.
-
     :param value: The identifier the package document declares.
 
     :return: The canonical form, or *value* unchanged when it is neither a
         valid ISBN nor a UUID.
     """
-    parsed = IDENTIFIERS.match(value)
-    if parsed is not None:
-        uuid = parsed.find("uuid")
-        if uuid is not None:
-            return f"urn:uuid:{uuid.text.lower()}"
-        digits = "".join(digit.text for digit in parsed.find_all("digit"))
-        check = parsed.find("check")
-        if check is None and _isbn13_verifies(digits):
-            return f"urn:isbn:{digits}"
-        if check is not None and _isbn10_verifies(digits, check):
-            return f"urn:isbn:{_as_isbn13(digits)}"
+    body = _IDENTIFIER_PREFIX.sub("", value.strip())
+    if _UUID.fullmatch(body):
+        return f"urn:uuid:{body.lower()}"
+
+    digits = re.sub(r"[-\s]", "", body)
+    if _is_isbn13(digits):
+        return f"urn:isbn:{digits}"
+    if _is_isbn10(digits):
+        return f"urn:isbn:{_as_isbn13(digits)}"
     return value.strip()
+
+
+#: The prefix a canonical ISBN carries.
+ISBN_URN = "urn:isbn:"
 
 
 def isbn13_of(identifier: object) -> str | None:
@@ -167,26 +185,49 @@ def isbn13_of(identifier: object) -> str | None:
     :return: The thirteen digits, or None when the book is identified some
         other way or its ISBN does not verify.
     """
-    if not isinstance(identifier, str):
+    if not isinstance(identifier, str) or not identifier.startswith(ISBN_URN):
         return None
-    parsed = IDENTIFIERS.match(identifier, "canonical_isbn")
-    if parsed is None:
-        return None
-    digits = parsed.child("isbn").text
-    return digits if _isbn13_verifies(digits) else None
+    digits = identifier[len(ISBN_URN) :]
+    return digits if _is_isbn13(digits) else None
 
 
-def _isbn13_verifies(digits: str) -> bool:
-    """Whether thirteen digits, as the grammar read them, carry a valid check digit."""
-    weighted = sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(digits))
-    return weighted % 10 == 0
+def _ascii_digits(text: str) -> bool:
+    """
+    Whether *text* is ASCII digits, and only those.
+
+    ``str.isdigit`` is not that test. It accepts a superscript two, which
+    ``int`` then refuses, so an identifier of superscript digits stopped the
+    run with a ValueError; and it accepts Arabic-Indic digits, which ``int``
+    reads, so such an identifier was written back as an ISBN in those digits.
+    """
+    return text.isascii() and text.isdigit()
 
 
-def _isbn10_verifies(body: str, check: Node) -> bool:
-    """Whether nine digits and the grammar's check node make a valid ISBN-10."""
-    total = sum((10 - i) * int(c) for i, c in enumerate(body))
-    total += 10 if check.find("ten") is not None else int(check.text)
-    return total % 11 == 0
+def _isbn13_sum(digits: str) -> int:
+    """ISO 2108's ISBN-13 weighting: the digits weigh 1 and 3 alternately."""
+    return sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(digits))
+
+
+def _isbn10_sum(body: str) -> int:
+    """ISO 2108's ISBN-10 weighting of the nine body digits: 10 down to 2."""
+    return sum((10 - i) * int(c) for i, c in enumerate(body))
+
+
+def _is_isbn13(digits: str) -> bool:
+    """Whether *digits* is thirteen digits carrying a valid check digit."""
+    if len(digits) != 13 or not _ascii_digits(digits):
+        return False
+    return _isbn13_sum(digits) % 10 == 0
+
+
+def _is_isbn10(digits: str) -> bool:
+    """Whether *digits* is ten characters carrying a valid check digit."""
+    if len(digits) != 10 or not _ascii_digits(digits[:9]):
+        return False
+    if not (_ascii_digits(digits[9]) or digits[9] in "Xx"):
+        return False
+    check = 10 if digits[9] in "Xx" else int(digits[9])
+    return (_isbn10_sum(digits[:9]) + check) % 11 == 0
 
 
 def isbn10_of(isbn13: str | None) -> str | None:
@@ -200,28 +241,32 @@ def isbn10_of(isbn13: str | None) -> str | None:
 
     :param isbn13: Thirteen digits, already verified, or None.
 
-    :return: The ten characters, or None.
+    :return: The ten characters, or None, including for anything that is not
+        thirteen ASCII digits: a prefix test alone made ``"978"`` into ``"0"``
+        and raised ValueError on ``"978abc..."``.
     """
-    parsed = None if isbn13 is None else IDENTIFIERS.match(isbn13, "bookland")
-    if parsed is None:
+    if (
+        isbn13 is None
+        or len(isbn13) != 13
+        or not _ascii_digits(isbn13)
+        or not isbn13.startswith("978")
+    ):
         return None
-    body = parsed.child("isbn10_body").text
-    total = sum((10 - position) * int(digit) for position, digit in enumerate(body))
-    check = (11 - total % 11) % 11
+    body = isbn13[3:12]
+    check = (11 - _isbn10_sum(body) % 11) % 11
     return body + ("X" if check == 10 else str(check))
 
 
-def _as_isbn13(body: str) -> str:
+def _as_isbn13(digits: str) -> str:
     """
     Convert a valid ISBN-10 to the ISBN-13 naming the same book.
 
-    :param body: The ISBN-10's nine digits before its check digit.
+    :param digits: Ten characters, already checked.
 
     :return: Thirteen digits.
     """
-    prefixed = f"978{body}"
-    weighted = sum((1 if i % 2 == 0 else 3) * int(c) for i, c in enumerate(prefixed))
-    return f"{prefixed}{(10 - weighted % 10) % 10}"
+    body = f"978{digits[:9]}"
+    return f"{body}{(10 - _isbn13_sum(body) % 10) % 10}"
 
 
 #: Values a converter writes where a title should be. Narrower than
@@ -267,6 +312,29 @@ class ArchiveInvalidError(Exception):
         shown = "; ".join(problems[:3])
         extra = f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""
         super().__init__(f"{shown}{extra}")
+
+
+@dataclass(frozen=True)
+class ValidationOptions:
+    """How thoroughly to check an archive after writing it."""
+
+    enabled: bool = False
+    epubcheck: bool = False
+
+    def check(self, path: Path) -> list[str]:
+        """
+        Run the configured checks over *path*.
+
+        :param path: The archive to check.
+
+        :return: A list of problems; empty means it passed.
+        """
+        if not self.enabled:
+            return []
+        problems = validate_archive(path)
+        if problems or not self.epubcheck:
+            return problems
+        return run_epubcheck(path)
 
 
 class _Members(Protocol):  # pylint: disable=too-few-public-methods
@@ -584,27 +652,6 @@ def _sort_name(root: ElementTree.Element, creator: ElementTree.Element) -> str |
     return None
 
 
-def _declares(properties: str | None, wanted: str) -> bool:
-    """
-    Whether a manifest item's ``properties`` attribute lists an unprefixed value.
-
-    The attribute is a list of values separated by white space, read by
-    :data:`~epubconvert.grammar.syntaxes.PACKAGE`, so "cover-image" is one value
-    among them and never a substring: an item whose properties are
-    "not-cover-image" is not a cover.
-
-    :param properties: The attribute, or None when the item has none.
-    :param wanted: The value to look for.
-
-    :return: True when the list holds it.
-    """
-    parsed = PACKAGE.match(properties or "", "properties")
-    return parsed is not None and any(
-        value.find("prefix") is None and value.child("reference").text == wanted
-        for value in parsed.find_all("property")
-    )
-
-
 def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
     """
     Build a :class:`Package` from a parsed package document.
@@ -640,7 +687,12 @@ def _package_from_root(root: ElementTree.Element, opf_path: str) -> Package:
             resolved = _resolve(opf_path, href)
             if resolved:
                 package.manifest[item_id] = resolved
-        if item_id and _declares(item.get("properties"), "cover-image"):
+        # A list of values separated by XML white space, so a whole value: the
+        # substring test took "not-cover-image" and "x:cover-image" for covers.
+        # Not str.split(), which also splits on a no-break space and the rest
+        # of Unicode's white space, inside what XML reads as one value.
+        properties = _XML_WHITESPACE.split(item.get("properties") or "")
+        if item_id and "cover-image" in properties:
             package.cover_id = item_id
 
     for itemref in root.iter(f"{{{OPF_NS}}}itemref"):
@@ -783,3 +835,68 @@ def _check_manifest(members: set[str], package: Package) -> list[str]:
         problems.append(f"{package.opf_path} declares no spine")
 
     return problems
+
+
+#: A line in which epubcheck reports a problem that fails a book.
+_EPUBCHECK_FAILURE = re.compile(r"\b(?:ERROR|FATAL)\b")
+
+#: What separates the values of an XML list attribute (XML 1.0, production 3).
+_XML_WHITESPACE = re.compile(r"[ \t\r\n]+")
+
+
+def epubcheck_available() -> bool:
+    """
+    Report whether the external ``epubcheck`` tool is on PATH.
+
+    :return: True if it can be run.
+    """
+    return shutil.which(EPUBCHECK) is not None
+
+
+def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
+    """
+    Run the external ``epubcheck`` validator over an archive.
+
+    This is a much stricter check than the structural one, and is only
+    attempted when the user asks for it.
+
+    :param path: The epub file to check.
+    :param timeout: Seconds to allow before giving up.
+
+    :return: A list of problems; empty means epubcheck was happy, or that it
+        could not run at all, which is logged rather than blamed on the book.
+    """
+    executable = shutil.which(EPUBCHECK)
+    if executable is None:
+        return ["epubcheck is not on PATH"]
+
+    try:
+        completed = subprocess.run(  # noqa: S603 - fixed executable, no shell
+            [executable, str(path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Not a verdict on the book. Reported as a problem, it kept the book
+        # out of the output directory -- so a book slower to check than the
+        # timeout was retried and never written, on every run -- and made
+        # --verify count a sound archive as damaged.
+        logger.warning(
+            "epubcheck could not check %s, so it was not checked: %s",
+            printable(path.name),
+            exc,
+        )
+        return []
+
+    if completed.returncode == 0:
+        return []
+
+    # Both streams: a JVM writes notices such as "Picked up JAVA_TOOL_OPTIONS"
+    # to stderr, which hid every diagnostic on stdout when only one was read.
+    # FATAL is epubcheck's most severe level, and was dropped with the rest.
+    output = f"{completed.stderr}\n{completed.stdout}".splitlines()
+    errors = [line.strip() for line in output if _EPUBCHECK_FAILURE.search(line)]
+    logger.debug("epubcheck exited %d for %s", completed.returncode, path.name)
+    return errors[:10] or [f"epubcheck failed with exit code {completed.returncode}"]

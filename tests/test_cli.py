@@ -89,20 +89,6 @@ class TestParseArgs:
 
         assert "0=no limit" in help_text
 
-    def test_check_references_implies_validate(self, library):
-        args = cli.parse_args(["-s", str(library), "--check-references"])
-
-        assert args.check_references is True
-        assert args.validate is True
-
-    def test_epubcheck_is_an_older_name_for_check_references(self, library):
-        # It ran the external tool until the built-in check took its place; the
-        # old spelling keeps a script that passes it working.
-        args = cli.parse_args(["-s", str(library), "--epubcheck"])
-
-        assert args.check_references is True
-        assert args.validate is True
-
 
 class TestLoggerConfiguration:
     """Verbosity mapping and handler management."""

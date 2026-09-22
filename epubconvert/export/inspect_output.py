@@ -18,8 +18,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from ..collect.checks import ValidationOptions
-from ..collect.validate import ValidationError, read_package_dir
+from ..collect.validate import ValidationError, ValidationOptions, read_package_dir
 from ..utils.app_logger import logger
 from ..utils.contained import is_free, open_contained, resolve
 from ..utils.display import printable
@@ -131,7 +130,7 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
 
 
 def verify_output(
-    output_dir: Path, references: bool = False
+    output_dir: Path, epubcheck: bool = False
 ) -> tuple[int, int, list[str]]:
     """
     Check the archives already sitting in the output directory.
@@ -141,12 +140,12 @@ def verify_output(
     back.
 
     :param output_dir: Directory holding exported epub files.
-    :param references: Also check the references inside each archive.
+    :param epubcheck: Also run the external epubcheck tool.
 
     :return: How many archives were checked, how many were damaged, and the
         names of the damaged ones so a caller can name them in its advice.
     """
-    options = ValidationOptions(enabled=True, references=references)
+    options = ValidationOptions(enabled=True, epubcheck=epubcheck)
     archives = sorted(output_dir.glob(f"*{PACKAGE_SUFFIX}"))
     damaged = 0
     broken: list[str] = []

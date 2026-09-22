@@ -88,7 +88,18 @@ class TestEachFailureHasItsOwnCode:
             ["-s", str(library), "-o", str(tmp_path / "out"), "-p", "romanize", "-q"]
         )
 
-        assert code == exits.MISSING_EXTRA
+        assert code == exits.MISSING_TOOL
+
+    def test_a_missing_external_tool_has_its_own_code(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("epubconvert.run.run.epubcheck_available", lambda: False)
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+
+        code = run.main(
+            ["-s", str(library), "-o", str(tmp_path / "out"), "--epubcheck", "-q"]
+        )
+
+        assert code == exits.MISSING_TOOL
 
     def test_a_verify_target_that_is_not_there_has_its_own_code(self, tmp_path):
         source = tmp_path / "lib"

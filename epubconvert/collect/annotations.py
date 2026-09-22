@@ -37,13 +37,13 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from .. import __version__
-from ..grammar import CFI
 from ..utils import schema
 from ..utils.app_logger import logger
 from ..utils.contained import escapes
@@ -62,6 +62,26 @@ STDOUT = "-"
 #: than trust the number, rows are filtered on having text, which is the thing
 #: that actually makes an annotation exportable.
 HIGHLIGHT_TYPE = 2
+
+#: A CFI as Apple Books stores one, bare or after a book's address and "#"
+#: (EPUB CFI 1.1, section 3.2). Its body is what the parentheses hold.
+CFI_FORM = re.compile(r"(?:[^#]*#)?epubcfi\((.*)\)", re.S)
+
+#: The body up to its first indirection: the first "!" that is neither escaped
+#: nor inside an assertion, where "!" is an ordinary character.
+CFI_BEFORE_INDIRECTION = re.compile(r"((?:\^.|\[(?:\^.|[^\]^])*\]|[^!\[^])*)!", re.S)
+
+#: The step that ends there, when it asserts an ID: "/", its index, then "["
+#: and the ID -- plain characters and "^"-escaped specials -- and after it,
+#: optionally, the assertion's text-location or parameter part (section 3.1).
+CFI_DOCUMENT_STEP = re.compile(
+    r"(?<!\^)/[0-9]+\[((?:\^[\^\[\](),;=]|[^\^\[\](),;=])*)"
+    r"(?:[,;](?:\^.|[^\^\[\]])*)?\]\Z",
+    re.S,
+)
+
+#: A CFI escape, and the character it stands for.
+CFI_ESCAPE = re.compile(r"\^(.)", re.S)
 
 #: Characters a text fragment leaves alone. The rest are percent-encoded.
 FRAGMENT_SAFE = ""
@@ -154,35 +174,28 @@ def _assertion_of(cfi: str) -> str | None:
     """
     Pull the ID assertion out of a CFI.
 
-    It is the assertion on the step just before the first "!", the step that
-    names the spine item the rest of the CFI points inside; the CFI is read by
-    :data:`~epubconvert.grammar.syntaxes.CFI`. An assertion further left, as in
-    ``/6[spine]/46[ch15.xhtml]!``, names no document. Escapes such as ``^]``
-    are undone, so an id holding a bracket is looked up as the manifest writes
-    it.
+    It is the assertion on the step just before the *first* indirection: the
+    spine step, whose target the rest of the CFI points inside. A later "!"
+    enters something embedded in that document, an SVG or an iframe, and an
+    assertion before it names an element there, not a manifest item. An
+    assertion further left, as in ``/6[spine]/46!``, names no document either,
+    so a spine step without one asserts nothing.
 
     :param cfi: The CFI Apple recorded.
 
-    :return: What it asserts, or None if it asserts nothing or is no CFI.
+    :return: What it asserts, unescaped, or None if it asserts nothing or is
+        not a CFI.
     """
-    parsed = CFI.match(cfi)
-    indirection = None if parsed is None else parsed.find("redirected_path")
-    if parsed is None or indirection is None:
+    form = CFI_FORM.fullmatch(cfi)
+    if form is None:
         return None
-    step = next(
-        (step for step in parsed.find_all("step") if step.end == indirection.start),
-        None,
-    )
-    assertion = None if step is None else step.find("assertion")
-    if assertion is None:
+    before = CFI_BEFORE_INDIRECTION.match(form.group(1))
+    if before is None:
         return None
-    value = assertion.children[0]
-    if value.name != "value" or value.start != assertion.start:
+    step = CFI_DOCUMENT_STEP.search(before.group(1))
+    if step is None:
         return None
-    return "".join(
-        part.child("special").text if part.name == "escaped" else part.text
-        for part in value.children
-    )
+    return CFI_ESCAPE.sub(r"\1", step.group(1)) or None
 
 
 def _href_of(cfi: str, book: Package | None) -> str | None:

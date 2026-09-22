@@ -13,7 +13,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert.collect import checks, validate
+from epubconvert.collect import validate
 from epubconvert.export.archive import zip_package
 from epubconvert.run import run
 from epubconvert.utils import exits
@@ -246,13 +246,13 @@ class TestValidationOptions:
         path = tmp_path / "junk.epub"
         path.write_bytes(b"not a zip")
 
-        assert checks.ValidationOptions(enabled=False).check(path) == []
+        assert validate.ValidationOptions(enabled=False).check(path) == []
 
     def test_enabled_reports_problems(self, tmp_path):
         path = tmp_path / "junk.epub"
         path.write_bytes(b"not a zip")
 
-        assert checks.ValidationOptions(enabled=True).check(path)
+        assert validate.ValidationOptions(enabled=True).check(path)
 
 
 class TestValidateDuringExport:
@@ -263,7 +263,7 @@ class TestValidateDuringExport:
         count = zip_package(
             source,
             output_dir / "Book.epub",
-            checks.ValidationOptions(enabled=True),
+            validate.ValidationOptions(enabled=True),
         )
 
         assert count > 0
@@ -276,7 +276,7 @@ class TestValidateDuringExport:
         target = output_dir / "Bad.epub"
 
         with pytest.raises(validate.ArchiveInvalidError):
-            zip_package(source, target, checks.ValidationOptions(enabled=True))
+            zip_package(source, target, validate.ValidationOptions(enabled=True))
 
         # The whole point of validating before the replace: nothing lands, so
         # the book is retried rather than recorded as done.
@@ -841,6 +841,41 @@ def _book_declaring(tmp_path: Path, manifest: str, spine: str) -> Path:
     return write_epub(tmp_path / "Book.epub", members)
 
 
+class TestTheCoverIsAPropertyValueNotASubstring:
+    @staticmethod
+    def _cover_of(tmp_path: Path, properties: str) -> str | None:
+        manifest = (
+            '<item id="ch1" href="text/chapter1.xhtml"'
+            ' media-type="application/xhtml+xml"/>'
+            '<item id="art" href="images/cover.jpg" media-type="image/jpeg"'
+            f' properties="{properties}"/>'
+        )
+        path = _book_declaring(tmp_path, manifest, '<itemref idref="ch1"/>')
+        with ZipFile(path) as archive:
+            return validate.read_package(archive).cover_id
+
+    @pytest.mark.parametrize("properties", ["cover-image", " nav  cover-image "])
+    def test_cover_image_among_the_values_is_the_cover(self, tmp_path, properties):
+        assert self._cover_of(tmp_path, properties) == "art"
+
+    @pytest.mark.parametrize(
+        "properties",
+        [
+            "not-cover-image",
+            "cover-images",
+            "x:cover-image",
+            "",
+            "nav\u00a0cover-image",
+            "cover-image\u00a0",
+        ],
+    )
+    def test_a_value_that_only_contains_the_word_is_not(self, tmp_path, properties):
+        # The substring test took the first three for a cover, and str.split()
+        # the last two: XML separates list values with space, tab, CR and LF
+        # only, so a no-break space is part of the value.
+        assert self._cover_of(tmp_path, properties) is None
+
+
 class TestManifestAndSpineProblemsAreSummarised:
     """
     A book can be wrong in hundreds of ways at once. The report names the first
@@ -896,60 +931,46 @@ class TestManifestAndSpineProblemsAreSummarised:
 
 
 class TestTheValidatorRunsWhatItWasAskedFor:
-    def test_the_reference_check_runs_only_after_the_structural_check_passes(
+    def test_epubcheck_runs_only_after_the_structural_check_passes(
         self, good_epub, monkeypatch
     ):
         called: list[Path] = []
 
-        def record(path: Path) -> list[str]:
+        def record(path: Path, **_options: object) -> list[str]:
             called.append(path)
             return []
 
-        monkeypatch.setattr(checks, "reference_problems", record)
-        options = checks.ValidationOptions(enabled=True, references=True)
+        monkeypatch.setattr(validate, "run_epubcheck", record)
+        options = validate.ValidationOptions(enabled=True, epubcheck=True)
 
         assert options.check(good_epub) == []
         assert called == [good_epub]
 
-    def test_a_structural_failure_skips_the_reference_check(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_structural_failure_skips_epubcheck(self, tmp_path, monkeypatch):
         called: list[Path] = []
 
-        def record(path: Path) -> list[str]:
+        def record(path: Path, **_options: object) -> list[str]:
             called.append(path)
             return []
 
-        monkeypatch.setattr(checks, "reference_problems", record)
+        monkeypatch.setattr(validate, "run_epubcheck", record)
         broken = tmp_path / "Empty.epub"
         with ZipFile(broken, "w"):
             pass
-        options = checks.ValidationOptions(enabled=True, references=True)
+        options = validate.ValidationOptions(enabled=True, epubcheck=True)
 
         assert "archive is empty" in options.check(broken)
         assert called == []
 
 
-class TestTheCoverIsAPropertyValueNotASubstring:
-    @staticmethod
-    def _cover_of(tmp_path: Path, properties: str) -> str | None:
-        manifest = (
-            '<item id="ch1" href="text/chapter1.xhtml"'
-            ' media-type="application/xhtml+xml"/>'
-            '<item id="art" href="images/cover.jpg" media-type="image/jpeg"'
-            f' properties="{properties}"/>'
-        )
-        path = _book_declaring(tmp_path, manifest, '<itemref idref="ch1"/>')
-        with ZipFile(path) as archive:
-            return validate.read_package(archive).cover_id
-
-    @pytest.mark.parametrize("properties", ["cover-image", " nav  cover-image "])
-    def test_cover_image_among_the_values_is_the_cover(self, tmp_path, properties):
-        assert self._cover_of(tmp_path, properties) == "art"
+class TestIsbn10OfRefusesWhatIsNotAnIsbn13:
+    def test_a_978_isbn13_has_an_isbn10(self):
+        assert validate.isbn10_of("9780553383041") == "0553383043"
 
     @pytest.mark.parametrize(
-        "properties", ["not-cover-image", "cover-images", "x:cover-image", ""]
+        "value", ["978", "978123", "978abcdefghij", "97805533830411", "9790553383041"]
     )
-    def test_a_value_that_only_contains_the_word_is_not(self, tmp_path, properties):
-        # The substring test this replaced took each of these for a cover.
-        assert self._cover_of(tmp_path, properties) is None
+    def test_anything_else_has_none(self, value):
+        # A prefix test alone made "978" into "0" and raised ValueError on
+        # letters; a 979 ISBN was never given an ISBN-10.
+        assert validate.isbn10_of(value) is None

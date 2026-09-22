@@ -7,26 +7,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-### Added
-
-- `--check-references` checks the references inside each archive: links and
-  their fragments, images, stylesheets and fonts. It parses every URL by the
-  WHATWG URL Standard, applies EPUB 3.3's rule for URLs that leave the
-  container, and reports under epubcheck's message IDs, with nothing else to
-  install. It implies `--validate`, runs once the structural check has passed,
-  and fails a book on an error but not on a warning. Replayed over one
-  2,798-book library it took 11.6 s on 10 processes and agreed with epubcheck
-  exactly on RSC-012, RSC-030, RSC-033 and HTM-025.
-
-### Changed
-
-- `--epubcheck` no longer runs the external epubcheck. It is now an older name
-  for `--check-references`, so a script that passes it keeps working without a
-  Java runtime, but it gets the reference check alone: epubcheck's schema, CSS
-  and metadata rules are no longer applied. A run no longer stops with exit
-  code `6` when epubcheck is not on `PATH`, so `6` now means only that a
-  required extra is not installed.
-
 ### Fixed
 
 - A damaged compressed member no longer ends a run with a traceback. Reading
@@ -39,20 +19,34 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   filename, and the refresh names the archive it could not update and goes on.
   ([#21](https://github.com/raeq/ibook2epub/issues/21))
 
-- The small syntaxes a book carries are read by grammars rather than by
-  regular expressions and string splitting: book identifiers, EPUB CFIs, the
-  fragments of links, and the package document's `version` and `properties`.
-  Six answers change. A manifest item whose `properties` only contain the
-  word, such as `not-cover-image`, is no longer taken for the cover. A CFI
-  whose ID assertion holds an escaped bracket resolves to its document. An
-  identifier of superscript digits no longer stops the run with a
-  `ValueError`. A note line that starts with a non-ASCII digit no longer gets a
-  backslash that Markdown shows. A forged start marker followed by white space
-  is escaped like any other. And the reference check applies EPUB 3's rules
-  only to a package whose `version` is a 3, with leading zeros, dotted digits
-  and surrounding white space allowed: `" 3.0"` and `"03.0"` now count as EPUB
-  3, and `"30"`, `"3x"` and `"3.0beta"`, which only began with a 3, no longer
-  do.
+- A manifest item whose `properties` only contain the word `cover-image`, such
+  as `not-cover-image` or `x:cover-image`, is no longer taken for the cover; the
+  attribute is a list of values separated by XML white space, and only a whole
+  value counts.
+
+- A book identifier made of superscript digits no longer stops the run with a
+  `ValueError`, and one in Arabic-Indic digits is no longer written back as an
+  ISBN. Only ASCII digits make an ISBN.
+
+- A highlight's document is read from the step just before the CFI's first
+  `!`. A CFI that also points inside an embedded SVG or iframe no longer
+  resolves to that element's id, and neither an assertion on an earlier step
+  nor a location that is not a CFI names a document. An ID written with an
+  escaped character, such as `[ch^[15^].xhtml]`, resolves to its document, and
+  one followed by parameters (`[ch15.xhtml;s=b]`) is looked up without them.
+
+- In an exported note, a line that would open a numbered list is escaped as
+  `1\.` rather than `\1.`, which Markdown showed with its backslash. A line
+  starting with a digit from another script, such as `١.`, is left alone, and a
+  line that forges the start marker followed by white space is escaped like any
+  other.
+
+- `--epubcheck` no longer fails a book it could not check. An epubcheck that
+  cannot be run, or runs past its timeout, is logged: a book that took longer
+  than the timeout was left out of the output directory and retried on every
+  run, and `--verify` counted it as damaged. A `FATAL` message is reported like
+  an `ERROR`, and both of epubcheck's output streams are read, so a JVM notice
+  on one no longer hides the errors on the other.
 
 ## [2.3.1] - 2026-09-11
 

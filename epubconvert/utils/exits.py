@@ -41,9 +41,8 @@ NO_SOURCE = 4
 #: The output directory could not be created, opened or found.
 NO_OUTPUT = 5
 
-#: A required extra is not installed. It also meant a missing external tool
-#: until the built-in reference check took the place of epubcheck, the only one.
-MISSING_EXTRA = 6
+#: A required extra or external tool is not installed.
+MISSING_TOOL = 6
 
 #: ``--verify`` found at least one damaged archive.
 DAMAGED = 7
@@ -64,7 +63,7 @@ MEANINGS: dict[int, str] = {
     LOCKED: "Another run holds the output lock. Worth retrying later.",
     NO_SOURCE: "The source directory does not exist, or no library was found.",
     NO_OUTPUT: "The output directory could not be created, opened or found.",
-    MISSING_EXTRA: "A required extra is not installed.",
+    MISSING_TOOL: "A required extra or external tool is not installed.",
     DAMAGED: "`--verify` found at least one damaged archive.",
     NO_PERMISSION: "macOS refused access; the terminal needs Full Disk Access.",
     INTERRUPTED: "Stopped with Ctrl-C. Finished books are intact; rerun to continue.",
