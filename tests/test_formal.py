@@ -39,6 +39,20 @@ EXPECTED = {
     "OutputProtocol.MixedLockingUnguarded": "Invariant NoLiveWorkSwept is violated.",
     "OutputProtocol.MixedLockingStall": "Invariant NoLiveWorkSwept is violated.",
     "OutputProtocol.NoLocking": "Temporal properties were violated.",
+    "RerunPlanner.Stable": HOLDS,
+    "RerunPlanner.StableSuffix": HOLDS,
+    # Open defects, pinned so that fixing one has to update this table and the
+    # model with it: see formal/README.md.
+    "RerunPlanner.Match": "Invariant ExportedMeansTheBooksOwnFile is violated.",
+    "RerunPlanner.MatchWithIdentifiers": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
+    "RerunPlanner.LibraryChanges": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
+    "RerunPlanner.RefreshOverwrites": (
+        "Invariant NeverWritesOverAnotherBook is violated."
+    ),
 }
 
 
