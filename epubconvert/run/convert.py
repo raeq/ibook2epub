@@ -770,7 +770,7 @@ def sweep_partials(output_dir: Path, now: float | None = None) -> int:
     everything afterwards and accumulate on the very volume ``--min-free``
     exists to protect.
 
-    The glob is anchored on :data:`~epubconvert.archive.PARTIAL_PREFIX` as
+    The glob is anchored on :data:`~epubconvert.export.archive.PARTIAL_PREFIX` as
     well as the suffix. A bare ``*.part`` also matches a browser's in-progress
     download or a user's own file, and the default output directory is
     ``~/Books`` -- so the sweep deleted real user data.

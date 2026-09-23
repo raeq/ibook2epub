@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 
 FORMAL = Path(__file__).resolve().parent.parent / "formal"
-JAR = os.environ.get("TLA2TOOLS_JAR")
+#: Unset and empty both mean no jar: an empty classpath only fails later.
+JAR = os.environ.get("TLA2TOOLS_JAR") or None
 
 #: The line TLC prints when every property of a configuration holds.
 HOLDS = "Model checking completed. No error has been found."

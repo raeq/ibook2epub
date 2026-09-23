@@ -126,9 +126,9 @@ What the configurations that fail show:
   each of these against the CLI.
 - **`Unidentifiable`** is the limit the fix does not remove. When one of the
   two books has no usable identifier (none at all, or a placeholder such as
-  `none`), nothing tells them apart, and the name decides as it did before. Two books that share a
-  genuine identifier, such as a converter's template UUID, cannot be told
-  apart either.
+  `none`), nothing tells them apart, and the name decides as it did before.
+  Two books that share a genuine identifier, such as a converter's template
+  UUID, cannot be told apart either.
 
 The check runs only under a naming policy that already reads each source's
 package document (`--name-by author-title`), so it adds no reads on the
