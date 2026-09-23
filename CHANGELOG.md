@@ -9,6 +9,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Under `--name-by author-title`, a book is no longer reported exported by an
+  archive that holds a different book with the same name, and `--refresh` and
+  `--force` no longer write over that archive. With no state file, a run took
+  a book whose name was on the shelf to be exported. But a run narrowed by
+  `--match` names only the books it selected, so two editions of one title
+  could each take the name alone. And once the edition holding a name was
+  deleted from the library, the next edition took it. Each case was reported
+  `exported` and never written, and `--refresh` then replaced the other
+  edition's archive, which for a book deleted from Apple Books could be its
+  last copy. The run now reads the identifier of the archive already on the
+  shelf and reports a collision naming both books when they differ. A book
+  with no usable identifier cannot be told apart this way, and its name is
+  trusted as before. A TLA+ model of the planner found all three cases.
+
 - A run no longer deletes the temporary file of another run that is still
   writing it. A run that cannot take the output lock carries on unlocked --
   on NFS, `flock` fails with `ENOLCK` when the remote lock manager does, and

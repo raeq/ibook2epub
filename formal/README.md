@@ -79,10 +79,10 @@ What the configurations that fail show:
 ## RerunPlanner
 
 This models how the planner names books (`assign_names`) and how a run reads
-the shelf back (`plan_exports`). There is no state file, so a run decides a
-book is already exported when a file with the book's name is on the shelf.
-The model checks that inference over a sequence of runs while the library
-changes. It checks two properties:
+the shelf back (`plan_exports`). There is no state file, so a book whose
+name is on the shelf looks exported. The model checks what that inference
+gets right over a sequence of runs while the library changes. It checks two
+properties:
 
 - **ExportedMeansTheBooksOwnFile:** a book the planner reports as exported is
   the book held in the file it points at.
@@ -91,34 +91,46 @@ changes. It checks two properties:
 Names are strings, so a title that looks like a suffix (`Dune (2)`) collides
 exactly as it does on disk. The model has 3 editions sharing one title, as
 they do under `--name-by author-title`, and runs that can be stopped
-partway.
+partway. `VerifyHolder` switches on `_decide_against_holder`, which reads
+the identifier of the archive already on the shelf and reports a collision
+when it and the book's own identifier are both usable and differ.
 
-| Configuration | Runs | Library | Outcome |
-|---|---|---|---|
-| `Stable` | whole library, `--refresh` | fixed | both hold |
-| `StableSuffix` | the same, `--on-collision suffix`, look-alike title | fixed | both hold |
-| `Match` | `--match` | fixed | **ExportedMeansTheBooksOwnFile violated** |
-| `MatchWithIdentifiers` | `--match`, suffix, every identifier usable | fixed | **ExportedMeansTheBooksOwnFile violated** |
-| `LibraryChanges` | whole library | books added and removed | **ExportedMeansTheBooksOwnFile violated** |
-| `RefreshOverwrites` | whole library, `--refresh` | books added and removed | **NeverWritesOverAnotherBook violated** |
+| Configuration | Runs | Library | Identifiers | Check | Outcome |
+|---|---|---|---|---|---|
+| `Stable` | whole library, `--refresh` | fixed | none | on | both hold |
+| `StableSuffix` | the same, suffix mode, look-alike title | fixed | two | on | both hold |
+| `Changing` | `--match`, `--refresh` | books added and removed | all | on | both hold |
+| `ChangingSuffix` | the same, suffix mode | books added and removed | all | on | both hold |
+| `MatchUnverified` | `--match` | fixed | all | off | **ExportedMeansTheBooksOwnFile violated** |
+| `ChangesUnverified` | whole library | books added and removed | all | off | **ExportedMeansTheBooksOwnFile violated** |
+| `RefreshUnverified` | whole library, `--refresh` | books added and removed | all | off | **NeverWritesOverAnotherBook violated** |
+| `Unidentifiable` | `--match`, `--refresh` | books added and removed | book 1 only | on | **ExportedMeansTheBooksOwnFile violated** |
 
-The four violations are open defects, not accepted behaviour. They are
-checked in so that a fix has to update the model and
-`tests/test_formal.py` along with the code. Each one reproduces with the
-real CLI, using three packages titled *Dune* by Frank Herbert and
-`--name-by author-title`:
+What the configurations that fail show:
 
-- **Match:** `--match 1965` writes `Frank Herbert - Dune.epub`. A later
-  `--match Ace` names the Ace edition on its own, so it wants the same name.
-  `--list` then reports it as `exported` from the 1965 edition's file, and
-  the Ace edition is never written.
-- **LibraryChanges:** a whole-library run writes the 1965 edition, and the
-  other two are reported as collisions. After the 1965 edition is deleted
-  from the library, the next run reports the Ace edition as `exported` from
-  the 1965 edition's file, with no warning.
-- **RefreshOverwrites:** the same, but with `--refresh` and a newer Ace
-  source. The Ace edition is written over the 1965 edition's archive, which
-  was likely the last copy of a book deleted from Apple Books.
+- **The `Unverified` rows** are the three defects the check fixes. Each one
+  reproduces with the code before the check. The setup is three packages
+  titled *Dune* by Frank Herbert, each with its own identifier, run with
+  `--name-by author-title`:
+  - `--match 1965` writes `Frank Herbert - Dune.epub`. A later
+    `--match Ace` names the Ace edition on its own, so it wants the same
+    name, and `--list` reports it as `exported` from the 1965 edition's
+    file.
+  - After the 1965 edition is deleted from the library, the next run
+    reports the Ace edition as `exported` from that same file.
+  - With `--refresh` and a newer source, the Ace edition is written over the
+    1965 edition's archive. That was likely the last copy of a book deleted
+    from Apple Books.
 
-Suffix markers do not prevent the `--match` case. A book that is alone in a
-narrowed run is not in a crowd, so it gets no marker.
+  `tests/test_planning.py::TestANameOnTheShelfIsNotProofOfTheBook` replays
+  each of these against the CLI.
+- **`Unidentifiable`** is the limit the fix does not remove. When one of the
+  two books has no usable identifier (none at all, or a placeholder such as
+  `none`), nothing tells them apart, and the name decides as it did before. Two books that share a
+  genuine identifier, such as a converter's template UUID, cannot be told
+  apart either.
+
+The check runs only under a naming policy that already reads each source's
+package document (`--name-by author-title`), so it adds no reads on the
+source side. Under the default policy, names come from the package folder
+names, which are unique within a library.

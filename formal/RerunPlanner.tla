@@ -17,6 +17,8 @@
  *   plan_exports / _decide / _decide_against_existing    EXPORTED when a
  *       file of the book's name exists, PENDING otherwise; --refresh writes
  *       over that file when the source is newer
+ *   _decide_against_holder      COLLISION when that file's usable identifier
+ *       and the book's differ; with either unusable, the name is trusted
  * and epubconvert/run/run.py (_shared_names): a run narrowed by --match names
  * only the books it selected.
  *
@@ -33,7 +35,8 @@ CONSTANTS
     OnCollision,   \* "skip" (the default) or "suffix"
     AllowMatch,    \* runs may be narrowed with --match
     AllowRefresh,  \* runs may pass --refresh
-    AllowChanges   \* books may be added to and removed from the library
+    AllowChanges,  \* books may be added to and removed from the library
+    VerifyHolder   \* _decide_against_holder: the check that fixes the defects
 
 Books == 1..N
 
@@ -123,8 +126,15 @@ RemoveBook(b) ==
 Run(S, refresh, newer, done) ==
     LET name     == Assign(S)
         present  == {b \in S : name[b] # "" /\ shelf[name[b]] # 0}
-        rewrite  == IF refresh THEN present \cap newer ELSE {}
-        exported == present \ rewrite
+        \* The archive's identifier and the book's are both usable and differ.
+        foreign  == {b \in present :
+                       /\ VerifyHolder
+                       /\ b \in Usable
+                       /\ shelf[name[b]] \in Usable
+                       /\ shelf[name[b]] # b}
+        ours     == present \ foreign
+        rewrite  == IF refresh THEN ours \cap newer ELSE {}
+        exported == ours \ rewrite
         pending  == {b \in S : name[b] # "" /\ shelf[name[b]] = 0} \cup rewrite
         written  == pending \cap done
     IN /\ misreported' = (misreported \/
@@ -137,7 +147,7 @@ Run(S, refresh, newer, done) ==
                         ELSE shelf[n]]
        /\ last' = <<"ran", IF S = lib THEN "all" ELSE "--match", S,
                     IF refresh THEN "--refresh" ELSE "",
-                    [b \in S |-> IF name[b] = "" THEN "collision"
+                    [b \in S |-> IF name[b] = "" \/ b \in foreign THEN "collision"
                                 ELSE IF b \in exported THEN <<"exported", name[b]>>
                                 ELSE IF b \in written THEN <<"wrote", name[b]>>
                                 ELSE <<"pending", name[b]>>]>>
@@ -145,14 +155,23 @@ Run(S, refresh, newer, done) ==
 
 Next ==
     \/ \E b \in Books : AddBook(b) \/ RemoveBook(b)
-    \/ \E S \in SUBSET lib, refresh \in BOOLEAN, newer \in SUBSET Books,
-          done \in SUBSET Books :
+    \* Only a run's own books matter to `newer` and `done`, and `newer` only
+    \* under --refresh: the same successors as ranging over every set of
+    \* books, enumerated far fewer times over.
+    \/ \E S \in SUBSET lib, refresh \in BOOLEAN :
          /\ S # {}
          /\ AllowMatch \/ S = lib
          /\ AllowRefresh \/ ~refresh
-         /\ Run(S, refresh, newer, done)
+         /\ \E newer \in (IF refresh THEN SUBSET S ELSE {{}}),
+               done \in SUBSET S :
+              Run(S, refresh, newer, done)
 
 Spec == Init /\ [][Next]_vars
+
+\* What makes two states the same, for TLC's VIEW: everything but `last`,
+\* which is there for reading counterexamples and would otherwise multiply
+\* the states checked by every way of reaching each one.
+View == <<lib, shelf, misreported, clobbered>>
 
 -----------------------------------------------------------------------------
 (* Properties *)

@@ -41,17 +41,21 @@ EXPECTED = {
     "OutputProtocol.NoLocking": "Temporal properties were violated.",
     "RerunPlanner.Stable": HOLDS,
     "RerunPlanner.StableSuffix": HOLDS,
-    # Open defects, pinned so that fixing one has to update this table and the
-    # model with it: see formal/README.md.
-    "RerunPlanner.Match": "Invariant ExportedMeansTheBooksOwnFile is violated.",
-    "RerunPlanner.MatchWithIdentifiers": (
+    "RerunPlanner.Changing": HOLDS,
+    "RerunPlanner.ChangingSuffix": HOLDS,
+    # Without planning._decide_against_holder: the defects it fixes.
+    "RerunPlanner.MatchUnverified": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
-    "RerunPlanner.LibraryChanges": (
+    "RerunPlanner.ChangesUnverified": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
-    "RerunPlanner.RefreshOverwrites": (
+    "RerunPlanner.RefreshUnverified": (
         "Invariant NeverWritesOverAnotherBook is violated."
+    ),
+    # The known limit: a book with no usable identifier cannot be told apart.
+    "RerunPlanner.Unidentifiable": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
 }
 
