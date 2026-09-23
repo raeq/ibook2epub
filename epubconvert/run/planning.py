@@ -410,6 +410,7 @@ def _assign_one(
         None,
         _named_without_author(metadata),
         _named_from_folder(metadata, setup.policy),
+        usable_identifier(metadata),
     )
 
 
@@ -644,7 +645,7 @@ def _decide(
         return Decision(package, COLLISION, reason=assignment.reason)
 
     clash = existing.get(filesystem_key(key))
-    taken = _decide_against_clash(package, clash, key)
+    taken = _decide_against_clash(package, clash, assignment)
     if taken is not None:
         return taken
     found = clash.path if clash is not None else None
@@ -675,28 +676,93 @@ def _decide(
 
 
 def _decide_against_clash(
-    package: Path, clash: _Existing | None, key: str
+    package: Path, clash: _Existing | None, assignment: Assignment
 ) -> Decision | None:
     """
-    Decide what an archive holding this filename settles, if anything.
+    Decide whether the archive holding this filename is another book's.
 
-    The filesystem key answers a looser question than identity: two different
-    books can share it. When they do, the archive on disk is not this book, and
-    neither available answer is "write it" -- that would replace another book's
-    archive, and calling it exported would silently drop this one.
+    Two ways it can be. The filesystem key answers a looser question than
+    identity, so two different books can share it; and even a file of this
+    book's own identity may hold another book (see
+    :func:`_decide_against_holder`). Either way neither available answer is
+    "write it" -- that would replace another book's archive -- nor
+    "exported", which would silently drop this one.
 
     :param package: The package directory.
     :param clash: The archive occupying this filename, if any.
-    :param key: This package's identity.
+    :param assignment: This package's assigned name, identity and identifier.
 
-    :return: A collision decision, or None when the name is this book's own or
-        free.
+    :return: A collision decision, or None when the name is free or the file
+        may be this book's own.
     """
-    if clash is None or clash.identity == key:
+    if clash is None:
+        return None
+    if clash.identity != assignment.identity:
+        return Decision(
+            package, COLLISION, reason=f"{clash.path.name} already holds this name"
+        )
+    return _decide_against_holder(package, clash.path, assignment.identifier)
+
+
+def _decide_against_holder(
+    package: Path, found: Path, identifier: str | None
+) -> Decision | None:
+    """
+    Decide whether the archive holding this book's name holds another book.
+
+    A name is not a book. With no state file, a book whose name is on the
+    shelf was taken for exported -- but the name is only what the planner
+    computes now, and a file keeps the book it was written for. A run
+    narrowed by ``--match`` names only the books it selected, so a book alone
+    in it takes a name another edition's archive already has; and once the
+    edition holding a name is deleted from the library, the next edition
+    takes the name. Each was reported exported by the other book's archive
+    and never written, and ``--refresh`` or ``--force`` wrote it over that
+    archive, which for a deleted book can be the last copy.
+    formal/RerunPlanner.tla found all three.
+
+    So when the book has a usable identifier, the archive's identifier is read
+    and compared. Only when both are usable: a placeholder such as ``none``,
+    or an archive that cannot be read, says nothing about which book it is,
+    and the name is trusted as before.
+
+    Reading one archive's identifier measured 0.15 ms for a 4-member book and
+    1.38 ms for a 504-member one, on Linux 6.18 with the archives in the page
+    cache: between 0.4 s and 3.9 s over a 2,800-book shelf, against no reads
+    at all. It runs only under a policy that already reads each source's
+    package document, and only for a book whose name is on the shelf.
+
+    :param package: The package directory.
+    :param found: The archive on the shelf under this book's name.
+    :param identifier: This book's usable identifier, or None.
+
+    :return: A collision decision, or None when the archive may be this book.
+    """
+    if identifier is None:
+        return None
+    holder = _identifier_on_shelf(found)
+    if holder is None or holder == identifier:
         return None
     return Decision(
-        package, COLLISION, reason=f"{clash.path.name} already holds this name"
+        package,
+        COLLISION,
+        reason=f"{found.name} holds another book, {holder}; this book is {identifier}",
     )
+
+
+def _identifier_on_shelf(archive_path: Path) -> str | None:
+    """
+    Read the usable identifier of an archive already on the shelf.
+
+    :param archive_path: The exported archive.
+
+    :return: Its identifier, or None when it has none or cannot be read.
+    """
+    try:
+        with ZipFile(archive_path) as archive:
+            return usable_identifier(read_package(archive))
+    except (ValidationError, BadZipFile, OSError):
+        return None
 
 
 def _decide_against_existing(

@@ -33,6 +33,10 @@ portable = ["disarm>=0.13"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=5.0",
+    # Property-based tests in tests/test_properties.py, left uncollected
+    # without it. 6.85 is the first release whose st.characters() takes
+    # codec=; 6.84 fails at import (checked 6.70 through 6.90).
+    "hypothesis>=6.85",
     "pylint>=3.0",
     "ruff>=0.6",
     "mypy>=1.11",

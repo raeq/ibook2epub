@@ -9,6 +9,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Under `--name-by author-title`, a book is no longer reported exported by an
+  archive that holds a different book with the same name, and `--refresh` and
+  `--force` no longer write over that archive. With no state file, a run took
+  a book whose name was on the shelf to be exported. But a run narrowed by
+  `--match` names only the books it selected, so two editions of one title
+  could each take the name alone. And once the edition holding a name was
+  deleted from the library, the next edition took it. Each case was reported
+  `exported` and never written, and `--refresh` then replaced the other
+  edition's archive, which for a book deleted from Apple Books could be its
+  last copy. The run now reads the identifier of the archive already on the
+  shelf and reports a collision naming both books when they differ. A book
+  with no usable identifier cannot be told apart this way, and its name is
+  trusted as before. A TLA+ model of the planner found all three cases.
+
+- A run no longer deletes the temporary file of another run that is still
+  writing it. A run that cannot take the output lock carries on unlocked --
+  on NFS, `flock` fails with `ENOLCK` when the remote lock manager does, and
+  only for as long as it does -- so a later run could hold the lock while that
+  one was mid-write, and its sweep of abandoned temporaries deleted the other
+  run's file and failed that book. The sweep now takes only a temporary left
+  untouched for an hour. A TLA+ model of the output directory, now checked in
+  CI, found the interleaving.
+
 - A damaged compressed member no longer ends a run with a traceback. Reading
   one raises `zlib.error` for deflate or `lzma.LZMAError` for LZMA, and nothing
   caught either. `--verify` stopped at the first such archive instead of

@@ -16,6 +16,11 @@ pytest
 deliberate: it used to run with `--fail-under=8.0` against a tree scoring
 10.00, so a regression to 8.1 merged green.
 
+CI also model-checks the TLA+ models in `formal/`, which needs Java and
+`tla2tools.jar`. Run it when you change what a model describes -- the output
+lock, `sweep_partials`, how an archive is written or renamed into place, or
+how the planner names books. `formal/README.md` has the command.
+
 ## Two invariants worth knowing before you change anything
 
 ### The output directory is the only record of completed work

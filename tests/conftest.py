@@ -41,6 +41,7 @@ module, so this map saves a search:
 """
 
 import os
+import time
 import zlib
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
@@ -48,6 +49,15 @@ from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 from epubconvert.collect.validate import UNREADABLE_MEMBER
+from epubconvert.export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX
+from epubconvert.run.convert import STALE_PARTIAL_SECONDS
+
+try:
+    import hypothesis  # noqa: F401  # pylint: disable=unused-import
+except ImportError:  # pragma: no cover - the dev extra installs it
+    # A development dependency. Without it the property tests are left
+    # uncollected rather than failing at import.
+    collect_ignore = ["test_properties.py"]
 
 # lzma is optional in CPython, so its case is skipped, not failed, on a Python
 # built without it.
@@ -185,6 +195,20 @@ def remove_tree(path: Path) -> None:
         else:
             child.rmdir()
     path.rmdir()
+
+
+def abandoned_partial(output_dir: Path, stem: str) -> Path:
+    """
+    A temporary as a killed run leaves one: this tool's name, and old.
+
+    The sweep takes only a temporary untouched for STALE_PARTIAL_SECONDS for
+    abandoned, so a fresh one stands for a live run's in-flight write instead.
+    """
+    stale = output_dir / f"{PARTIAL_PREFIX}{stem}{PARTIAL_SUFFIX}"
+    stale.write_bytes(b"half an archive")
+    then = time.time() - STALE_PARTIAL_SECONDS - 60
+    os.utime(stale, (then, then))
+    return stale
 
 
 def recompress(path: Path, method: int) -> Path:

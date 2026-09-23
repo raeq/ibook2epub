@@ -9,13 +9,16 @@ import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
+from zipfile import ZipFile
 
 from epubconvert.collect import source
+from epubconvert.collect.validate import read_package
 from epubconvert.export.archive import collect_package_dirs
 from epubconvert.export.naming import PassthroughNaming
 from epubconvert.run import convert, planning, run
 from epubconvert.utils.policy import NamingPolicy
-from tests.conftest import make_package
+from tests.conftest import make_metadata_package, make_package, remove_tree
 
 
 def pending_count(
@@ -249,3 +252,146 @@ class TestCountPending:
 
         assert [d.status for d in decisions] == [planning.INCOMPLETE]
         assert pending_count(packages, output_dir, PassthroughNaming(), options) == 0
+
+
+class TestANameOnTheShelfIsNotProofOfTheBook:
+    """
+    A file with a book's name is taken for that book only if it holds it.
+
+    Three editions of one title, named by author and title so all three want
+    one name. formal/RerunPlanner.tla found each of these; every book here has
+    its own identifier, so the archive can be told apart from the source.
+    """
+
+    EDITIONS = ("Dune (1965)", "Dune (Ace)", "Dune (Chilton)")
+
+    def _library(
+        self, tmp_path: Path, identifiers: Sequence[str] | None = None
+    ) -> Path:
+        library = tmp_path / "lib"
+        for number, folder in enumerate(self.EDITIONS, 1):
+            identifier = (
+                identifiers[number - 1]
+                if identifiers
+                else f"urn:uuid:00000000-0000-0000-0000-00000000000{number}"
+            )
+            make_metadata_package(
+                library,
+                f"{folder}.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=identifier,
+            )
+        return library
+
+    @staticmethod
+    def _run(library: Path, output_dir: Path, *extra: str) -> int:
+        return run.main(
+            [
+                "-s", str(library), "-o", str(output_dir), "-m", "0", "-q",
+                "--name-by", "author-title", *extra,
+            ]
+        )  # fmt: skip
+
+    @staticmethod
+    def _holder(output_dir: Path) -> str | None:
+        with ZipFile(output_dir / "Frank Herbert - Dune.epub") as archive:
+            return read_package(archive).identifier
+
+    @staticmethod
+    def _listed(
+        library: Path, output_dir: Path, capsys: Any, *extra: str
+    ) -> dict[str, dict[str, Any]]:
+        capsys.readouterr()
+        run.main(
+            [
+                "-s", str(library), "-o", str(output_dir), "--list", "--json",
+                "--name-by", "author-title", *extra,
+            ]
+        )  # fmt: skip
+        return {
+            item["name"]: item
+            for item in json.loads(capsys.readouterr().out)
+            if item["status"] != planning.ORPHAN
+        }
+
+    def test_a_narrowed_run_does_not_call_another_editions_file_its_own(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = self._library(tmp_path)
+        self._run(library, output_dir, "--match", "1965")
+
+        listed = self._listed(library, output_dir, capsys, "--match", "Ace")
+
+        assert listed["Dune (Ace).epub"]["status"] == planning.COLLISION
+        assert "holds another book" in listed["Dune (Ace).epub"]["reason"]
+
+    def test_the_next_edition_is_not_exported_by_a_deleted_ones_archive(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = self._library(tmp_path)
+        self._run(library, output_dir)
+        remove_tree(library / "Dune (1965).epub")
+
+        listed = self._listed(library, output_dir, capsys)
+
+        assert listed["Dune (Ace).epub"]["status"] == planning.COLLISION
+
+    def test_refresh_does_not_write_over_another_books_archive(
+        self, tmp_path, output_dir
+    ):
+        library = self._library(tmp_path)
+        self._run(library, output_dir)
+        first = self._holder(output_dir)
+        remove_tree(library / "Dune (1965).epub")
+        later = (output_dir / "Frank Herbert - Dune.epub").stat().st_mtime + 60
+        os.utime(library / "Dune (Ace).epub", (later, later))
+
+        self._run(library, output_dir, "--refresh")
+
+        assert self._holder(output_dir) == first
+
+    def test_force_does_not_write_over_another_books_archive(
+        self, tmp_path, output_dir
+    ):
+        library = self._library(tmp_path)
+        self._run(library, output_dir)
+        first = self._holder(output_dir)
+        remove_tree(library / "Dune (1965).epub")
+
+        self._run(library, output_dir, "--force")
+
+        assert self._holder(output_dir) == first
+
+    def test_the_book_that_holds_its_name_is_still_exported(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = self._library(tmp_path)
+        self._run(library, output_dir)
+
+        listed = self._listed(library, output_dir, capsys)
+
+        assert listed["Dune (1965).epub"]["status"] == planning.EXPORTED
+
+    def test_a_placeholder_identifier_leaves_the_name_trusted(
+        self, tmp_path, output_dir, capsys
+    ):
+        # "none" says nothing about which book an archive is, so there is
+        # nothing to compare: the name decides, as it did before.
+        library = self._library(tmp_path, identifiers=("none", "none", "none"))
+        self._run(library, output_dir)
+        remove_tree(library / "Dune (1965).epub")
+
+        listed = self._listed(library, output_dir, capsys)
+
+        assert listed["Dune (Ace).epub"]["status"] == planning.EXPORTED
+
+    def test_an_unreadable_archive_leaves_the_name_trusted(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = self._library(tmp_path)
+        (output_dir / "Frank Herbert - Dune.epub").write_bytes(b"not a zip")
+
+        listed = self._listed(library, output_dir, capsys)
+
+        assert listed["Dune (1965).epub"]["status"] == planning.EXPORTED

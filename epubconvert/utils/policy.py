@@ -41,6 +41,9 @@ class Assignment:
     #: The policy wanted metadata and got none it could name from, so the
     #: package directory name was used. Reported, not fatal.
     from_folder: bool = False
+    #: The book's usable dc:identifier, when naming read its package document.
+    #: What tells this book from another that wants the same name.
+    identifier: str | None = None
 
 
 @runtime_checkable

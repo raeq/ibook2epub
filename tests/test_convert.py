@@ -13,6 +13,7 @@ from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
+from epubconvert.export import archive as archive_module
 from epubconvert.export.archive import (
     PARTIAL_PREFIX,
     PARTIAL_SUFFIX,
@@ -21,7 +22,7 @@ from epubconvert.export.archive import (
     zip_package,
 )
 from epubconvert.run import convert, planning, run
-from tests.conftest import EXPECTED_MEMBERS, make_package
+from tests.conftest import EXPECTED_MEMBERS, abandoned_partial, make_package
 
 
 def export(packages: Sequence[Path], output_dir: Path, **kwargs: Any) -> convert.Report:
@@ -359,11 +360,50 @@ class TestSweepPartials:
     """Cleanup of temporaries left by a run that was killed outright."""
 
     def test_abandoned_temporaries_are_removed(self, output_dir):
-        stale = output_dir / f"{PARTIAL_PREFIX}abcd1234{PARTIAL_SUFFIX}"
-        stale.write_bytes(b"half an archive")
+        stale = abandoned_partial(output_dir, "abcd1234")
 
         assert convert.sweep_partials(output_dir) == 1
         assert not stale.exists()
+
+    def test_a_temporary_still_being_written_is_left_alone(self, output_dir):
+        # Holding the lock does not make this the only writer: a run refused
+        # locking outside _CONTENDED (ENOLCK on NFS, transiently) carries on
+        # unlocked. Sweeping its temporary failed its book with
+        # FileNotFoundError; formal/OutputProtocol.tla found the interleaving.
+        inflight = output_dir / f"{PARTIAL_PREFIX}inflight{PARTIAL_SUFFIX}"
+        inflight.write_bytes(b"another run is writing this")
+
+        assert convert.sweep_partials(output_dir) == 0
+        assert inflight.exists()
+
+    def test_the_age_is_measured_against_the_threshold(self, output_dir):
+        partial = output_dir / f"{PARTIAL_PREFIX}edge{PARTIAL_SUFFIX}"
+        partial.write_bytes(b"x")
+        mtime = partial.stat().st_mtime
+        limit = convert.STALE_PARTIAL_SECONDS
+
+        assert convert.sweep_partials(output_dir, now=mtime + limit - 1) == 0
+        assert convert.sweep_partials(output_dir, now=mtime + limit) == 1
+
+    def test_a_live_unlocked_runs_write_survives_a_locked_runs_sweep(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # The trace TLC found, run against zip_package itself: the locked run
+        # sweeps while the unlocked run is between opening its temporary and
+        # renaming it into place.
+        package = make_package(tmp_path / "lib", "Book.epub")
+        real_members = archive_module._members  # pylint: disable=protected-access
+
+        def members_then_sweep(source_dir: Path) -> list[Path]:
+            found = real_members(source_dir)
+            convert.sweep_partials(output_dir)
+            return found
+
+        monkeypatch.setattr(archive_module, "_members", members_then_sweep)
+
+        archive_module.zip_package(package, output_dir / "Book.epub")
+
+        assert (output_dir / "Book.epub").is_file()
 
     def test_real_exports_are_left_alone(self, output_dir):
         book = output_dir / "Book.epub"
@@ -379,8 +419,7 @@ class TestSweepPartials:
         # exists to protect.
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        stale = output_dir / f"{PARTIAL_PREFIX}deadbeef{PARTIAL_SUFFIX}"
-        stale.write_bytes(b"half an archive")
+        stale = abandoned_partial(output_dir, "deadbeef")
 
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 

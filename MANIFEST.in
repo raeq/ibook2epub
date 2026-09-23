@@ -4,6 +4,10 @@
 # got collection errors rather than tests.
 recursive-include tests *.py
 
+# tests/test_formal.py checks that every model configuration has an expected
+# outcome, so the models ship with the tests that read them.
+recursive-include formal *.tla *.cfg *.md
+
 include CONTRIBUTING.md
 include CHANGELOG.md
 
