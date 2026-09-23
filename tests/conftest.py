@@ -52,6 +52,13 @@ from epubconvert.collect.validate import UNREADABLE_MEMBER
 from epubconvert.export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX
 from epubconvert.run.convert import STALE_PARTIAL_SECONDS
 
+try:
+    import hypothesis  # noqa: F401  # pylint: disable=unused-import
+except ImportError:  # pragma: no cover - the dev extra installs it
+    # A development dependency. Without it the property tests are left
+    # uncollected rather than failing at import.
+    collect_ignore = ["test_properties.py"]
+
 # lzma is optional in CPython, so its case is skipped, not failed, on a Python
 # built without it.
 try:

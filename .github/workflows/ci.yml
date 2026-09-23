@@ -47,7 +47,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e ".[portable]" pytest
+        pip install -e ".[portable]" pytest hypothesis
     - name: Run tests
       run: pytest
 
