@@ -19,6 +19,7 @@ import fnmatch
 import os
 import socket
 import threading
+import time
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -55,6 +56,23 @@ except ImportError:  # pragma: no cover - Windows has no fcntl
     HAVE_FLOCK = False
 
 LOCK_NAME = ".ibook2epub.lock"
+
+#: How long a temporary must have gone unmodified before a sweep takes it for
+#: abandoned. Holding the lock does not make this run the only writer: a run
+#: that was refused locking with an errno outside _CONTENDED carries on
+#: unlocked, and on NFS, where flock is emulated with fcntl locks, fcntl
+#: answers ENOLCK when "a remote locking protocol failed" -- transiently, so a
+#: later run can take the lock while that one is mid-write. Sweeping everything
+#: deleted its temporary and failed its book with FileNotFoundError; a TLA+
+#: model found the interleaving (formal/OutputProtocol.tla).
+#:
+#: A live run touches its temporary continuously while it writes. The longest
+#: it leaves one alone is between closing the archive and renaming it, while
+#: the archive is checked: 0.35 s under --validate for a 400 MB book, measured
+#: on Linux 6.18, and at most the 120 s timeout run_epubcheck gives
+#: --epubcheck. An hour is thirty times that, with room for clock skew between
+#: NFS clients, and still clears what a killed run left behind.
+STALE_PARTIAL_SECONDS = 60 * 60
 
 #: The errnos that mean another process holds the lock. Anything else means
 #: the filesystem does not do advisory locking at all.
@@ -742,7 +760,7 @@ def cap_exports(
     ]
 
 
-def sweep_partials(output_dir: Path) -> int:
+def sweep_partials(output_dir: Path, now: float | None = None) -> int:
     """
     Remove temporary archives left by a run that was killed outright.
 
@@ -757,16 +775,22 @@ def sweep_partials(output_dir: Path) -> int:
     download or a user's own file, and the default output directory is
     ``~/Books`` -- so the sweep deleted real user data.
 
-    Only safe to call while holding the output lock: a concurrent run's
-    temporary is indistinguishable from an abandoned one.
+    Only called while holding the output lock, and even then only a temporary
+    unmodified for :data:`STALE_PARTIAL_SECONDS` is taken for abandoned: the
+    lock does not exclude a run that could not lock at all.
 
     :param output_dir: Directory to sweep.
+    :param now: The current time, for tests; defaults to the clock.
 
     :return: The number of files removed.
     """
+    cutoff = (time.time() if now is None else now) - STALE_PARTIAL_SECONDS
     removed = 0
     for stale in output_dir.glob(f"{PARTIAL_PREFIX}*{PARTIAL_SUFFIX}"):
         try:
+            if stale.stat().st_mtime > cutoff:
+                logger.debug("Left recent temporary %s", printable(stale.name))
+                continue
             stale.unlink()
         except OSError as exc:  # pragma: no cover - racing removal
             logger.debug("Could not remove %s: %s", printable(stale.name), exc)

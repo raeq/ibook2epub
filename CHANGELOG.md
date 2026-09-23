@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A run no longer deletes the temporary file of another run that is still
+  writing it. A run that cannot take the output lock carries on unlocked --
+  on NFS, `flock` fails with `ENOLCK` when the remote lock manager does, and
+  only for as long as it does -- so a later run could hold the lock while that
+  one was mid-write, and its sweep of abandoned temporaries deleted the other
+  run's file and failed that book. The sweep now takes only a temporary left
+  untouched for an hour. A TLA+ model of the output directory, now checked in
+  CI, found the interleaving.
+
 - A damaged compressed member no longer ends a run with a traceback. Reading
   one raises `zlib.error` for deflate or `lzma.LZMAError` for LZMA, and nothing
   caught either. `--verify` stopped at the first such archive instead of

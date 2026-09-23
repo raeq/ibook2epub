@@ -37,7 +37,12 @@ from epubconvert.export.naming import (
 from epubconvert.run import convert, planning, run
 from epubconvert.utils import contained, display
 from epubconvert.utils.opf import Package
-from tests.conftest import make_package, needs_permissions, remove_tree
+from tests.conftest import (
+    abandoned_partial,
+    make_package,
+    needs_permissions,
+    remove_tree,
+)
 from tests.test_export import _cover_package
 
 
@@ -447,8 +452,7 @@ class TestRuleTheSweepNeedsARealLock:
     def test_the_sweep_still_runs_when_the_lock_is_held(self, tmp_path, output_dir):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        stale = output_dir / f"{archive.PARTIAL_PREFIX}stale{archive.PARTIAL_SUFFIX}"
-        stale.write_bytes(b"abandoned")
+        stale = abandoned_partial(output_dir, "stale")
 
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 

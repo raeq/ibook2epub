@@ -20,14 +20,13 @@ import pytest
 from epubconvert.collect.validate import ArchiveInvalidError
 from epubconvert.export import inspect_output
 from epubconvert.export.archive import (
-    PARTIAL_PREFIX,
-    PARTIAL_SUFFIX,
     zip_package,
 )
 from epubconvert.export.naming import PortableNaming, StripNaming
 from epubconvert.run import cli, planning, run
 from epubconvert.utils import exits
 from tests.conftest import (
+    abandoned_partial,
     corrupt_member,
     damaged_streams,
     make_package,
@@ -66,8 +65,7 @@ class TestPartialSweep:
     def test_our_own_temporaries_are_still_removed(self, tmp_path, output_dir):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
-        stale = output_dir / f"{PARTIAL_PREFIX}abcd1234{PARTIAL_SUFFIX}"
-        stale.write_bytes(b"half an archive")
+        stale = abandoned_partial(output_dir, "abcd1234")
 
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 

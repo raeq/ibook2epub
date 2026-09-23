@@ -73,6 +73,41 @@ jobs:
       # command a developer runs locally.
       run: pytest --cov
 
+  formal:
+    # The TLA+ models in formal/, through TLC. Each configuration is held to an
+    # expected outcome by tests/test_formal.py, including the two that must
+    # fail, so a model that drifts into checking nothing turns this red too.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # A fixed release, checked by digest. v1.8.0's asset is rebuilt nightly
+      # under the same name, so pinning it would break on the next rebuild.
+      TLA2TOOLS_URL: https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+      TLA2TOOLS_SHA256: 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up Java
+      uses: actions/setup-java@v6
+      with:
+        distribution: temurin
+        java-version: "21"
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.14"
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e . pytest
+    - name: Fetch TLC
+      run: |
+        jar="$RUNNER_TEMP/tla2tools.jar"
+        curl -sSfL -o "$jar" "$TLA2TOOLS_URL"
+        echo "$TLA2TOOLS_SHA256  $jar" | sha256sum --check
+        echo "TLA2TOOLS_JAR=$jar" >> "$GITHUB_ENV"
+    - name: Model-check
+      run: pytest tests/test_formal.py
+
   test-minimal:
     # Proves the default install stays pure standard library: no disarm, no
     # compiled wheel. The portable-naming tests skip themselves here.
