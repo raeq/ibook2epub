@@ -49,6 +49,8 @@ from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 from epubconvert.collect.validate import UNREADABLE_MEMBER
+from epubconvert.export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX
+from epubconvert.run.convert import STALE_PARTIAL_SECONDS
 
 # lzma is optional in CPython, so its case is skipped, not failed, on a Python
 # built without it.
@@ -195,9 +197,6 @@ def abandoned_partial(output_dir: Path, stem: str) -> Path:
     The sweep takes only a temporary untouched for STALE_PARTIAL_SECONDS for
     abandoned, so a fresh one stands for a live run's in-flight write instead.
     """
-    from epubconvert.export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX
-    from epubconvert.run.convert import STALE_PARTIAL_SECONDS
-
     stale = output_dir / f"{PARTIAL_PREFIX}{stem}{PARTIAL_SUFFIX}"
     stale.write_bytes(b"half an archive")
     then = time.time() - STALE_PARTIAL_SECONDS - 60

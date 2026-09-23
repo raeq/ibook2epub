@@ -392,7 +392,7 @@ class TestSweepPartials:
         # sweeps while the unlocked run is between opening its temporary and
         # renaming it into place.
         package = make_package(tmp_path / "lib", "Book.epub")
-        real_members = archive_module._members
+        real_members = archive_module._members  # pylint: disable=protected-access
 
         def members_then_sweep(source_dir: Path) -> list[Path]:
             found = real_members(source_dir)
