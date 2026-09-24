@@ -765,6 +765,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.workers is not None and args.workers < 1:
         parser.error("--workers must be 1 or greater")
 
+    # Accepted, a negative floor disabled the check as 0 does, unannounced.
+    if args.min_free < 0:
+        parser.error("--min-free must be 0 or greater")
+
     # Silently ignoring a flag the user typed is worse than refusing it: the
     # run does something other than what was asked and says nothing.
     if args.quiet and args.verbose:
