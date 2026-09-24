@@ -197,11 +197,16 @@ def trimmed(text: str) -> str:
 TRAILING = " \t"
 
 #: The lines an older version ended in a space of its own: a blank line in a
-#: highlight, ``"> "``, and a note's blank first line, ``"**Note:** "``. Put
-#: back to check that version's digest once an editor has trimmed them.
+#: highlight, ``"> "``, a note's blank first line, ``"**Note:** "``, and the
+#: heading of a title or a chapter of white space alone, ``"# "`` or
+#: ``"## "``. Put back to check that version's digest once an editor has
+#: trimmed them. A bare ``#`` or ``##`` line is never anything else in a
+#: region: every line of a note that opens a heading is escaped, and the
+#: first line of one follows its label.
 WIDENED = (
     (re.compile(r"^>$", re.MULTILINE), "> "),
     (re.compile(r"^\*\*Note:\*\*$", re.MULTILINE), "**Note:** "),
+    (re.compile(r"^(##?)$", re.MULTILINE), r"\1 "),
 )
 
 
