@@ -21,6 +21,7 @@ from __future__ import annotations
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import zlib
 from dataclasses import dataclass
@@ -139,12 +140,13 @@ def canonical_identifier(value: str) -> str:
     tools therefore did not match each other.
 
     Only what can be *verified* is normalised. An ISBN is recognised by its
-    check digit, never by counting digits: 68 identifiers in that library are
-    10 or 13 digits and fail it, and a digit count would have relabelled every
-    one of them. An ISBN-10 becomes the ISBN-13 meaning the same book, which is
-    exact arithmetic rather than a guess. Anything unrecognised is returned
-    exactly as it came in, because the specification says this field is opaque
-    and reshaping an opaque string is a claim about it.
+    book prefix and check digit, never by counting digits: 68 identifiers in
+    that library are 10 or 13 digits and fail the check, and a digit count
+    would have relabelled every one of them. An ISBN-10 becomes the ISBN-13
+    meaning the same book, which is exact arithmetic rather than a guess.
+    Anything unrecognised is returned exactly as it came in, because the
+    specification says this field is opaque and reshaping an opaque string is
+    a claim about it.
 
     :param value: The identifier the package document declares.
 
@@ -171,14 +173,14 @@ def isbn13_of(identifier: object) -> str | None:
     """
     Take the bare ISBN out of a canonical identifier, when it is one.
 
-    Judged by check digit, never by prefix. :func:`canonical_identifier`
-    leaves an identifier it cannot verify exactly as declared, so ``urn:isbn:``
-    in front of something is not evidence that an ISBN follows: 68 identifiers
-    in a surveyed library are ten or thirteen digits and fail their check, and
-    a tracker handed one of those matches the wrong book or none. Derived by
-    stripping the prefix rather than looked up again, so it cannot disagree
-    with the field it came from. About 41% of books have one: 1,108
-    ``urn:isbn`` against 1,448 ``urn:uuid`` in that library.
+    Judged by :func:`_is_isbn13`, never by the ``urn:isbn:`` in front of it.
+    :func:`canonical_identifier` leaves an identifier it cannot verify exactly
+    as declared, so that prefix is not evidence that an ISBN follows: 68
+    identifiers in a surveyed library are ten or thirteen digits and fail
+    their check, and a tracker handed one of those matches the wrong book or
+    none. Derived by stripping the prefix rather than looked up again, so it
+    cannot disagree with the field it came from. About 41% of books have one:
+    1,108 ``urn:isbn`` against 1,448 ``urn:uuid`` in that library.
 
     :param identifier: The canonical identifier, or None.
 
@@ -213,9 +215,17 @@ def _isbn10_sum(body: str) -> int:
     return sum((10 - i) * int(c) for i, c in enumerate(body))
 
 
+#: The EAN-13 prefixes ISO 2108 assigns to books. Every ISBN-13 is an EAN-13,
+#: but an EAN outside these is a product barcode, and the check digit alone
+#: relabelled one ``urn:isbn`` and exported it to a tracker as an ISBN13.
+ISBN13_PREFIXES = ("978", "979")
+
+
 def _is_isbn13(digits: str) -> bool:
-    """Whether *digits* is thirteen digits carrying a valid check digit."""
+    """Whether *digits* is a book's EAN-13: 978 or 979, and a valid check digit."""
     if len(digits) != 13 or not _ascii_digits(digits):
+        return False
+    if not digits.startswith(ISBN13_PREFIXES):
         return False
     return _isbn13_sum(digits) % 10 == 0
 
@@ -387,7 +397,15 @@ class _DirectoryMembers:  # pylint: disable=too-few-public-methods
         self.root = root
         # Resolved once: resolving walks every component, and it does not
         # change across a package.
-        self.resolved_root = root.resolve()
+        try:
+            self.resolved_root = root.resolve()
+        except RuntimeError as exc:
+            # Python 3.10 to 3.12 raise RuntimeError, not OSError, for a
+            # symlink loop. Every reader of a package catches ValidationError,
+            # so this one package took the whole library export, annotation
+            # export or naming pass down with it. Translated here, at the one
+            # place a package directory is opened, so no caller can miss it.
+            raise ValidationError(f"{printable(root.name)} is a symlink loop") from exc
 
     def read(self, name: str) -> bytes:
         """
@@ -401,16 +419,27 @@ class _DirectoryMembers:  # pylint: disable=too-few-public-methods
         if path is None:
             raise ValidationError(f"{name} is not a readable file")
         try:
-            size = path.stat().st_size
+            info = path.stat()
         except OSError as exc:
             raise ValidationError(f"missing {name}") from exc
-        if size > MAX_XML_BYTES:
-            raise ValidationError(f"{name} is implausibly large ({size} bytes)")
+        # A FIFO here passed every check and stats at size 0; opening it then
+        # waited for a writer for ever. open_contained refuses one on the
+        # descriptor too, which is what holds if the name is swapped after
+        # this check.
+        if not stat.S_ISREG(info.st_mode):
+            raise ValidationError(f"could not read {name}: not a regular file")
+        if info.st_size > MAX_XML_BYTES:
+            raise ValidationError(f"{name} is implausibly large ({info.st_size} bytes)")
         try:
             with open_contained(path) as handle:
-                return handle.read()
+                # Bounded, because the size above was measured before the open
+                # and a file can grow in between.
+                data = handle.read(MAX_XML_BYTES + 1)
         except OSError as exc:
             raise ValidationError(f"could not read {name}: {exc}") from exc
+        if len(data) > MAX_XML_BYTES:
+            raise ValidationError(f"{name} is implausibly large (grew while read)")
+        return data
 
 
 def _element(members: _Members, name: str) -> ElementTree.Element:
@@ -428,9 +457,33 @@ def _element(members: _Members, name: str) -> ElementTree.Element:
     if _declares_entities(data):
         raise ValidationError(f"{name} declares XML entities, which are not allowed")
     try:
-        return ElementTree.fromstring(data)
+        return parse_xml(data)
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{name} is not valid XML: {exc}") from exc
+
+
+def parse_xml(data: bytes) -> ElementTree.Element:
+    """
+    Parse a document from a book, however it is refused.
+
+    A malformed document raises ParseError, but expat refuses a declared
+    multi-byte encoding -- Shift_JIS, EUC-JP, UTF-32 -- with ValueError, and
+    Python an encoding it does not know with LookupError. Callers caught
+    ParseError alone, so one Japanese book's ``encoding="Shift_JIS"`` ended the
+    whole run. Every reader of a book's XML parses through here, so there is
+    one exception to catch.
+
+    :param data: The raw bytes of the document.
+
+    :return: The root element.
+
+    :raises ElementTree.ParseError: If the document cannot be parsed, for
+        whatever reason.
+    """
+    try:
+        return ElementTree.fromstring(data)
+    except (ValueError, LookupError) as exc:
+        raise ElementTree.ParseError(f"unreadable encoding: {exc}") from exc
 
 
 def _declares_entities(data: bytes) -> bool:
@@ -465,7 +518,9 @@ def _declares_entities(data: bytes) -> bool:
     parser.EntityDeclHandler = lambda *_args: declared.append(1)
     try:
         parser.Parse(data, True)
-    except expat.ExpatError:
+    except (expat.ExpatError, ValueError, LookupError):
+        # An encoding expat refuses is malformed for this purpose too, and
+        # raised LookupError from here, ahead of the parse that reports it.
         return False
     return bool(declared)
 
@@ -786,12 +841,24 @@ def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
 
     if not names:
         return ["archive is empty"]
-    if names[0] != MIMETYPE_NAME:
-        problems.append(f"first member is {names[0]!r}, not 'mimetype'")
+    # First by position in the file, never by the central directory's order:
+    # that index is written last, in whatever order the writer chose. OCF
+    # requires mimetype *physically* first, since a reader identifies an epub
+    # by the bytes at offset 0. Judged by the index, an archive listing
+    # mimetype first while storing it later passed, and a sound one storing it
+    # first but listing it later was reported damaged. zipfile reports offsets
+    # from the start of the file, so bytes prepended to it are caught too.
+    first = min(archive.infolist(), key=lambda member: member.header_offset)
+    if first.filename != MIMETYPE_NAME:
+        problems.append(f"first member is {first.filename!r}, not 'mimetype'")
         if MIMETYPE_NAME not in names:
             return problems
 
     info = archive.getinfo(MIMETYPE_NAME)
+    if first.filename == MIMETYPE_NAME and info.header_offset != 0:
+        problems.append(
+            f"mimetype is stored at byte {info.header_offset}, not first in the file"
+        )
     if info.compress_type != ZIP_STORED:
         problems.append("mimetype is compressed; it must be stored")
     # The specification fixes this member's length exactly, so a declared size

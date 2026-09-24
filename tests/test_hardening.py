@@ -12,16 +12,22 @@ them cost something.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import errno
+import io
 import logging
+import os
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
 from epubconvert.collect import source, validate
+from epubconvert.collect.library import read_package_once
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import StripNaming
 from epubconvert.run import convert, run
+from epubconvert.utils import contained
 from epubconvert.utils.app_logger import logger
 from epubconvert.utils.display import printable
 from tests.conftest import make_package, needs_permissions
@@ -42,6 +48,36 @@ def records_fixture():
         yield captured
     finally:
         logger.removeHandler(handler)
+
+
+@pytest.fixture(name="debug_records")
+def debug_records_fixture():
+    """Capture everything the package logger says at -v and above, as rendered."""
+    captured: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = Capture(level=logging.DEBUG)
+    level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield captured
+    finally:
+        logger.setLevel(level)
+        logger.removeHandler(handler)
+
+
+#: Encodings expat will not parse: multi-byte ones, which it refuses with
+#: ValueError, and a name Python does not know, which raises LookupError.
+UNPARSABLE_ENCODINGS = ["Shift_JIS", "EUC-JP", "UTF-32", "x-no-such-encoding"]
+
+
+def _declaring(encoding: str, body: str) -> bytes:
+    """An XML document whose declaration names *encoding*."""
+    return f'<?xml version="1.0" encoding="{encoding}"?>{body}'.encode("ascii")
 
 
 class TestDrmDetectionFailsClosed:
@@ -67,6 +103,35 @@ class TestDrmDetectionFailsClosed:
         assert protected
         assert reason
 
+    @pytest.mark.parametrize("encoding", UNPARSABLE_ENCODINGS)
+    def test_an_encoding_the_parser_refuses_is_protected(self, tmp_path, encoding):
+        # expat raises ValueError for a multi-byte encoding and LookupError for
+        # an unknown one, neither a ParseError, so the whole run died in
+        # planning over one Japanese book's encryption.xml.
+        package = make_package(tmp_path / "lib", "Declared.epub")
+        (package / "META-INF" / "encryption.xml").write_bytes(
+            _declaring(encoding, "<encryption/>")
+        )
+
+        protected, reason = source.has_drm(package)
+
+        assert protected
+        assert reason
+
+
+class TestAnEncodingThePackageReaderRefusesCostsOneBook:
+    @pytest.mark.parametrize("encoding", UNPARSABLE_ENCODINGS)
+    def test_a_container_in_such_an_encoding_is_unreadable(self, tmp_path, encoding):
+        # planning._metadata_of catches ValidationError and OSError, so under
+        # --name-by author-title the ValueError ended the run.
+        package = make_package(tmp_path / "lib", "Declared.epub")
+        (package / "META-INF" / "container.xml").write_bytes(
+            _declaring(encoding, "<container/>")
+        )
+
+        with pytest.raises(validate.ValidationError, match="not valid XML"):
+            validate.read_package_dir(package)
+
 
 class TestUntrustedXmlIsBounded:
     """The source side must be capped like the archive side."""
@@ -85,6 +150,121 @@ class TestUntrustedXmlIsBounded:
 
         with pytest.raises(validate.ValidationError, match="implausibly large"):
             validate.read_package_dir(package)
+
+
+def _within(seconds: float, fifo: Path, call: Callable[[], object]) -> object:
+    """
+    Run *call*, failing rather than hanging if it blocks on *fifo*.
+
+    Opening a FIFO for reading blocks until a writer appears. On a timeout the
+    FIFO is opened for writing and closed, which releases the stuck reader, so
+    a regression fails the test instead of freezing the suite.
+    """
+    outcome: list[object] = []
+
+    def run_it() -> None:
+        try:
+            outcome.append(call())
+        except (validate.ValidationError, OSError) as exc:
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run_it, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(seconds)
+        pytest.fail(f"blocked opening {fifo.name}")
+    return outcome[0]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="this platform has no FIFOs")
+class TestAMemberThatIsNotAFileIsNotOpened:
+    """
+    A FIFO passes every containment check: it is no link, it resolves inside
+    the package, and it stats at size 0. Opening one for reading then waits for
+    a writer that never comes, and the library export, the annotation export,
+    metadata naming and cover extraction all froze on it.
+    """
+
+    def test_a_fifo_for_a_container_is_refused_not_waited_on(self, tmp_path):
+        package = make_package(tmp_path / "lib", "Piped.epub")
+        container = package / "META-INF" / "container.xml"
+        container.unlink()
+        os.mkfifo(container)
+
+        raised = _within(5, container, lambda: validate.read_package_dir(package))
+
+        assert isinstance(raised, validate.ValidationError)
+
+    def test_the_rule_refuses_a_fifo_at_the_descriptor(self, tmp_path):
+        # The check-time test can be raced: a file swapped for a FIFO between
+        # the stat and the open. The open itself must not wait on one.
+        fifo = tmp_path / "member.xhtml"
+        os.mkfifo(fifo)
+
+        raised = _within(5, fifo, lambda: contained.open_contained(fifo))
+
+        assert isinstance(raised, OSError)
+
+    def test_a_container_swapped_for_a_fifo_after_the_check_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        package = make_package(tmp_path / "lib", "Swapped.epub")
+        fifo = tmp_path / "swapped"
+        os.mkfifo(fifo)
+        monkeypatch.setattr(
+            validate, "open_contained", lambda _path: contained.open_contained(fifo)
+        )
+
+        raised = _within(5, fifo, lambda: validate.read_package_dir(package))
+
+        assert isinstance(raised, validate.ValidationError)
+        assert "could not read" in str(raised)
+
+
+class TestAMemberThatGrowsWhileReadIsStillBounded:
+    def test_the_read_stops_at_the_bound(self, tmp_path, monkeypatch):
+        # The size is measured before the open, so a file that grows in
+        # between used to be read whole, however large it had become.
+        package = make_package(tmp_path / "lib", "Growing.epub")
+        monkeypatch.setattr(validate, "MAX_XML_BYTES", 64)
+        monkeypatch.setattr(
+            validate, "open_contained", lambda _path: io.BytesIO(b" " * 1000)
+        )
+
+        with pytest.raises(validate.ValidationError, match="grew while read"):
+            validate.read_package_dir(package)
+
+
+def _symlink_loop(parent: Path, name: str) -> Path:
+    """A package path that is a symlink to itself, or a skip where none can be."""
+    loop = parent / name
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("this filesystem cannot hold a symlink")
+    return loop
+
+
+class TestASymlinkLoopCostsOneBook:
+    """
+    Python 3.10 to 3.12 raise RuntimeError, not OSError, resolving a symlink
+    loop. Every reader of a package caught ValidationError and OSError, so one
+    looped package took down the library export, the annotation export and
+    metadata naming, where each should have lost one book.
+    """
+
+    def test_a_looped_package_is_an_unreadable_package(self, tmp_path):
+        loop = _symlink_loop(tmp_path, "Loop.epub")
+
+        with pytest.raises(validate.ValidationError):
+            validate.read_package_dir(loop)
+
+    def test_the_library_reads_a_looped_package_as_nothing(self, tmp_path):
+        loop = _symlink_loop(tmp_path, "Loop.epub")
+
+        assert read_package_once(loop, {}) is None
 
 
 class TestMimetypeIsNotReadWhole:
@@ -118,6 +298,27 @@ class TestControlCharactersDoNotReachTheTerminal:
         assert printable("Ursula K. Le Guin — Earthsea.epub") == (
             "Ursula K. Le Guin — Earthsea.epub"
         )
+
+    def test_the_stub_walk_escapes_a_symlinked_directory_name(
+        self, tmp_path, debug_records
+    ):
+        # has_dataless_files logged the entry's own name raw at -v, so a
+        # directory called ESC[2K could erase the line that reported it.
+        package = make_package(tmp_path / "lib", "Book.epub")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (package / "OEBPS" / "\x1b[2KFAKE").symlink_to(elsewhere)
+
+        assert source.has_dataless_files(package)
+        assert debug_records
+        assert not any("\x1b" in message for message in debug_records)
+
+    def test_the_stub_walk_escapes_a_path_it_could_not_read(
+        self, tmp_path, debug_records
+    ):
+        assert source.has_dataless_files(tmp_path / "\x1b[2KGone.epub")
+        assert debug_records
+        assert not any("\x1b" in message for message in debug_records)
 
 
 class TestExportedFilesHonourTheUmask:
@@ -260,6 +461,26 @@ class TestOneBookCannotKillTheRun:
 
         assert code == 0
         assert len(list(output_dir.glob("*.epub"))) == 1
+
+
+class TestAnUnscannableNameIsLoggedSafely:
+    """A directory the walk cannot read is named in a warning, escaped."""
+
+    @pytest.mark.parametrize(
+        "scan", [archive.collect_package_dirs, archive.collect_copyable]
+    )
+    def test_the_name_in_the_warning_is_escaped(self, tmp_path, records, scan):
+        # Regression: exc.filename went into the warning raw, so a directory
+        # named with ESC[2K erased the line reporting it, and one holding an
+        # undecodable byte made the log file's handler raise on the surrogate.
+        hostile = tmp_path / "Shelf\x1b[2K\udcff"
+        hostile.write_bytes(b"not a directory, so scandir fails on it")
+
+        scan(hostile)
+
+        assert records
+        for text in records:
+            assert text == printable(text), text
 
 
 class TestSurrogateNamesDoNotAbortTheRun:

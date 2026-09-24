@@ -219,13 +219,13 @@ def describe_book(
     # catalogued under its asset id while the same run named its file on the
     # shelf from the very package title this ignored.
     title = row.get("ZTITLE")
-    if not _is_text(title):
+    if not is_text(title):
         title = usable_title(parsed)
     book: dict[str, Any] = {"title": title or asset_id or UNKNOWN_BOOK}
     author = row.get("ZAUTHOR")
-    if not _is_text(author) and parsed is not None:
+    if not is_text(author) and parsed is not None:
         author = parsed.creator
-    if _is_text(author):
+    if is_text(author):
         book["author"] = author
     # The sort name only for the author it sorts. Apple can name one person
     # and the package another -- 62 co-authored books in a surveyed library
@@ -237,7 +237,7 @@ def describe_book(
         and author == parsed.creator
     ):
         book["authorSort"] = parsed.creator_sort
-    if _is_text(row.get("ZLANGUAGE")):
+    if is_text(row.get("ZLANGUAGE")):
         book["language"] = row["ZLANGUAGE"]
     # Apple's column is untyped: a date-shaped string used to raise out of
     # the whole export, and a float infinity raised past the per-row guards
@@ -283,7 +283,7 @@ def describe_book(
     return book
 
 
-def _is_text(value: object) -> bool:
+def is_text(value: object) -> bool:
     """Whether an untyped column holds something worth publishing as text."""
     return isinstance(value, str) and bool(value)
 

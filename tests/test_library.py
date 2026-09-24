@@ -347,6 +347,27 @@ class TestTheIdentifierComesFromTheBook:
         assert row["ISBN13"] == ""
         assert row["ISBN"] == ""
 
+    @pytest.mark.parametrize("declared", ["4006381333931", "urn:ean:4006381333931"])
+    def test_a_barcode_that_is_not_a_book_number_is_not_an_isbn(
+        self, tmp_path, declared
+    ):
+        # Every ISBN-13 is an EAN-13, but only one in the 978 or 979 "Bookland"
+        # prefix is an ISBN. The check digit alone relabelled this product
+        # barcode urn:isbn and exported it to a tracker as the book's ISBN13.
+        self._package(tmp_path, declared)
+
+        found = library.collect(tmp_path)
+        row = _csv_rows(catalogue.goodreads_csv(found, unknown_shelf=None))[0]
+
+        assert found[0]["identifier"] == declared
+        assert catalogue.matchable_count(found) == 0
+        assert row["ISBN13"] == ""
+
+    def test_a_979_isbn_is_still_an_isbn(self, tmp_path):
+        self._package(tmp_path, "979-10-90636-07-1")
+
+        assert library.collect(tmp_path)[0]["identifier"] == "urn:isbn:9791090636071"
+
     def test_the_shelf_name_is_claimed_only_when_the_book_was_read(self, tmp_path):
         # Under --name-by author-title the policy needs the package document
         # to name a book; without it, it falls back to the package name, and
@@ -723,6 +744,59 @@ class TestItFailsSafely:
 
         assert len(found) == 1
         assert "year" not in found[0]
+
+    def test_text_that_is_not_utf8_costs_that_value_not_the_catalogue(self, tmp_path):
+        # SQLite stores whatever bytes it is handed as TEXT, and sqlite3
+        # decoded them strictly: one such value raised mid-fetch, and the
+        # whole query -- every book -- was reported as an unreadable database.
+        make_databases(tmp_path, books=[library_row(), library_row(asset="ASSET2")])
+        database = next(tmp_path.rglob("BKLibrary*.sqlite"))
+        with open_for_writing(database) as connection:
+            connection.execute(
+                "UPDATE ZBKLIBRARYASSET SET ZAUTHOR = CAST(x'4cff' AS TEXT)"
+                " WHERE ZASSETID = 'ASSET2'"
+            )
+
+        found = library.collect(tmp_path)
+
+        assert sorted(book["title"] for book in found) == ["Leviathan Wakes"] * 2
+        assert {book.get("author") for book in found} == {
+            "James S. A. Corey",
+            "L\ufffd",
+        }
+
+    def test_text_that_is_not_utf8_costs_that_value_not_the_highlights(self, tmp_path):
+        make_databases(tmp_path, rows=[highlight(), highlight(uuid="U2")])
+        database = next(tmp_path.rglob("AEAnnotation*.sqlite"))
+        with open_for_writing(database) as connection:
+            connection.execute(
+                "UPDATE ZAEANNOTATION SET ZANNOTATIONNOTE = CAST(x'ff' AS TEXT)"
+                " WHERE ZANNOTATIONUUID = 'U2'"
+            )
+
+        found = annotations.collect(tmp_path)
+
+        assert sorted(item["id"] for item in found) == ["U1", "U2"]
+
+    @pytest.mark.parametrize(
+        ("seconds", "instant"),
+        [
+            (-47345904000.0, "0500-09-02T00:00:00Z"),
+            (-63082368000.0, "0002-01-01T00:00:00Z"),
+        ],
+    )
+    def test_an_early_year_is_still_written_with_four_digits(self, seconds, instant):
+        # strftime("%Y") does not pad on glibc, so a garbage timestamp in the
+        # year 500 was written "500-09-02T00:00:00Z": not RFC 3339, and a
+        # violation of the schema both exports ship.
+        assert coredata.moment(seconds) == instant
+
+    def test_an_early_year_still_validates_against_the_schema(self, tmp_path):
+        make_databases(tmp_path, rows=[highlight(created=-47345904000.0)])
+
+        found = annotations.collect(tmp_path)
+
+        assert annotations.schema_problems(annotations.build_document(found)) == []
 
     def test_reading_does_not_write_to_the_database(self, tmp_path):
         make_databases(tmp_path)

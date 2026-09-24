@@ -240,6 +240,38 @@ class TestWhatIsSkipped:
         assert len(found) == 1
         assert found[0]["book"]["title"] == "GONE"
 
+    @pytest.mark.parametrize("column", ["note", "chapter"])
+    def test_a_blob_beside_the_highlight_costs_that_field_not_the_export(
+        self, tmp_path, column
+    ):
+        # Only the selected text was type-checked. A BLOB in the note or the
+        # chapter passed through to json.dumps, which raised outside every
+        # per-row guard and took the whole export down.
+        make_databases(
+            tmp_path, rows=[highlight(**{column: b"\xff\xfe"}), highlight(uuid="U2")]
+        )
+
+        found = annotations.collect(tmp_path)
+
+        json.dumps(annotations.build_document(found))
+        assert sorted(item["id"] for item in found) == ["U1", "U2"]
+        assert all(column not in item for item in found if item["id"] == "U1")
+
+    @pytest.mark.parametrize("column", ["uuid", "asset"])
+    def test_a_blob_where_an_id_belongs_costs_one_annotation(
+        self, tmp_path, column, caplog
+    ):
+        # An annotation without a usable id, or a book to belong to, cannot be
+        # matched on a rerun: the row is dropped, and only that row.
+        bad: dict[str, object] = {"uuid": "BAD", column: b"\x00"}
+        make_databases(tmp_path, rows=[highlight(**bad), highlight()])
+
+        found = annotations.collect(tmp_path)
+
+        json.dumps(annotations.build_document(found))
+        assert [item["id"] for item in found] == ["U1"]
+        assert "not text" in caplog.text
+
 
 class TestTheLocator:
     """
@@ -253,6 +285,27 @@ class TestTheLocator:
         found = annotations.collect(tmp_path)[0]
 
         assert found["locator"] == ":~:text=Summary%20roadside%20justice"
+
+    @pytest.mark.parametrize(
+        ("text", "locator"),
+        [
+            ("-40 degrees", ":~:text=%2D40%20degrees"),
+            ("well-known", ":~:text=well%2Dknown"),
+            ("a, b & c", ":~:text=a%2C%20b%20%26%20c"),
+        ],
+    )
+    def test_the_characters_that_are_fragment_syntax_are_encoded(self, text, locator):
+        # A text directive reads a leading "prefix-," and a trailing ",-suffix"
+        # by their dash, so "-40 degrees" left bare was a suffix, not the
+        # highlight. The WICG syntax requires "-", "&" and "," percent-encoded.
+        assert annotations.text_fragment(text) == locator
+
+    def test_a_dash_is_encoded_in_both_ends_of_a_long_highlight(self):
+        text = "-" + " ".join(["word"] * 30) + " end-"
+        start, _, end = annotations.text_fragment(text).partition(",")
+
+        assert "-" not in start.removeprefix(":~:text=")
+        assert "-" not in end
 
     def test_the_original_cfi_is_kept_verbatim(self, tmp_path):
         make_databases(tmp_path)

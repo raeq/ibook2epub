@@ -12,6 +12,8 @@ module, so this map saves a search:
                              (``inspect_output.extract_cover``)
 ``test_validate.py``         ``validate``, and ``--verify``
                              (``inspect_output.verify_output``)
+``test_ocf_layout.py``       where an archive's bytes sit: ``mimetype``
+                             physically first, not merely indexed first
 ``test_planning.py``         ``planning``: collisions, refresh, the listings
 ``test_naming.py``           ``naming``, and identity round trips
 ``test_cli.py``              ``cli`` parsing, ``run.main``, ``app_logger``

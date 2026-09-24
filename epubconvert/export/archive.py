@@ -13,6 +13,7 @@ import errno
 import json
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
@@ -119,6 +120,22 @@ def is_excluded(name: str, *, at_root: bool) -> bool:
     )
 
 
+def _shown(exc: OSError, fallback: Path) -> str:
+    """
+    Name the path an ``os.walk`` error is about, safe to log.
+
+    ``exc.filename`` is a directory name off the disk, so it is input: raw, a
+    name carrying ``ESC[2K`` erased the warning reporting it, and one holding
+    an undecodable byte made the log file's handler raise on the surrogate.
+
+    :param exc: The error ``os.walk`` handed to ``onerror``.
+    :param fallback: The directory being walked, if the error names none.
+
+    :return: The name, escaped.
+    """
+    return printable(os.fsdecode(exc.filename or fallback))
+
+
 def collect_copyable(source_dir: Path) -> list[Path]:
     """
     Find files worth copying to the shelf unchanged.
@@ -138,7 +155,7 @@ def collect_copyable(source_dir: Path) -> list[Path]:
     resolved = source_dir.resolve()
 
     def on_error(exc: OSError) -> None:
-        logger.warning("Could not scan %s: %s", exc.filename or source_dir, exc)
+        logger.warning("Could not scan %s: %s", _shown(exc, source_dir), exc)
 
     for root, dirs, files in os.walk(source_dir, onerror=on_error):
         directory = Path(root)
@@ -150,7 +167,9 @@ def collect_copyable(source_dir: Path) -> list[Path]:
                 continue
             if not contains(source_dir, path, resolved_root=resolved):
                 logger.warning(
-                    "Skipped symlink %s in %s", printable(name), source_dir.name
+                    "Skipped symlink %s in %s",
+                    printable(name),
+                    printable(source_dir.name),
                 )
                 continue
             found.append(path)
@@ -207,7 +226,7 @@ def count_ignored(source_dir: Path, packages: Sequence[Path]) -> int:
     ignored = 0
 
     def on_error(exc: OSError) -> None:
-        logger.debug("Could not count entries in %s: %s", source_dir, exc)
+        logger.debug("Could not count entries in %s: %s", _shown(exc, source_dir), exc)
 
     for root, dirs, files in os.walk(source_dir, onerror=on_error):
         directory = Path(root)
@@ -237,7 +256,7 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
     def on_error(exc: OSError) -> None:
         # os.walk swallows scandir failures unless onerror is supplied, so an
         # unreadable directory would otherwise be skipped in total silence.
-        logger.warning("Could not scan %s: %s", exc.filename or source_dir, exc)
+        logger.warning("Could not scan %s: %s", _shown(exc, source_dir), exc)
 
     for root, dirs, _files in os.walk(source_dir, onerror=on_error):
         descend = []
@@ -256,7 +275,10 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
                         "Ignoring symlinked package %s", printable(str(candidate))
                     )
                 else:
-                    logger.debug("Not following symlinked directory %s", candidate)
+                    logger.debug(
+                        "Not following symlinked directory %s",
+                        printable(str(candidate)),
+                    )
                 continue
             if name.endswith(PACKAGE_SUFFIX):
                 found.append(candidate)
@@ -265,7 +287,9 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
         dirs[:] = descend
 
     found.sort()
-    logger.debug("Found %d epub package(s) under %s", len(found), source_dir)
+    logger.debug(
+        "Found %d epub package(s) under %s", len(found), printable(str(source_dir))
+    )
     return found
 
 
@@ -307,6 +331,41 @@ def _set_level(member: ZipInfo, level: int) -> None:
     :param level: The zlib level to record.
     """
     setattr(member, "_compresslevel", level)  # noqa: B010
+
+
+def _store(archive: ZipFile, path: Path, arcname: str) -> None:
+    """
+    Stream one package file into the archive under a normalized entry.
+
+    :param archive: The archive being assembled.
+    :param path: The file to store, opened without following a symlink.
+    :param arcname: Its path inside the archive.
+    """
+    with open_contained(path) as source:
+        member = entry(arcname, compression_for(arcname))
+        _size_ahead(member, os.fstat(source.fileno()).st_size)
+        with archive.open(member, "w") as target:
+            shutil.copyfileobj(source, target)
+
+
+def _size_ahead(member: ZipInfo, size: int) -> None:
+    """
+    Tell zipfile how large a member will be before it is streamed in.
+
+    ``ZipFile.open(info, "w")`` chooses between 32-bit and ZIP64 headers from
+    ``info.file_size`` *before* a byte is written, and a fresh ZipInfo says 0.
+    So every member was given 32-bit headers, and the first one past 2 GiB --
+    a long audiobook track, a video -- raised RuntimeError when it closed: the
+    book could never be exported. The size recorded here is only that
+    decision's input; zipfile overwrites it with the count it actually wrote.
+
+    Below zipfile's threshold (5% under 2 GiB) the decision comes out as it
+    did with 0, so every ordinary book keeps its bytes.
+
+    :param member: The entry about to be opened for writing.
+    :param size: The source file's size in bytes.
+    """
+    member.file_size = size
 
 
 def level_of(member: ZipInfo) -> int | None:
@@ -427,16 +486,20 @@ def zip_package(
             stored: set[str] = set()
             for path in _members(source_dir):
                 if is_excluded(path.name, at_root=path.parent == source_dir):
-                    logger.trace("Excluded from archive: %s", path.name)
+                    logger.trace("Excluded from archive: %s", printable(path.name))
                     continue
                 arcname = path.relative_to(source_dir).as_posix()
-                with (
-                    open_contained(path) as source,
-                    archive.open(
-                        entry(arcname, compression_for(arcname)), "w"
-                    ) as target,
-                ):
-                    shutil.copyfileobj(source, target)
+                if annotations and arcname == EMBEDDED_PATH:
+                    # Replaced, not stored twice. A sideloaded package can
+                    # arrive carrying its own set, and copying it before
+                    # _embed_annotations wrote the name again left two members
+                    # called that: zip allows it, the OCF does not, and readers
+                    # disagree about which one they see. Replacing is what
+                    # replace_annotations does to an archive already on the
+                    # shelf, so a fresh export and a refresh agree.
+                    logger.trace("Replaced by this run's annotations: %s", arcname)
+                    continue
+                _store(archive, path, arcname)
                 stored.add(arcname)
                 file_count += 1
 
@@ -612,49 +675,70 @@ def replace_annotations(
     if not annotations:
         return False
 
-    with ZipFile(target_archive) as reading:
-        names = reading.namelist()
-        held = reading.read(EMBEDDED_PATH) if EMBEDDED_PATH in names else None
-
-        # Compared before the members are read, not after. Every member was
-        # being decompressed into memory to reach a comparison that only
-        # looks at this one small blob: 7.86 MB of peak allocation on a 6.4 MB
-        # book, to decide against rewriting it.
-        if _same_annotations(held, annotations):
-            return False
-
-        members = [
-            (info, reading.read(info.filename))
-            for info in reading.infolist()
-            if info.filename != EMBEDDED_PATH
-        ]
-
-    wanted = embedded_json(list(annotations))
-
-    handle, temporary = tempfile.mkstemp(
-        dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-    )
-    os.close(handle)
-    partial = Path(temporary)
+    partial: Path | None = None
     try:
-        partial.chmod(file_mode())
-        with ZipFile(
-            partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL
-        ) as writing:
-            for info, content in members:
-                writing.writestr(entry(info.filename, info.compress_type), content)
-            writing.writestr(
-                entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), wanted
+        with ZipFile(target_archive) as reading:
+            names = reading.namelist()
+            held = reading.read(EMBEDDED_PATH) if EMBEDDED_PATH in names else None
+
+            # Compared before the members are read, not after. Every member was
+            # being decompressed into memory to reach a comparison that only
+            # looks at this one small blob: 7.86 MB of peak allocation on a
+            # 6.4 MB book, to decide against rewriting it.
+            if _same_annotations(held, annotations):
+                return False
+
+            members = [
+                info for info in reading.infolist() if info.filename != EMBEDDED_PATH
+            ]
+            handle, temporary = tempfile.mkstemp(
+                dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
             )
+            os.close(handle)
+            partial = Path(temporary)
+            partial.chmod(file_mode())
+            _rebuild(reading, members, partial, embedded_json(list(annotations)))
+
+        # Replaced once the original is closed rather than while it is still
+        # being read, which a platform that locks open files refuses.
         assert_is_a_book(
             target_archive.name,
-            {info.filename for info, _ in members} | {EMBEDDED_PATH},
+            {info.filename for info in members} | {EMBEDDED_PATH},
         )
         partial.replace(target_archive)
     except BaseException:
-        partial.unlink(missing_ok=True)
+        if partial is not None:
+            partial.unlink(missing_ok=True)
         raise
     return True
+
+
+def _rebuild(
+    reading: ZipFile, members: list[ZipInfo], partial: Path, embedded: str
+) -> None:
+    """
+    Copy archive members into a new archive, one stream at a time, and embed
+    an annotation set after them.
+
+    Streamed rather than read into a list first: that held the whole book in
+    memory, so refreshing a 300 MB book peaked at 300 MB, and the MemoryError
+    a large one raised is not an error a refresh reports and moves past. Each
+    member keeps its compression and gets the same normalized entry a fresh
+    export gives it, so a refreshed book is byte-identical to one exported
+    with the same annotations in the first place.
+
+    :param reading: The archive being refreshed, open for reading.
+    :param members: The members to carry across, in order.
+    :param partial: The new archive to write.
+    :param embedded: The annotation document to store after the members.
+    """
+    with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
+        for info in members:
+            member = entry(info.filename, info.compress_type)
+            _size_ahead(member, info.file_size)
+            with reading.open(info) as source, writing.open(member, "w") as target:
+                shutil.copyfileobj(source, target)
+        writing.writestr(entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), embedded)
 
 
 def write_atomically(target: Path, text: str) -> None:
@@ -668,20 +752,61 @@ def write_atomically(target: Path, text: str) -> None:
     artifact the merge machinery exists to protect; this is the same
     temporary-then-replace path :func:`~epubconvert.export.archive.zip_package` uses.
 
+    A replace swaps in a new file, so three things the old one carried are
+    carried across deliberately:
+
+    - **Its mode.** Every rerun wrote the partial at the umask's mode, so an
+      export the user had made 0600 became readable by everyone again.
+    - **Its being a link.** The replace landed on the link itself, so a link
+      into a synced folder became a regular file here and the synced copy went
+      stale without a word. A link is now written through: the partial goes
+      beside the file it resolves to, so the rename stays atomic there.
+    - **Its contents, durably.** Without an fsync before the rename, a crash
+      just after it can leave the name on a file whose data never reached the
+      disk -- the old contents gone and the new ones empty.
+
     :param target: The file to replace.
     :param text: What it should hold.
 
     :raises OSError: If it could not be written. The old file survives.
     """
+    # Resolved unconditionally: a plain path resolves to itself, give or take
+    # a linked parent, and a link resolves to the file the user meant.
+    target = Path(os.path.realpath(target))
+    try:
+        # Permission bits only: a setuid or sticky bit on a notes file is not
+        # something to reproduce.
+        mode = stat.S_IMODE(target.stat().st_mode) & 0o777
+    except FileNotFoundError:
+        mode = file_mode()
     handle, temporary = tempfile.mkstemp(
         dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
     )
     os.close(handle)
     partial = Path(temporary)
     try:
-        partial.chmod(file_mode())
         partial.write_text(text, encoding="utf-8")
+        _sync(partial)
+        # After the write, not before: a target the user made read-only would
+        # otherwise make its own partial unwritable.
+        partial.chmod(mode)
         partial.replace(target)
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
+
+
+def _sync(path: Path) -> None:
+    """
+    Push a written file's data to the disk.
+
+    ``fsync`` flushes the file, not the descriptor it is called on, so a fresh
+    descriptor on a file that has just been written and closed is enough.
+
+    :param path: The file to flush.
+    """
+    descriptor = os.open(path, os.O_RDWR)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

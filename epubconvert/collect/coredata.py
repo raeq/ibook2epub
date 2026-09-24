@@ -27,9 +27,6 @@ CONTAINER = Path(
 #: Core Data counts seconds from 2001-01-01, not from the Unix epoch.
 APPLE_EPOCH_OFFSET = 978307200
 
-#: The one way an instant is written by every export, matching the schemas.
-INSTANT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
 #: The remedy for a refusal, worded once so every path that meets one gives
 #: the same advice.
 FULL_DISK_ACCESS = (
@@ -184,6 +181,22 @@ def newest(directory: Path, prefix: str) -> Path | None:
     return max(dated, key=lambda pair: pair[0])[1]
 
 
+def _lenient_text(value: bytes) -> str:
+    """
+    Decode a TEXT value, replacing what is not UTF-8 rather than refusing it.
+
+    SQLite stores whatever bytes it is handed as TEXT, and sqlite3's own
+    decoding is strict. One such value raised mid-fetch, which failed the
+    whole query: every highlight, or every book in the catalogue, lost to a
+    single malformed note. Replaced here, it costs at most that value.
+
+    :param value: The stored bytes.
+
+    :return: The text, with U+FFFD for each byte that is not UTF-8.
+    """
+    return value.decode("utf-8", errors="replace")
+
+
 def rows(database: Path, query: str) -> list[sqlite3.Row]:
     """
     Run one query against a database, without writing to it.
@@ -208,6 +221,7 @@ def rows(database: Path, query: str) -> list[sqlite3.Row]:
         raise ContainerUnavailableError(f"could not open {database.name}") from exc
     try:
         connection.row_factory = sqlite3.Row
+        connection.text_factory = _lenient_text
         return list(connection.execute(query))
     except sqlite3.Error as exc:
         # A schema change in a Books update lands here rather than as a
@@ -243,9 +257,25 @@ def moment(seconds: object) -> str | None:
         when = datetime.fromtimestamp(seconds + APPLE_EPOCH_OFFSET, tz=timezone.utc)
     except (OverflowError, OSError, ValueError):
         return None
-    return when.strftime(INSTANT_FORMAT)
+    return _instant(when)
 
 
 def now() -> str:
     """Return this instant as UTC, to the second, ending in ``Z``."""
-    return datetime.now(tz=timezone.utc).strftime(INSTANT_FORMAT)
+    return _instant(datetime.now(tz=timezone.utc))
+
+
+def _instant(when: datetime) -> str:
+    """
+    Write a UTC instant the one way every export writes one.
+
+    Not ``strftime``: its ``%Y`` does not pad on glibc, so a garbage timestamp
+    landing in the year 500 was written ``500-09-02T00:00:00Z`` -- not RFC
+    3339, and a violation of the pattern both shipped schemas hold every date
+    to. ``isoformat`` always writes four digits.
+
+    :param when: The instant, in UTC.
+
+    :return: The instant to the second, ending in ``Z``.
+    """
+    return f"{when.replace(tzinfo=None).isoformat(timespec='seconds')}Z"

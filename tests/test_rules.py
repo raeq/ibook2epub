@@ -322,6 +322,11 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                     continue
                 if path.name == "naming.py" and _inside(tree, node, "truncate_bytes"):
                     continue
+                # Not a name: the text Apple's databases hold, decoded with
+                # errors="replace", so it cannot raise the way this rule is
+                # about. Named here so it is the one other decode, not a gap.
+                if path.name == "coredata.py" and _inside(tree, node, "_lenient_text"):
+                    continue
                 offenders.append(f"{path}:{node.lineno}")
 
         assert offenders == [], f"decode through truncate_bytes: {offenders}"
@@ -661,6 +666,18 @@ class TestRuleAFilesystemClashIsNotACompletedBook:
         decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
 
         assert decisions[0].status in {planning.EXPORTED, planning.COLLISION}
+
+    def test_a_full_case_fold_variant_is_one_file(self):
+        # Pinned because it looks like an over-reach and is not: APFS folds
+        # case with Unicode's full mapping, so Straße.epub and Strasse.epub
+        # are one file on a Mac's default volume. Folding 1:1 instead would
+        # plan two writes to it, and one book would replace the other.
+        assert naming.filesystem_key("Straße.epub") == naming.filesystem_key(
+            "STRASSE.epub"
+        )
+        assert naming.filesystem_key("Straße.epub") == naming.filesystem_key(
+            "Strasse.epub"
+        )
 
 
 class TestRuleTheStubWalkIsStructuralEverywhere:

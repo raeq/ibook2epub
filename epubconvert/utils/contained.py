@@ -28,6 +28,7 @@ easier to be sure of than "a link that happens to land somewhere acceptable".
 
 from __future__ import annotations
 
+import errno
 import os
 import posixpath
 import re
@@ -138,15 +139,29 @@ def open_contained(path: Path) -> BinaryIO:
     The lexical and containment checks are still needed: this covers the final
     component only, and says nothing about where the path pointed.
 
+    Only a regular file is returned, judged on the descriptor. A FIFO passes
+    every check above -- no link, inside the package, size 0 -- and opening one
+    for reading waited for a writer that never came, freezing the run. Opened
+    non-blocking so the open returns whatever the path turns out to be, then
+    set back to blocking once it is known to be a file, which is where the
+    flag does nothing anyway.
+
     :param path: The member to open, already cleared by :func:`resolve` or
         :func:`contains`.
 
     :return: A binary file object.
 
-    :raises OSError: If the final component is a symlink (``ELOOP``), or the
-        open fails for any ordinary reason.
+    :raises OSError: If the final component is a symlink (``ELOOP``), is not a
+        regular file, or the open fails for any ordinary reason.
     """
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", str(path))
+        os.set_blocking(descriptor, True)
+    except OSError:
+        os.close(descriptor)
+        raise
     return os.fdopen(descriptor, "rb")
 
 

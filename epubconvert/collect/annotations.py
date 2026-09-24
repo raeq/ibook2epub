@@ -51,7 +51,13 @@ from ..utils.opf import Package
 from ..utils.policy import NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 from .coredata import container_directory, database_in, moment, now, rows
-from .library import describe_book, index_assets, package_of, read_package_once
+from .library import (
+    describe_book,
+    index_assets,
+    is_text,
+    package_of,
+    read_package_once,
+)
 
 #: What names standard output where a filename is expected. The convention
 #: every other command-line tool uses, so it needs no explaining.
@@ -115,7 +121,7 @@ def text_fragment(text: str) -> str:
     if not collapsed:
         return ""
     if len(collapsed) <= FRAGMENT_WHOLE_LIMIT:
-        return f":~:text={quote(collapsed, safe=FRAGMENT_SAFE)}"
+        return f":~:text={_fragment_term(collapsed)}"
 
     start = _leading_words(collapsed, FRAGMENT_END_CHARS)
     end = _trailing_words(collapsed, FRAGMENT_END_CHARS)
@@ -128,10 +134,26 @@ def text_fragment(text: str) -> str:
         or end == collapsed
         or len(start) + len(end) >= len(collapsed)
     ):
-        return f":~:text={quote(collapsed, safe=FRAGMENT_SAFE)}"
-    return (
-        f":~:text={quote(start, safe=FRAGMENT_SAFE)},{quote(end, safe=FRAGMENT_SAFE)}"
-    )
+        return f":~:text={_fragment_term(collapsed)}"
+    return f":~:text={_fragment_term(start)},{_fragment_term(end)}"
+
+
+def _fragment_term(text: str) -> str:
+    """
+    Percent-encode one term of a text directive.
+
+    ``quote`` leaves ``-`` alone, as an unreserved URL character, but in a text
+    directive it is syntax: a leading ``prefix-,`` and a trailing ``,-suffix``
+    are recognised by it, so a highlight reading "-40 degrees" was read as a
+    suffix rather than as the text. The WICG syntax requires ``-``, ``&`` and
+    ``,`` percent-encoded; ``quote`` already does the other two. Every term
+    goes through here, so the three sites cannot disagree.
+
+    :param text: One term: the whole highlight, or one of its ends.
+
+    :return: The term, safe to place in a ``:~:text=`` directive.
+    """
+    return quote(text, safe=FRAGMENT_SAFE).replace("-", "%2D")
 
 
 def _leading_words(text: str, budget: int) -> str:
@@ -333,10 +355,13 @@ def _annotation_of(
         from. Caught per row by :func:`collect`, so one bad row costs one
         annotation.
     """
-    text = row["ZANNOTATIONSELECTEDTEXT"]
-    if not isinstance(text, str):
-        raise TypeError(f"selected text is {type(text).__name__}, not text")
-    asset_id = row["ZANNOTATIONASSETID"] or ""
+    text = _required_text(row["ZANNOTATIONSELECTEDTEXT"], "selected text")
+    # The id and the book it belongs to are what a rerun matches an entry on,
+    # so a row with a BLOB in either is dropped here, inside the per-row
+    # guard. Only the text was checked, and a BLOB anywhere else reached
+    # json.dumps, which raised outside every guard and cost the whole export.
+    _required_text(row["ZANNOTATIONUUID"], "annotation id")
+    asset_id = _required_text(row["ZANNOTATIONASSETID"] or "", "asset id")
     known = library.get(asset_id, {})
     package = package_of(known)
     book = read_package_once(package, parsed) if package else None
@@ -355,9 +380,11 @@ def _annotation_of(
     locator = text_fragment(text)
     if locator:
         annotation["locator"] = locator
-    if row["ZANNOTATIONNOTE"]:
+    # The note and the chapter are worth less than the highlight, so one that
+    # is not text is left out rather than costing the row, as a title is.
+    if is_text(row["ZANNOTATIONNOTE"]):
         annotation["note"] = row["ZANNOTATIONNOTE"]
-    if row["ZFUTUREPROOFING5"]:
+    if is_text(row["ZFUTUREPROOFING5"]):
         annotation["chapter"] = row["ZFUTUREPROOFING5"]
 
     cfi = row["ZANNOTATIONLOCATION"]
@@ -377,6 +404,22 @@ def _annotation_of(
     if modified:
         annotation["modified"] = modified
     return annotation
+
+
+def _required_text(value: object, what: str) -> str:
+    """
+    Take a column an annotation cannot be made without, if it holds text.
+
+    :param value: What the untyped column held.
+    :param what: What to call it in the message.
+
+    :return: The text.
+
+    :raises TypeError: If it holds anything else, a BLOB above all.
+    """
+    if not isinstance(value, str):
+        raise TypeError(f"{what} is {type(value).__name__}, not text")
+    return value
 
 
 def build_document(

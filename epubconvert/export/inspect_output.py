@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -23,6 +24,14 @@ from ..utils.app_logger import logger
 from ..utils.contained import is_free, open_contained, resolve
 from ..utils.display import printable
 from ..utils.spec import PACKAGE_SUFFIX
+from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, file_mode
+
+#: Extensions a cover may be written under: the EPUB 3.3 core media types for
+#: images (GIF, JPEG, PNG, SVG, WebP), so every reader can show what lands
+#: beside a book. Never :data:`~epubconvert.utils.spec.PACKAGE_SUFFIX`, which
+#: would make the cover a second book -- or, on a case-insensitive volume, the
+#: book itself.
+COVER_SUFFIXES = frozenset({".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
 
 #: Guards the "cannot measure free space" warning so it is said once per
 #: process rather than once per sampling interval.
@@ -83,9 +92,9 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
     """
     try:
         described = read_package_dir(package)
-        if not described.cover_id:
-            return None
-        href = described.manifest.get(described.cover_id)
+        href = (
+            described.manifest.get(described.cover_id) if described.cover_id else None
+        )
         if not href:
             return None
         source = resolve(package, href, resolved_root=package.resolve())
@@ -97,18 +106,8 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
             )
             return None
 
-        # with_suffix() *replaces* the extension, so a cover href ending in
-        # ".epub" would resolve to the archive itself and overwrite the book
-        # with image bytes. Build the name from the stem instead, and refuse
-        # any path that is not a new file beside the archive.
-        suffix = Path(href).suffix or ".jpg"
-        cover = target_archive.parent / f"{target_archive.stem}{suffix}"
-        if cover == target_archive or not is_free(cover):
-            logger.debug(
-                "Not writing cover for %s: %s is taken",
-                target_archive.name,
-                cover.name,
-            )
+        cover = _cover_name(target_archive, href)
+        if cover is None:
             return None
 
         # Streamed rather than read whole: one copy per worker, and the pool
@@ -120,13 +119,106 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         # resolving the path and then copying it reopened the check-then-open
         # window O_NOFOLLOW exists to close, in the one reader that did not use
         # it.
-        with open_contained(source) as reading, cover.open("wb") as writing:
-            shutil.copyfileobj(reading, writing)
+        #
+        # Into a partial and then published, never written under its final
+        # name. A cover is only written when its name is free, so one left
+        # truncated by a full disk was never rewritten: every later run saw the
+        # name taken.
+        if not _write_new(source, cover):
+            logger.debug(
+                "Not writing cover for %s: %s was taken while copying",
+                target_archive.name,
+                cover.name,
+            )
+            return None
     except (OSError, ValueError, ValidationError) as exc:
         logger.debug("No cover for %s: %s", printable(target_archive.name), exc)
         return None
 
     return cover
+
+
+def _cover_name(target_archive: Path, href: str) -> Path | None:
+    """
+    Choose the name a cover is written under, beside its book.
+
+    :param target_archive: The exported epub file the cover sits beside.
+    :param href: The cover's href, out of the book's own manifest.
+
+    :return: A free name with an image suffix, or None if there is none.
+    """
+    # with_suffix() *replaces* the extension, so a cover href ending in
+    # ".epub" would resolve to the archive itself and overwrite the book
+    # with image bytes. Build the name from the stem instead, and refuse
+    # any path that is not a new file beside the archive.
+    #
+    # The suffix is the book's choice, so it is lower-cased and held to
+    # the image types a reader must support. Refusing only the exact
+    # archive name was case-sensitive: "cover.EPUB" wrote Book.EPUB beside
+    # Book.epub, one file on the case-insensitive volume the shelf is
+    # copied to, and any other suffix put a file of the book's choosing
+    # -- ".html", ".exe" -- into the output directory.
+    suffix = (Path(href).suffix or ".jpg").lower()
+    if suffix not in COVER_SUFFIXES:
+        logger.debug(
+            "Not writing cover for %s: %s is not an image suffix",
+            printable(target_archive.name),
+            printable(suffix),
+        )
+        return None
+    cover = target_archive.parent / f"{target_archive.stem}{suffix}"
+    if not is_free(cover):
+        logger.debug(
+            "Not writing cover for %s: %s is taken",
+            target_archive.name,
+            cover.name,
+        )
+        return None
+    return cover
+
+
+def _write_new(source: Path, target: Path) -> bool:
+    """
+    Copy *source* to a name that must not exist yet, all at once or not at all.
+
+    The copy goes to a partial in the same directory and is published with
+    ``os.link``, which refuses a name that is already taken -- by a file, or
+    by a symlink it would otherwise follow -- so the window between the caller's
+    :func:`~epubconvert.utils.contained.is_free` check and the write cannot
+    overwrite anything. The partial is removed whatever happens.
+
+    :param source: The file to copy, opened without following a symlink.
+    :param target: The name to publish it under.
+
+    :return: True if written, False if the name was taken in the meantime.
+
+    :raises OSError: If the copy or the publishing failed for another reason.
+    """
+    handle, partial_name = tempfile.mkstemp(
+        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
+    )
+    os.close(handle)
+    partial = Path(partial_name)
+    try:
+        partial.chmod(file_mode())
+        with open_contained(source) as reading, partial.open("wb") as writing:
+            shutil.copyfileobj(reading, writing)
+        try:
+            os.link(partial, target)
+        except FileExistsError:
+            return False
+        except OSError:
+            # FAT and exFAT have no hard links, and they are the volumes a
+            # shelf is most often copied to. There the check is repeated and
+            # the partial renamed: the run lock already keeps this tool's own
+            # runs out, so the narrower guarantee is lost only against some
+            # other program writing the same name in the same instant.
+            if not is_free(target):
+                return False
+            partial.replace(target)
+        return True
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def verify_output(

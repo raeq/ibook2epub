@@ -5,18 +5,31 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import errno
 import hashlib
+import json
 import os
+import shutil
+import stat
+import tracemalloc
+import zipfile
 from pathlib import Path
-from zipfile import ZIP_STORED, ZipFile
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
+from epubconvert.collect.annotations import EMBEDDED_PATH
 from epubconvert.collect.validate import ValidationError, read_package_dir
 from epubconvert.export import inspect_output
-from epubconvert.export.archive import ARCHIVE_TIMESTAMP, zip_package
+from epubconvert.export.archive import (
+    ARCHIVE_TIMESTAMP,
+    file_mode,
+    replace_annotations,
+    write_atomically,
+    zip_package,
+)
 from epubconvert.run import convert, run
-from tests.conftest import make_package
+from tests.conftest import make_package, needs_permissions
 
 
 def digest(path: Path) -> str:
@@ -88,6 +101,169 @@ class TestDeterministicArchives:
         with ZipFile(target) as archive:
             for info in archive.infolist():
                 assert (info.external_attr >> 16) & 0o044
+
+
+class TestAMemberPastTheZip64Limit:
+    """
+    A member over 2 GiB needs ZIP64 headers, and zipfile decides whether to
+    write them from the size it is told *before* the member is written. The
+    limit is lowered here rather than a 2 GiB file written.
+    """
+
+    LIMIT = 4096
+
+    @staticmethod
+    def _package(library: Path) -> Path:
+        package = make_package(library, "Big.epub")
+        (package / "OEBPS" / "video.mp4").write_bytes(os.urandom(3 * 4096))
+        return package
+
+    def test_a_member_past_the_limit_is_exported(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # Regression: every member was opened from a ZipInfo whose file_size
+        # was 0, so zipfile wrote 32-bit headers and raised RuntimeError at
+        # the first member past 2 GiB. The book could never be exported.
+        monkeypatch.setattr(zipfile, "ZIP64_LIMIT", self.LIMIT)
+        package = self._package(tmp_path / "lib")
+        target = output_dir / "Big.epub"
+
+        zip_package(package, target)
+
+        with ZipFile(target) as archive:
+            assert (
+                archive.read("OEBPS/video.mp4")
+                == (package / "OEBPS" / "video.mp4").read_bytes()
+            )
+            assert archive.testzip() is None
+
+    def test_sizing_members_ahead_changes_no_byte_of_an_ordinary_book(
+        self, library, output_dir, monkeypatch
+    ):
+        # Re-exports must stay byte-identical across versions too, so the fix
+        # above may only change books that need ZIP64. The comparison is with
+        # every member opened unsized, which is how archives were written
+        # before it.
+        package = library / "Book One.epub"
+        sized = output_dir / "sized.epub"
+        zip_package(package, sized)
+
+        real_open = ZipFile.open
+
+        def unsized(self, name, mode="r", **kwargs):
+            if mode == "w" and isinstance(name, ZipInfo):
+                name.file_size = 0
+            return real_open(self, name, mode, **kwargs)
+
+        monkeypatch.setattr(ZipFile, "open", unsized)
+        before = output_dir / "unsized.epub"
+        zip_package(package, before)
+
+        assert sized.read_bytes() == before.read_bytes()
+
+
+class TestAPackageCarryingItsOwnAnnotations:
+    """
+    A sideloaded package can arrive with ``META-INF/annotations.json`` already
+    in it. The zip format allows two members with one name; the OCF does not,
+    and readers disagree about which of the two they see.
+    """
+
+    MINE: tuple[dict[str, object], ...] = ({"id": "MINE"},)
+
+    @staticmethod
+    def _package(library: Path) -> Path:
+        package = make_package(library, "Book.epub")
+        (package / EMBEDDED_PATH).write_text('{"annotations": [{"id": "THEIRS"}]}')
+        return package
+
+    def test_embedding_annotations_leaves_one_member_of_that_name(
+        self, tmp_path, output_dir
+    ):
+        # Regression: the package's own copy was stored as a member and then
+        # _embed_annotations wrote the name again, so the archive held two.
+        target = output_dir / "Book.epub"
+
+        count = zip_package(
+            self._package(tmp_path / "lib"), target, annotations=list(self.MINE)
+        )
+
+        with ZipFile(target) as archive:
+            names = archive.namelist()
+            held = json.loads(archive.read(EMBEDDED_PATH))
+        assert names.count(EMBEDDED_PATH) == 1
+        assert held["annotations"] == list(self.MINE)
+        assert count == len(names) - 1
+
+    def test_without_annotations_the_package_keeps_its_own(self, tmp_path, output_dir):
+        target = output_dir / "Book.epub"
+
+        zip_package(self._package(tmp_path / "lib"), target)
+
+        with ZipFile(target) as archive:
+            assert b"THEIRS" in archive.read(EMBEDDED_PATH)
+
+
+class TestARefreshStreamsItsMembers:
+    """
+    Refreshing the annotations of a book already on the shelf rebuilds the
+    whole archive, so it must cost what the book's largest member costs to
+    stream, not what the whole book costs to hold.
+    """
+
+    MINE: tuple[dict[str, object], ...] = ({"id": "MINE"},)
+
+    @staticmethod
+    def _shelved(tmp_path: Path, media: bytes) -> Path:
+        package = make_package(tmp_path / "lib", "Book.epub")
+        (package / "OEBPS" / "video.mp4").write_bytes(media)
+        target = tmp_path / "out" / "Book.epub"
+        target.parent.mkdir()
+        zip_package(package, target)
+        return target
+
+    def test_a_refresh_does_not_hold_the_book_in_memory(self, tmp_path):
+        # Regression: every member was read into a list before the rewrite, so
+        # a 300 MB book peaked at 300 MB per refresh, and a MemoryError there
+        # was not one of the errors a refresh reports and moves past.
+        size = 8 * 1024 * 1024
+        target = self._shelved(tmp_path, os.urandom(size))
+
+        tracemalloc.start()
+        try:
+            replace_annotations(target, list(self.MINE))
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert peak < size // 4
+
+    def test_a_refresh_writes_what_a_fresh_export_would(self, tmp_path):
+        # Every member keeps its compression and normalized metadata, so a
+        # book refreshed on the shelf and the same book exported with those
+        # annotations in the first place are the same bytes.
+        media = os.urandom(200_000)
+        refreshed = self._shelved(tmp_path / "a", media)
+        replace_annotations(refreshed, list(self.MINE))
+
+        fresh = self._shelved(tmp_path / "b", media)
+        package = tmp_path / "b" / "lib" / "Book.epub"
+        zip_package(package, fresh, annotations=list(self.MINE))
+
+        assert refreshed.read_bytes() == fresh.read_bytes()
+
+    def test_a_member_past_the_zip64_limit_survives_a_refresh(
+        self, tmp_path, monkeypatch
+    ):
+        media = os.urandom(3 * 4096)
+        monkeypatch.setattr(zipfile, "ZIP64_LIMIT", 4096)
+        target = self._shelved(tmp_path, media)
+
+        replace_annotations(target, list(self.MINE))
+
+        with ZipFile(target) as archive:
+            assert archive.read("OEBPS/video.mp4") == media
+            assert archive.testzip() is None
 
 
 class TestInterrupt:
@@ -398,6 +574,180 @@ class TestCovers:
             read_package_dir(package)
 
 
+#: Where extract_cover looks up its copy, for tests that make it fail.
+COPY = "epubconvert.export.inspect_output.shutil.copyfileobj"
+
+
+def _disk_fills(reading, writing) -> None:
+    """Copy one buffer, then fail the way a full disk does."""
+    writing.write(reading.read(65536))
+    raise OSError(errno.ENOSPC, "No space left on device")
+
+
+class TestACoverIsWrittenWholeOrNotAtAll:
+    """
+    A cover is written only when its name is free, so a truncated one is never
+    rewritten: it has to be complete the moment it has its name.
+    """
+
+    @staticmethod
+    def _book(tmp_path: Path) -> tuple[Path, Path]:
+        package = _cover_package(tmp_path / "lib" / "Book.epub")
+        (package / "OEBPS" / "images" / "cover.jpg").write_bytes(b"J" * 200_000)
+        target = tmp_path / "out" / "Book.epub"
+        target.parent.mkdir()
+        target.write_bytes(b"the book")
+        return package, target
+
+    def test_a_copy_that_fails_partway_leaves_no_cover_behind(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression: the cover was opened under its final name and written in
+        # place. A full disk partway through left a prefix of the image, and
+        # every later run saw the name taken and never wrote it again.
+        package, target = self._book(tmp_path)
+        monkeypatch.setattr(COPY, _disk_fills)
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert sorted(p.name for p in target.parent.iterdir()) == ["Book.epub"]
+
+    def test_the_next_run_writes_the_whole_cover(self, tmp_path, monkeypatch):
+        package, target = self._book(tmp_path)
+        with monkeypatch.context() as patched:
+            patched.setattr(COPY, _disk_fills)
+            inspect_output.extract_cover(package, target)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover is not None
+        assert cover.read_bytes() == b"J" * 200_000
+
+    def test_a_cover_honours_the_umask(self, tmp_path):
+        package, target = self._book(tmp_path)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover is not None
+        assert stat.S_IMODE(cover.stat().st_mode) == file_mode()
+
+    def test_a_volume_without_hard_links_still_gets_its_cover(
+        self, tmp_path, monkeypatch
+    ):
+        # exFAT and FAT, the volumes a shelf is most often copied to, have no
+        # hard links, so publishing by link alone would silently stop writing
+        # covers there.
+        package, target = self._book(tmp_path)
+
+        def no_links(*_args):
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        monkeypatch.setattr("epubconvert.export.inspect_output.os.link", no_links)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover is not None
+        assert cover.read_bytes() == b"J" * 200_000
+        assert sorted(p.name for p in target.parent.iterdir()) == [
+            "Book.epub",
+            "Book.jpg",
+        ]
+
+    def test_without_hard_links_a_name_taken_meanwhile_is_still_kept(
+        self, tmp_path, monkeypatch
+    ):
+        package, target = self._book(tmp_path)
+        cover = target.with_name("Book.jpg")
+
+        def taken_and_no_links(*_args):
+            cover.write_bytes(b"THEIRS")
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        monkeypatch.setattr(
+            "epubconvert.export.inspect_output.os.link", taken_and_no_links
+        )
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert cover.read_bytes() == b"THEIRS"
+
+    def test_a_name_taken_while_the_cover_was_copied_is_not_overwritten(
+        self, tmp_path, monkeypatch
+    ):
+        package, target = self._book(tmp_path)
+        cover = target.with_name("Book.jpg")
+        real = shutil.copyfileobj
+
+        def someone_else_writes_first(reading, writing):
+            real(reading, writing)
+            cover.write_bytes(b"THEIRS")
+
+        monkeypatch.setattr(COPY, someone_else_writes_first)
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert cover.read_bytes() == b"THEIRS"
+        assert sorted(p.name for p in target.parent.iterdir()) == [
+            "Book.epub",
+            "Book.jpg",
+        ]
+
+
+class TestACoverSuffixComesFromAShortList:
+    """
+    The cover's extension is taken from an href the book chose, and it names a
+    file in the output directory.
+    """
+
+    @staticmethod
+    def _book(tmp_path: Path, href: str) -> tuple[Path, Path]:
+        package = _cover_package(tmp_path / "lib" / "Book.epub")
+        images = package / "OEBPS" / "images"
+        (images / "cover.jpg").rename(images / href)
+        opf = package / "OEBPS" / "content.opf"
+        opf.write_text(
+            opf.read_text(encoding="utf-8").replace("cover.jpg", href),
+            encoding="utf-8",
+        )
+        target = tmp_path / "out" / "Book.epub"
+        target.parent.mkdir()
+        target.write_bytes(b"the book")
+        return package, target
+
+    @pytest.mark.parametrize("href", ["cover.EPUB", "cover.Epub"])
+    def test_a_cover_cannot_take_the_book_suffix_in_another_case(self, tmp_path, href):
+        # Regression: only cover == target_archive was refused, and that
+        # comparison is case-sensitive. Book.EPUB beside Book.epub is one file
+        # on a case-insensitive volume, so copying the shelf to one replaced
+        # the book with the image, or the image with the book.
+        package, target = self._book(tmp_path, href)
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert sorted(p.name for p in target.parent.iterdir()) == ["Book.epub"]
+
+    @pytest.mark.parametrize("href", ["cover.exe", "cover.html", "cover.plist"])
+    def test_a_suffix_that_is_not_an_image_is_refused(self, tmp_path, href):
+        package, target = self._book(tmp_path, href)
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert sorted(p.name for p in target.parent.iterdir()) == ["Book.epub"]
+
+    @pytest.mark.parametrize(
+        ("href", "written"),
+        [
+            ("cover.JPG", "Book.jpg"),
+            ("cover.jpeg", "Book.jpeg"),
+            ("cover.PNG", "Book.png"),
+            ("cover.gif", "Book.gif"),
+            ("cover.webp", "Book.webp"),
+            ("cover.svg", "Book.svg"),
+        ],
+    )
+    def test_an_image_suffix_is_kept_in_lower_case(self, tmp_path, href, written):
+        package, target = self._book(tmp_path, href)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover == target.with_name(written)
+
+
 def _cover_package(package: Path) -> Path:
     """Build a package whose OPF declares a cover image."""
     opf = """<?xml version="1.0"?>
@@ -436,3 +786,83 @@ def _cover_package(package: Path) -> Path:
     cover.parent.mkdir(parents=True, exist_ok=True)
     cover.write_bytes(b"JPEGDATA")
     return package
+
+
+class TestRewritingASidecarKeepsWhatTheUserSet:
+    """
+    ``write_atomically`` replaces the detached export and the notes on every
+    rerun. A replace swaps in a new file, so whatever the user set on the old
+    one -- its mode, the fact that it is a link -- has to be carried across.
+    """
+
+    def test_a_private_file_stays_private(self, tmp_path):
+        # Regression: every rerun wrote a fresh partial at the umask's mode,
+        # so an export the user had made 0600 became 0644 again.
+        target = tmp_path / "highlights.json"
+        write_atomically(target, "first")
+        target.chmod(0o600)
+
+        write_atomically(target, "second")
+
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+        assert target.read_text(encoding="utf-8") == "second"
+
+    def test_a_new_file_honours_the_umask(self, tmp_path):
+        target = tmp_path / "highlights.json"
+
+        write_atomically(target, "first")
+
+        assert stat.S_IMODE(target.stat().st_mode) == file_mode()
+
+    def test_a_symlinked_target_is_written_through(self, tmp_path):
+        # Regression: the replace landed on the link itself, so a link into a
+        # synced folder became a regular file here and the synced copy went
+        # stale without a word.
+        real = tmp_path / "synced" / "highlights.json"
+        real.parent.mkdir()
+        real.write_text("old", encoding="utf-8")
+        link = tmp_path / "highlights.json"
+        link.symlink_to(real)
+
+        write_atomically(link, "new")
+
+        assert link.is_symlink()
+        assert real.read_text(encoding="utf-8") == "new"
+        assert [p.name for p in real.parent.iterdir()] == ["highlights.json"]
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "highlights.json",
+            "synced",
+        ]
+
+    def test_the_new_contents_reach_the_disk_before_the_rename(
+        self, tmp_path, monkeypatch
+    ):
+        # Without an fsync, a crash just after the rename can leave the name
+        # pointing at a file whose data was never written: the old contents
+        # gone and the new ones empty.
+        target = tmp_path / "highlights.json"
+        target.write_text("old", encoding="utf-8")
+        synced: list[str] = []
+        real_fsync = os.fsync
+
+        def recording_fsync(descriptor):
+            synced.append(target.read_text(encoding="utf-8"))
+            real_fsync(descriptor)
+
+        monkeypatch.setattr("epubconvert.export.archive.os.fsync", recording_fsync)
+
+        write_atomically(target, "new")
+
+        assert synced == ["old"]
+        assert target.read_text(encoding="utf-8") == "new"
+
+    @needs_permissions
+    def test_a_read_only_file_can_still_be_rewritten(self, tmp_path):
+        target = tmp_path / "highlights.json"
+        write_atomically(target, "first")
+        target.chmod(0o444)
+
+        write_atomically(target, "second")
+
+        assert stat.S_IMODE(target.stat().st_mode) == 0o444
+        assert target.read_text(encoding="utf-8") == "second"
