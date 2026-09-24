@@ -640,49 +640,70 @@ def replace_annotations(
     if not annotations:
         return False
 
-    with ZipFile(target_archive) as reading:
-        names = reading.namelist()
-        held = reading.read(EMBEDDED_PATH) if EMBEDDED_PATH in names else None
-
-        # Compared before the members are read, not after. Every member was
-        # being decompressed into memory to reach a comparison that only
-        # looks at this one small blob: 7.86 MB of peak allocation on a 6.4 MB
-        # book, to decide against rewriting it.
-        if _same_annotations(held, annotations):
-            return False
-
-        members = [
-            (info, reading.read(info.filename))
-            for info in reading.infolist()
-            if info.filename != EMBEDDED_PATH
-        ]
-
-    wanted = embedded_json(list(annotations))
-
-    handle, temporary = tempfile.mkstemp(
-        dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-    )
-    os.close(handle)
-    partial = Path(temporary)
+    partial: Path | None = None
     try:
-        partial.chmod(file_mode())
-        with ZipFile(
-            partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL
-        ) as writing:
-            for info, content in members:
-                writing.writestr(entry(info.filename, info.compress_type), content)
-            writing.writestr(
-                entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), wanted
+        with ZipFile(target_archive) as reading:
+            names = reading.namelist()
+            held = reading.read(EMBEDDED_PATH) if EMBEDDED_PATH in names else None
+
+            # Compared before the members are read, not after. Every member was
+            # being decompressed into memory to reach a comparison that only
+            # looks at this one small blob: 7.86 MB of peak allocation on a
+            # 6.4 MB book, to decide against rewriting it.
+            if _same_annotations(held, annotations):
+                return False
+
+            members = [
+                info for info in reading.infolist() if info.filename != EMBEDDED_PATH
+            ]
+            handle, temporary = tempfile.mkstemp(
+                dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
             )
+            os.close(handle)
+            partial = Path(temporary)
+            partial.chmod(file_mode())
+            _rebuild(reading, members, partial, embedded_json(list(annotations)))
+
+        # Replaced once the original is closed rather than while it is still
+        # being read, which a platform that locks open files refuses.
         assert_is_a_book(
             target_archive.name,
-            {info.filename for info, _ in members} | {EMBEDDED_PATH},
+            {info.filename for info in members} | {EMBEDDED_PATH},
         )
         partial.replace(target_archive)
     except BaseException:
-        partial.unlink(missing_ok=True)
+        if partial is not None:
+            partial.unlink(missing_ok=True)
         raise
     return True
+
+
+def _rebuild(
+    reading: ZipFile, members: list[ZipInfo], partial: Path, embedded: str
+) -> None:
+    """
+    Copy archive members into a new archive, one stream at a time, and embed
+    an annotation set after them.
+
+    Streamed rather than read into a list first: that held the whole book in
+    memory, so refreshing a 300 MB book peaked at 300 MB, and the MemoryError
+    a large one raised is not an error a refresh reports and moves past. Each
+    member keeps its compression and gets the same normalized entry a fresh
+    export gives it, so a refreshed book is byte-identical to one exported
+    with the same annotations in the first place.
+
+    :param reading: The archive being refreshed, open for reading.
+    :param members: The members to carry across, in order.
+    :param partial: The new archive to write.
+    :param embedded: The annotation document to store after the members.
+    """
+    with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
+        for info in members:
+            member = entry(info.filename, info.compress_type)
+            _size_ahead(member, info.file_size)
+            with reading.open(info) as source, writing.open(member, "w") as target:
+                shutil.copyfileobj(source, target)
+        writing.writestr(entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), embedded)
 
 
 def write_atomically(target: Path, text: str) -> None:

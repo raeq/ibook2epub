@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import stat
+import tracemalloc
 import zipfile
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
@@ -19,7 +20,12 @@ import pytest
 from epubconvert.collect.annotations import EMBEDDED_PATH
 from epubconvert.collect.validate import ValidationError, read_package_dir
 from epubconvert.export import inspect_output
-from epubconvert.export.archive import ARCHIVE_TIMESTAMP, file_mode, zip_package
+from epubconvert.export.archive import (
+    ARCHIVE_TIMESTAMP,
+    file_mode,
+    replace_annotations,
+    zip_package,
+)
 from epubconvert.run import convert, run
 from tests.conftest import make_package
 
@@ -194,6 +200,68 @@ class TestAPackageCarryingItsOwnAnnotations:
 
         with ZipFile(target) as archive:
             assert b"THEIRS" in archive.read(EMBEDDED_PATH)
+
+
+class TestARefreshStreamsItsMembers:
+    """
+    Refreshing the annotations of a book already on the shelf rebuilds the
+    whole archive, so it must cost what the book's largest member costs to
+    stream, not what the whole book costs to hold.
+    """
+
+    MINE = ({"id": "MINE"},)
+
+    @staticmethod
+    def _shelved(tmp_path: Path, media: bytes) -> Path:
+        package = make_package(tmp_path / "lib", "Book.epub")
+        (package / "OEBPS" / "video.mp4").write_bytes(media)
+        target = tmp_path / "out" / "Book.epub"
+        target.parent.mkdir()
+        zip_package(package, target)
+        return target
+
+    def test_a_refresh_does_not_hold_the_book_in_memory(self, tmp_path):
+        # Regression: every member was read into a list before the rewrite, so
+        # a 300 MB book peaked at 300 MB per refresh, and a MemoryError there
+        # was not one of the errors a refresh reports and moves past.
+        size = 8 * 1024 * 1024
+        target = self._shelved(tmp_path, os.urandom(size))
+
+        tracemalloc.start()
+        try:
+            replace_annotations(target, list(self.MINE))
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert peak < size // 4
+
+    def test_a_refresh_writes_what_a_fresh_export_would(self, tmp_path):
+        # Every member keeps its compression and normalized metadata, so a
+        # book refreshed on the shelf and the same book exported with those
+        # annotations in the first place are the same bytes.
+        media = os.urandom(200_000)
+        refreshed = self._shelved(tmp_path / "a", media)
+        replace_annotations(refreshed, list(self.MINE))
+
+        fresh = self._shelved(tmp_path / "b", media)
+        package = tmp_path / "b" / "lib" / "Book.epub"
+        zip_package(package, fresh, annotations=list(self.MINE))
+
+        assert refreshed.read_bytes() == fresh.read_bytes()
+
+    def test_a_member_past_the_zip64_limit_survives_a_refresh(
+        self, tmp_path, monkeypatch
+    ):
+        media = os.urandom(3 * 4096)
+        monkeypatch.setattr(zipfile, "ZIP64_LIMIT", 4096)
+        target = self._shelved(tmp_path, media)
+
+        replace_annotations(target, list(self.MINE))
+
+        with ZipFile(target) as archive:
+            assert archive.read("OEBPS/video.mp4") == media
+            assert archive.testzip() is None
 
 
 class TestInterrupt:
