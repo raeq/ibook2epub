@@ -84,13 +84,13 @@
     },
     {
       "title": "One table instead of three branches",
-      "file": "epubconvert/run/planning.py",
+      "file": "epubconvert/run/reporting.py",
       "pattern": "#: Everything the reporter needs to know about a status, in one place",
       "description": "Each non-pending status except `orphan` maps to a counter name, a severity, a per-book line and a closing tally.\n\nThe comment records what this replaced: an if/elif chain over the statuses plus a second block of `if report.x` tallies below it. The same mapping stated twice, so a new status had to be added in three places — and two of the branches had drifted into being byte-identical.\n\nEvery entry uses the same two named fields, `name` and `reason`, so the caller never has to work out which arguments a particular message wants."
     },
     {
       "title": "Two renderings of one plan",
-      "file": "epubconvert/run/planning.py",
+      "file": "epubconvert/run/reporting.py",
       "pattern": "def render_listing\\(decisions: Sequence\\[Decision\\], as_json: bool\\) -> str:",
       "description": "`--list` prints an aligned table with a count per status; `--list --json` emits the same decisions with source and target paths, `ensure_ascii=False` so titles stay readable.\n\nBoth come from `plan_exports`, plus the orphans, judged against the whole library (sharing the plan's name assignment when nothing narrows the run), which is the point: the listing cannot drift from what a run would do, because it *is* what a run would do."
     }

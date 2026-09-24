@@ -77,10 +77,10 @@ from .planning import (
     find_orphans,
     orphan_decisions,
     plan_exports,
-    render_listing,
 )
 from .preflight import ShelfUnwritableError, check_environment, check_writable
 from .repair import run_verify
+from .reporting import render_listing
 from .summary import format_summary
 
 
