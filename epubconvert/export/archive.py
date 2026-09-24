@@ -838,8 +838,8 @@ def replace_annotations(
             handle, temporary = tempfile.mkstemp(
                 dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
             )
+            partial = Path(temporary)  # Named first: a Ctrl-C may land on close.
             os.close(handle)
-            partial = Path(temporary)
             _rebuild(reading, members, partial, embedded)
             # After the rebuild, as write_atomically does: a book the user
             # made read-only would otherwise make its own partial unwritable.
@@ -918,10 +918,8 @@ def write_atomically(target: Path, text: str) -> None:
     neither the old file nor the new one. It is also not valid JSON, so every
     later run then refused to write to that path at all. The export is the
     artifact the merge machinery exists to protect; this is the same
-    temporary-then-replace path :func:`~epubconvert.export.archive.zip_package` uses.
-
-    A replace swaps in a new file, so three things the old one carried are
-    carried across deliberately:
+    temporary-then-replace path :func:`zip_package` uses. A replace swaps in a
+    new file, so three things the old one carried are carried across:
 
     - **Its mode.** Every rerun wrote the partial at the umask's mode, so an
       export the user had made 0600 became readable by everyone again.
@@ -939,12 +937,13 @@ def write_atomically(target: Path, text: str) -> None:
     :raises OSError: If it could not be written. The old file survives.
     """
     target, mode = _what_to_replace(target)
-    handle, temporary = tempfile.mkstemp(
-        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-    )
-    os.close(handle)
-    partial = Path(temporary)
-    try:
+    partial: Path | None = None
+    try:  # Made inside: a Ctrl-C as its descriptor closed left it behind.
+        handle, temporary = tempfile.mkstemp(
+            dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
+        )
+        partial = Path(temporary)
+        os.close(handle)
         partial.write_text(text, encoding="utf-8")
         _sync(partial)
         # After the write, not before: a target the user made read-only would
@@ -952,7 +951,8 @@ def write_atomically(target: Path, text: str) -> None:
         partial.chmod(mode)
         partial.replace(target)
     except BaseException:
-        partial.unlink(missing_ok=True)
+        if partial is not None:
+            partial.unlink(missing_ok=True)
         raise
 
 
