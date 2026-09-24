@@ -14,11 +14,19 @@ import re
 import stat
 import zlib
 from pathlib import Path
-from typing import Protocol
+from typing import IO, Protocol
 from urllib.parse import unquote
 from xml.etree import ElementTree
 from xml.parsers import expat
-from zipfile import BadZipFile, ZipFile
+from zipfile import (
+    ZIP_BZIP2,
+    ZIP_DEFLATED,
+    ZIP_LZMA,
+    ZIP_STORED,
+    BadZipFile,
+    ZipFile,
+    ZipInfo,
+)
 
 from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
@@ -66,9 +74,82 @@ UNREADABLE_MEMBER: tuple[type[Exception], ...] = (
     *_LZMA_ERRORS,
 )
 
+#: The compression methods OCF allows an epub's members: stored and deflate.
+#: zipfile reads bzip2 and LZMA too, and inflates a whole compressed chunk of
+#: either in one call however little is asked for, so no read of one can be
+#: bounded. A book never needs them, so a member using one is refused unread.
+OCF_METHODS = frozenset({ZIP_STORED, ZIP_DEFLATED})
+
+#: What a refusal calls the methods zipfile reads and OCF does not allow.
+_METHOD_NAMES = {ZIP_BZIP2: "bzip2", ZIP_LZMA: "LZMA"}
+
 
 class ValidationError(Exception):
     """Raised when an archive cannot be validated at all."""
+
+
+def disallowed_method(info: ZipInfo) -> str | None:
+    """
+    Name a member's compression method, if it is one OCF does not allow.
+
+    :param info: The member, as the archive's directory describes it.
+
+    :return: The method's name, or None when OCF allows it.
+    """
+    if info.compress_type in OCF_METHODS:
+        return None
+    return _METHOD_NAMES.get(
+        info.compress_type, f"compression method {info.compress_type}"
+    )
+
+
+def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
+    """
+    Open a member of an untrusted archive for streaming, if it can be bounded.
+
+    Streaming in chunks bounds a stored or deflated member, because zipfile
+    asks deflate for no more than each chunk. It bounds nothing for bzip2 or
+    LZMA, whose decompressors expand a whole compressed chunk in one call.
+
+    :param archive: The open archive.
+    :param info: The member to open.
+
+    :return: A binary stream of the member's contents.
+
+    :raises NotImplementedError: If the member uses a method OCF does not
+        allow: one of :data:`UNREADABLE_MEMBER`, as zipfile's own refusal of a
+        method it does not implement is, so every caller already catches it.
+    """
+    method = disallowed_method(info)
+    if method is not None:
+        raise NotImplementedError(
+            f"{printable(info.filename)} is compressed with {method}, "
+            "which an epub may not use"
+        )
+    return archive.open(info)
+
+
+def read_member(archive: ZipFile, info: ZipInfo, limit: int) -> bytes | None:
+    """
+    Decompress a member of an untrusted archive, but never more than *limit*.
+
+    ``info.file_size`` is what the central directory declares, not a bound.
+    ``ZipFile.read`` decompresses the whole stream before the two are ever
+    compared -- deflate up to 1 GiB a call, bzip2 and LZMA without limit -- so
+    a 2.4 KB archive declaring a 180-byte member made it allocate 1.9 GiB.
+
+    :param archive: The open archive.
+    :param info: The member to read.
+    :param limit: The most it may hold.
+
+    :return: Its bytes, or None if it holds more than *limit*.
+
+    :raises NotImplementedError: If the member uses a method OCF does not
+        allow.
+    """
+    with open_member(archive, info) as handle:
+        data = handle.read(limit + 1)
+    return None if len(data) > limit else data
 
 
 class _Members(Protocol):  # pylint: disable=too-few-public-methods
@@ -96,22 +177,31 @@ class _ArchiveMembers:  # pylint: disable=too-few-public-methods
         """
         Return a member's bytes, refusing an implausibly large one.
 
-        The size is taken from the central directory before anything is
-        inflated, so a zip bomb is refused rather than expanded.
+        The size the central directory declares is checked before anything is
+        inflated, and the read is bounded as well, because that declaration
+        is the book's own claim about itself.
         """
         try:
             info = self.archive.getinfo(name)
         except KeyError as exc:
             raise ValidationError(f"missing {name}") from exc
 
+        method = disallowed_method(info)
+        if method is not None:
+            raise ValidationError(
+                f"{name} is compressed with {method}, which an epub may not use"
+            )
         if info.file_size > MAX_XML_BYTES:
             raise ValidationError(
                 f"{name} is implausibly large ({info.file_size} bytes)"
             )
         try:
-            return self.archive.read(name)
+            data = read_member(self.archive, info, MAX_XML_BYTES)
         except UNREADABLE_MEMBER as exc:
             raise ValidationError(f"could not read {name}: {exc}") from exc
+        if data is None:
+            raise ValidationError(f"{name} is larger than it declares")
+        return data
 
 
 class _DirectoryMembers:  # pylint: disable=too-few-public-methods

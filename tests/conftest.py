@@ -25,6 +25,8 @@ module, so this map saves a search:
 ``test_integrity.py``        the guarantees that keep the output directory
                              trustworthy
 ``test_hardening.py``        untrusted input and hostile filesystems
+``test_hostile_archives.py`` archives that claim less than they hold, or
+                             cannot be opened at all
 ``test_efficiency.py``       work done per book, and work declined
 ``test_containment.py``      the one path-trust rule (``contained``)
 ``test_rules.py``            one class per rule, one test per call site

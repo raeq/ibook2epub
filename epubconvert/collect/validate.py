@@ -29,7 +29,13 @@ from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.spec import MIMETYPE_CONTENT, MIMETYPE_NAME
-from .package import UNREADABLE_MEMBER, ValidationError, read_package
+from .package import (
+    UNREADABLE_MEMBER,
+    ValidationError,
+    disallowed_method,
+    read_member,
+    read_package,
+)
 
 EPUBCHECK = "epubcheck"
 
@@ -87,17 +93,11 @@ def validate_archive(path: Path) -> list[str]:
             problems.extend(_check_mimetype(archive, names))
             problems.extend(_check_unique(names))
 
-            broken = archive.testzip()
-            if broken is not None:
-                problems.append(f"corrupt member: {printable(broken)}")
-
-            try:
-                package = read_package(archive)
-            except ValidationError as exc:
-                problems.append(printable(str(exc)))  # names the book's members
-                return problems
-
-            problems.extend(_check_manifest(members, package))
+            # Before anything is inflated: the contents are checked only when
+            # every member can be decompressed in bounded memory.
+            problems.extend(
+                _check_methods(archive) or _check_contents(archive, members)
+            )
     except BadZipFile as exc:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
@@ -110,6 +110,28 @@ def validate_archive(path: Path) -> list[str]:
         return [f"unreadable archive: {exc}"]
 
     return problems
+
+
+def _check_contents(archive: ZipFile, members: set[str]) -> list[str]:
+    """
+    Inflate every member, then check what the package document promises.
+
+    :param archive: The open archive, every member stored or deflated.
+    :param members: Its member names, built once by the caller.
+
+    :return: A list of problems.
+    """
+    problems: list[str] = []
+    broken = archive.testzip()
+    if broken is not None:
+        problems.append(f"corrupt member: {printable(broken)}")
+
+    try:
+        package = read_package(archive)
+    except ValidationError as exc:
+        return [*problems, printable(str(exc))]  # names the book's members
+
+    return problems + _check_manifest(members, package)
 
 
 def _check_unique(names: list[str]) -> list[str]:
@@ -134,6 +156,29 @@ def _check_unique(names: list[str]) -> list[str]:
     return [
         f"member name appears more than once: {printable(name)}" for name in repeated
     ]
+
+
+def _check_methods(archive: ZipFile) -> list[str]:
+    """
+    Report every member compressed with a method OCF does not allow.
+
+    :param archive: The open archive.
+
+    :return: Up to five members named, and a count of the rest.
+    """
+    disallowed = [
+        f"member is compressed with {method}, which an epub may not use: "
+        f"{printable(info.filename)}"
+        for info in archive.infolist()
+        if (method := disallowed_method(info)) is not None
+    ]
+    if len(disallowed) > 5:
+        more = len(disallowed) - 5
+        return [
+            *disallowed[:5],
+            f"...and {more} more member(s) compressed a way OCF forbids",
+        ]
+    return disallowed
 
 
 def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
@@ -167,14 +212,17 @@ def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
         problems.append(
             f"mimetype is stored at byte {info.header_offset}, not first in the file"
         )
-    if info.compress_type != ZIP_STORED:
+    stored = info.compress_type == ZIP_STORED
+    if not stored:
         problems.append("mimetype is compressed; it must be stored")
     # The specification fixes this member's length exactly, so a declared size
     # that differs settles it without reading anything. --verify runs over
     # files this tool may not have written, and a member declaring 512 MiB was
-    # otherwise materialised in full to be compared against 20 bytes.
+    # otherwise materialised in full to be compared against 20 bytes. Nor is
+    # the declaration a bound, so only a stored member is read, and only as
+    # far as that length: a compressed one declaring 20 bytes inflated whole.
     if info.file_size != len(MIMETYPE_CONTENT) or (
-        archive.read(MIMETYPE_NAME) != MIMETYPE_CONTENT
+        stored and read_member(archive, info, len(MIMETYPE_CONTENT)) != MIMETYPE_CONTENT
     ):
         problems.append("mimetype does not contain 'application/epub+zip'")
 

@@ -649,7 +649,10 @@ class TestMalformedArchives:
 
         problems = validate.validate_archive(path)
 
-        assert any(problem.startswith("unreadable archive:") for problem in problems)
+        # LZMA is refused before anything is inflated: OCF allows only stored
+        # and deflate, and an LZMA stream cannot be read in bounded memory.
+        reported = "unreadable archive:" if method == ZIP_DEFLATED else "member is"
+        assert any(problem.startswith(reported) for problem in problems)
 
     @damaged_streams
     def test_a_corrupt_package_document_is_a_validation_error(
@@ -678,10 +681,10 @@ class TestMalformedArchives:
     def test_an_unreadable_member_is_reported_not_raised(self, tmp_path, monkeypatch):
         path = write_epub(tmp_path / "Unreadable.epub")
 
-        def refuse(self, name):
+        def refuse(self, name, *_args, **_kwargs):
             raise OSError("device fell over")
 
-        monkeypatch.setattr(ZipFile, "read", refuse)
+        monkeypatch.setattr(ZipFile, "open", refuse)
 
         with (
             ZipFile(path) as archive,
