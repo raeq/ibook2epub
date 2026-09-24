@@ -240,6 +240,33 @@ class TestTheDocumentedTableMatchesTheCode:
         for code in exits.MEANINGS:
             assert f"| `{code}`" in readme, f"exit {code} is undocumented"
 
+    def test_the_readme_table_says_what_meanings_says(self):
+        # "Generated from MEANINGS, so the two cannot drift" was only true of
+        # the numbers: five rows' text had drifted, one of them dropping
+        # "malformed" from what 2 covers.
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(
+            encoding="utf-8"
+        )
+        table = dict(re.findall(r"^\| `(\d+)` \| (.*) \|$", readme, re.MULTILINE))
+
+        assert {int(code): text for code, text in table.items()} == exits.MEANINGS
+        assert [int(code) for code in table] == list(exits.MEANINGS)
+
+    def test_the_readme_gives_full_disk_access_its_own_code(self):
+        # It said "Without it you get exit code 4" after #19 moved a refusal
+        # to 8, sending a script to fix a path instead of grant a permission.
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(
+            encoding="utf-8"
+        )
+        paragraphs = [p for p in readme.split("\n\n") if "Full Disk Access" in p]
+        named = {
+            int(code)
+            for paragraph in paragraphs
+            for code in re.findall(r"exit code `?(\d+)", paragraph.replace("\n", " "))
+        }
+
+        assert named == {exits.NO_PERMISSION}
+
     def test_a_valid_archive_still_verifies_clean(self, output_dir, tmp_path):
         source = tmp_path / "lib"
         source.mkdir()
