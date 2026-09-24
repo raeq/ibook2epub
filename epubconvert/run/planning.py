@@ -31,8 +31,8 @@ from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 from .claims import MAX_SUFFIX, Claims, lost_to, marked, suffixed
-from .holders import holds_another_book, identifier_on_shelf
-from .placing import Shelf, place, read_shelf
+from .holders import holds_another_book, identifier_on_shelf, same_identity
+from .placing import Existing, Shelf, place, read_shelf
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
@@ -387,7 +387,6 @@ def find_orphans(
     packages: Sequence[Path],
     on_collision: CollisionMode = SKIP,
     *,
-    claimed_extra: Sequence[str] = (),
     assigned: Sequence[Assignment] | None = None,
 ) -> list[Path]:
     """
@@ -415,7 +414,12 @@ def find_orphans(
     collision; its archive, the only copy, was listed here as claimed by
     nothing -- the list a person reviews before deleting. An archive under a
     name no book wants, such as one left by adopting a renaming policy, stays
-    an orphan: its book is written under the new name.
+    an orphan: its book is written under the new name. A book that lost its
+    name claims the file under the name it wanted, when that file is of its
+    identity and may be its book: under a policy that names from the folder
+    there is no identifier to go by, so ``b/dune.epub``, exported alone and
+    then outsorted by an added ``a/Dune.epub`` that a case-insensitive
+    filesystem gives the same file, had its only archive listed here.
 
     Nothing is deleted, here or anywhere. The never-deletes stance is
     deliberate; the gap was that nothing would say either.
@@ -425,17 +429,21 @@ def find_orphans(
     :param packages: **Every** package in the library, not the subset this run
         is looking at -- ``--match`` narrows a run, not the shelf.
     :param on_collision: The collision mode, so suffixed names are recognised.
-    :param claimed_extra: Names claimed by something other than a package,
-        such as a file copied through verbatim.
+    :param assigned: The names already given, when the caller has them, the
+        files copied through included
+        (:func:`~epubconvert.run.copynames.claim_copies`): a copy claims
+        the file it is placed at, as a package does.
 
     :return: Archives no book accounts for, sorted by path.
     """
     if assigned is None:
         assigned = assign_names(packages, policy, on_collision)
     shelf = read_shelf(output_dir, policy, assigned)
-    claimed = {filesystem_key(policy.identity(name)) for name in claimed_extra}
+    claimed: set[str] = set()
     for item in assigned:
         clash = place(item, shelf).clash
+        if clash is None and not item.filename:
+            clash = _held_by_loser(item, shelf)
         if clash is not None:
             claimed.add(filesystem_key(clash.identity))
 
@@ -447,6 +455,23 @@ def find_orphans(
         and (key := filesystem_key(policy.identity(found.name))) not in claimed
         and not (live and key in shelf.spoken and identifier_on_shelf(found) in live)
     )
+
+
+def _held_by_loser(item: Assignment, shelf: Shelf) -> Existing | None:
+    """
+    Find the archive a book that lost its name may still hold.
+
+    :param item: The book, with no name and the identity of the one it wanted.
+    :param shelf: The archives already present.
+
+    :return: The archive under that name when it can be this book's, as the
+        plan would judge a book of that name: of its identity, and not
+        holding another book by identifier.
+    """
+    found = shelf.existing.get(filesystem_key(item.identity))
+    if found is None or not same_identity(found.identity, item.identity):
+        return None
+    return found if holds_another_book(found.path, item.identifier) is None else None
 
 
 def orphan_decisions(orphans: Sequence[Path]) -> list[Decision]:

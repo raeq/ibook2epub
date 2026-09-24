@@ -21,11 +21,12 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert.collect import source, validate
+from epubconvert.collect import annotations, source, validate
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
-from epubconvert.run import claims, convert, holders, planning, run
+from epubconvert.run import claims, convert, holders, placing, planning, run
 from tests.conftest import make_metadata_package, make_package
+from tests.test_annotations import highlight, library_row, make_databases
 
 #: Font obfuscation, which is not protection, and a key-transport algorithm,
 #: which is.
@@ -440,3 +441,58 @@ class TestEncryptionIsReadInOnePass:
         )
 
         assert source.has_drm(package)[0]
+
+
+class TestARefreshReadsOnlyTheBooksItRewrites:
+    """
+    ``-ae -ar`` compares a folder-named book's identifier with its archive's
+    before writing over it. It did so for every book on the shelf, though
+    only a book with highlights is rewritten: 2,000 books with one highlight
+    between them read 2,000 package documents and opened 2,002 archives,
+    8.7x slower than the 0 and 2 before the comparison.
+    """
+
+    def test_only_the_highlighted_book_is_read(self, tmp_path, output_dir, monkeypatch):
+        library = tmp_path / "lib"
+        for index in range(4):
+            make_metadata_package(
+                library,
+                f"Book {index}.epub",
+                title=f"Book {index}",
+                identifier=f"urn:uuid:{index}",
+            )
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        make_databases(
+            tmp_path / "container",
+            rows=[highlight()],
+            books=[library_row(path="/x/Book 0.epub", title="Book 0")],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+        sources: list[str] = []
+        real_source = placing._identifier_of  # pylint: disable=protected-access
+
+        def counting_source(package: Path) -> str | None:
+            sources.append(package.name)
+            return real_source(package)
+
+        monkeypatch.setattr(placing, "_identifier_of", counting_source)
+        opened: Counter[str] = Counter()
+        original = ZipFile.__init__
+
+        def counting(self, file, *args, **kwargs):
+            # The rebuild's own temporary is not an archive on the shelf.
+            if Path(str(file)).parent == output_dir and str(file).endswith(".epub"):
+                opened[Path(str(file)).name] += 1
+            original(self, file, *args, **kwargs)
+
+        monkeypatch.setattr(ZipFile, "__init__", counting)
+        holders._identifier_of.cache_clear()  # pylint: disable=protected-access
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
+
+        assert code == 0
+        assert sources == ["Book 0.epub"]
+        assert set(opened) == {"Book 0.epub"}

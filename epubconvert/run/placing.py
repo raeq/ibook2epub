@@ -11,8 +11,8 @@ marked name.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Collection, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -131,12 +131,46 @@ def _foreign_to(
     return foreign(clash.path, clash.identity, identity, identifier)
 
 
+def settled(
+    assigned: Sequence[Assignment], output_dir: Path, policy: NamingPolicy
+) -> list[Assignment]:
+    """
+    Rename each assignment to where :func:`place` puts it.
+
+    For what reads a book's name rather than its archive: a vault note is named
+    after the book's file on the shelf, and a file copied through is written
+    where the plan places it. A note named from the assignment followed a book
+    that had moved on to its marked name back to the plain one -- another
+    book's note.
+
+    :param assigned: Names, in the order the plan gives them.
+    :param output_dir: Directory holding exported files.
+    :param policy: The naming policy the names came from.
+
+    :return: Each assignment, renamed, or with no name and the reason.
+    """
+    shelf = read_shelf(output_dir, policy, assigned)
+    result = []
+    for item in assigned:
+        filename, _clash, reason = place(item, shelf)
+        if filename == item.filename:
+            result.append(item)
+        elif filename:
+            result.append(
+                replace(item, filename=filename, identity=policy.identity(filename))
+            )
+        else:
+            result.append(replace(item, filename="", reason=reason))
+    return result
+
+
 def placed(
     assigned: Sequence[Assignment],
     output_dir: Path,
     policy: NamingPolicy,
     *,
     writing: bool = False,
+    only: Collection[Path] | None = None,
 ) -> dict[Path, Path | None]:
     """
     Find the archive on the shelf that is each book's own.
@@ -157,6 +191,11 @@ def placed(
         as the plan trusts it for a book it reports exported; before a write
         the book's own identifier is read and compared, as it is before
         ``--refresh`` or ``--force`` writes.
+    :param only: The books the caller will write, when not all of them are:
+        only these pay for the comparison *writing* asks for. Every book is
+        still placed, because where one moves on depends on the books before
+        it; ``-ae -ar`` compared all 2,000 books of a shelf to rewrite the one
+        with a highlight, 8.7x slower than before the comparison.
 
     :return: Each package, and its own archive or None when it has none.
     """
@@ -168,6 +207,7 @@ def placed(
         if (
             clash is not None
             and unread
+            and (only is None or item.package in only)
             and holds_another_book(clash.path, _identifier_of(item.package))
         ):
             clash = None

@@ -19,6 +19,7 @@ import shlex
 import sys
 from collections.abc import Sequence
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -67,9 +68,18 @@ from .convert import (
     output_lock,
     sweep_partials,
 )
-from .copying import CopyPlan, copy_through_all, plan_copies
+from .copying import (
+    CopyPlan,
+    copy_through_all,
+    placed_copies,
+    plan_copies,
+    select_copies,
+)
+from .copynames import Names, claim_copies
+from .placing import settled
 from .planning import (
-    CollisionMode,
+    COLLISION,
+    Decision,
     PlanOptions,
     assign_names,
     find_orphans,
@@ -115,12 +125,13 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
 
 
 def _shared_names(
+    args: argparse.Namespace,
     discovered: Sequence[Path],
     policy: NamingPolicy,
-    on_collision: CollisionMode,
-) -> list[Assignment]:
+    copies: CopyPlan,
+) -> tuple[Names, CopyPlan]:
     """
-    Name every package in the library once, for every caller.
+    Name every package and every file copied through once, for every caller.
 
     Always the whole library, never the subset ``--match`` selected. Naming
     the subset gave a matched book a different name from the one a full run
@@ -133,13 +144,32 @@ def _shared_names(
     metadata policy, and planning and orphan detection each named their own
     set: on a real 2,805-book library, 5,610 reads for one listing.
 
+    The copies take their names in the same pass, after the packages
+    (:func:`~epubconvert.run.copynames.claim_copies`), and are placed on the
+    shelf as the plan places a book, so the copy writes where the plan and
+    the orphan check expect it.
+
+    :param args: Parsed command line arguments.
     :param discovered: Every package in the library.
     :param policy: The naming policy in force.
-    :param on_collision: The collision mode in force.
+    :param copies: The files to take along, with the names they want.
 
-    :return: The assignment of every package in the library.
+    :return: Every name, and the copy plan under the names it is written to.
     """
-    return assign_names(discovered, policy, on_collision)
+    names = claim_copies(
+        assign_names(discovered, policy, args.on_collision),
+        copies.named,
+        policy,
+        args.on_collision,
+        output_dir=args.output_dir,
+        unopened=copies.evicted,
+    )
+    if not names.copies:
+        return names, copies
+    placed = settled([*names.packages, *names.copies], args.output_dir, policy)[
+        len(names.packages) :
+    ]
+    return Names(names.packages, placed), placed_copies(copies, placed)
 
 
 def _plan_copies(args: argparse.Namespace, policy: NamingPolicy) -> CopyPlan:
@@ -181,12 +211,17 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     :return: A process exit code.
     """
     discovered = collect_package_dirs(args.source_dir)
-    copies = _plan_copies(args, policy)
     packages = filter_packages(discovered, args.match)
-    shared = _shared_names(discovered, policy, args.on_collision)
+    shared, copies = _shared_names(args, discovered, policy, _plan_copies(args, policy))
+    everything = [*shared.packages, *shared.copies]
     decisions = plan_exports(
-        packages, args.output_dir, policy, _plan_options(args), assigned=shared
+        packages, args.output_dir, policy, _plan_options(args), assigned=everything
     )
+    # The copies that lost their name, as the run reports them.
+    decisions += [
+        Decision(source, COLLISION, reason=reason)
+        for source, reason in select_copies(copies, args.match).lost
+    ]
     # Orphans come from the whole library, not this run's filtered subset:
     # --match narrows a run, not the shelf. Files copied through claim their
     # names too, or the shelf would report what this run just put there.
@@ -196,12 +231,11 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=copies.claimed,
-            assigned=shared,
+            assigned=everything,
         )
     )
     print(render_listing(decisions + orphans, args.as_json))
-    ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
+    ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     if ignored and not args.as_json:
         print(f"{ignored} ignored (not books)")
     return 0
@@ -344,19 +378,19 @@ def _survey(
         logger.warning("No matching *.epub packages found under %s", args.source_dir)
 
     copies = _plan_copies(args, policy)
-    report.ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
-    shared = _shared_names(discovered, policy, args.on_collision)
+    report.ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
+    shared, copies = _shared_names(args, discovered, policy, copies)
+    everything = [*shared.packages, *shared.copies]
     report.orphaned = len(
         find_orphans(
             args.output_dir,
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=copies.claimed,
-            assigned=shared,
+            assigned=everything,
         )
     )
-    return packages, copies, shared
+    return packages, copies, everything
 
 
 def _run_export(
@@ -422,6 +456,7 @@ def _run_export(
     # different libraries; planning outside the lock would let a concurrent
     # run move the output directory underneath the decisions.
     pending_before = 0
+    decisions: list[Decision] = []
     # The guard covers taking the lock and the sweep too. They were outside
     # it, and a Ctrl-C there escaped to main's last resort: 130, but no
     # summary, and nothing on stdout at all under -q.
@@ -435,14 +470,14 @@ def _run_export(
             # makes that run's closing replace fail.
             if locked and not args.dry_run:
                 sweep_partials(args.output_dir)
-            if not args.dry_run:
-                copy_through_all(
-                    copies,
-                    args.output_dir,
-                    report,
-                    max_workers=args.workers,
-                    min_free_mb=args.min_free,
-                )
+            copy_through_all(
+                select_copies(copies, args.match),
+                args.output_dir,
+                report,
+                max_workers=args.workers,
+                min_free_mb=args.min_free,
+                dry_run=args.dry_run,
+            )
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
             # a cloud shelf, and a Ctrl-C there produced a raw traceback with
@@ -483,7 +518,13 @@ def _run_export(
     return (
         report,
         max(0, pending_before - done),
-        _selected(assigned, packages),
+        # The files it copies too: a vault writes a note for each of them.
+        _selected(
+            assigned,
+            [*packages, *select_copies(copies, args.match).sources],
+            decisions,
+            policy,
+        ),
         copyable,
     )
 
@@ -505,25 +546,68 @@ def _copyable(args: argparse.Namespace, copies: CopyPlan) -> list[Path]:
     """
     if args.no_copy_through:
         return collect_copyable(args.source_dir)
-    return [source for source, _name in copies.named]
+    return copies.sources
 
 
 def _selected(
-    assigned: Sequence[Assignment], packages: Sequence[Path]
+    assigned: Sequence[Assignment],
+    packages: Sequence[Path],
+    decisions: Sequence[Decision],
+    policy: NamingPolicy,
 ) -> list[Assignment]:
     """
-    Keep the assignments of this run's own books.
+    Keep the assignments of this run's own books, as the plan left them.
 
     The assignment names the whole library, and ``--match`` narrows what the
     run touches: only the books it selected go on to the annotation step.
 
+    A book the plan found to be a collision has no name there either. Under a
+    policy that names from the folder the plan reads a book's identifier only
+    before it writes, so ``--force`` and ``--refresh`` could call a book a
+    collision whose name the annotation step then trusted: its highlights
+    reached no file, and the warning, finding a file of that name, said
+    nothing. A book the plan placed at another file, such as its marked name,
+    is renamed to it; see :func:`_as_decided`.
+
     :param assigned: The assignment of every package in the library.
     :param packages: The packages this run selected.
+    :param decisions: What the plan decided about them, where it got that far.
+    :param policy: The naming policy the names came from.
 
     :return: Their assignments, in the library's order.
     """
     chosen = set(packages)
-    return [entry for entry in assigned if entry.package in chosen]
+    decided = {decision.package: decision for decision in decisions}
+    return [
+        _as_decided(entry, decided.get(entry.package), policy)
+        for entry in assigned
+        if entry.package in chosen
+    ]
+
+
+def _as_decided(
+    entry: Assignment, decision: Decision | None, policy: NamingPolicy
+) -> Assignment:
+    """
+    Rename one book's assignment to the file the plan placed it at.
+
+    :param entry: Its assignment.
+    :param decision: What the plan decided about it, if it got that far.
+    :param policy: The naming policy the names came from.
+
+    :return: The assignment with no name for a collision, or the name of the
+        file the plan exports it to or found it at. A vault note shares that
+        file's stem: named from the assignment, an edition that moved on to
+        its marked name wrote its highlights into the other edition's note.
+    """
+    if decision is None:
+        return entry
+    if decision.status == COLLISION:
+        return replace(entry, filename="", reason=decision.reason)
+    if decision.target is not None and decision.target.name != entry.filename:
+        name = decision.target.name
+        return replace(entry, filename=name, identity=policy.identity(name))
+    return entry
 
 
 def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:

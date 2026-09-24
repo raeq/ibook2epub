@@ -197,8 +197,8 @@ Choosing books:
   Which books this run considers.
 
   -m, --max-export-files N
-                        Maximum number of epub files to export, default=5,
-                        0=no limit.
+                        Maximum number of packages to convert; 0=no limit,
+                        default=5. Files copied through are not counted.
   -s, --source-dir SOURCE_DIR
                         Path of the source directory containing *.epub/
                         packages. Defaults to whichever known iBooks location
@@ -441,6 +441,11 @@ ibook2epub --match hobbit -m 0      # The Hobbit.epub, Hobbit Notes.epub
 ibook2epub --match "The Lord*" -m 0 # anchored glob
 ```
 
+`--match` narrows the PDFs and already-zipped books copied through too, by the
+same rule, so converting one book does not download every copy in an iCloud
+library. `--max-export-files` does not: it caps the books converted, and a
+copy is not one, so every matching file is copied whatever `-m` says.
+
 ### Re-exporting
 
 A book already in the output directory is skipped. Pass `-f` / `--force` to
@@ -613,6 +618,14 @@ came out distinct, and two independent runs produced identical results.
 One thing the marker cannot fix: a book *entering* a collision gains its marker,
 which is a rename. That happens once, when the second copy shows up, instead of
 every time the group changes.
+
+A PDF or an already-zipped book that is copied rather than converted competes
+for its name too, after every package: a package `a/Book.epub/` and a zipped
+`b/Book.epub` want one file, and the package gets it. The copy is reported as a
+name collision, or under `--on-collision suffix` is copied as `Book (2).epub`;
+a copy has no digest marker, so it is always numbered. A copy already on the
+shelf before the package arrived keeps its file, and the package is reported as
+a collision rather than as exported from the other book's file.
 
 ### Taking your highlights with you
 

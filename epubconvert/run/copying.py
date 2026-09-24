@@ -18,8 +18,15 @@ from ..export.archive import copy_through
 from ..export.naming import filesystem_key
 from ..utils.app_logger import logger
 from ..utils.display import printable
-from ..utils.policy import NamingPolicy
-from .convert import _REPORT_LOCK, Report, _Progress, default_workers, progress_for
+from ..utils.policy import Assignment, NamingPolicy
+from .convert import (
+    _REPORT_LOCK,
+    Report,
+    _Progress,
+    default_workers,
+    matches_pattern,
+    progress_for,
+)
 from .planning import copy_name_opens_file, copy_target_name
 
 
@@ -47,6 +54,9 @@ def _copy_and_record(
     """
     for source, target in group:
         if target.exists():
+            # Settled before the copy: a file under the name it was given is
+            # its own copy (copynames.claim_copies), one holding another book
+            # having made it a collision, or moved it on.
             continue
         if not progress.has_room(target.parent, min_free_mb):
             # Not started, so not failed, as for a conversion the floor stops.
@@ -86,11 +96,17 @@ class CopyPlan:
     named: tuple[tuple[Path, str | None], ...] = ()
     #: Files ``--skip-incomplete`` leaves where they are.
     evicted: frozenset[Path] = frozenset()
+    #: Files that lost the name they wanted to another book, with why. Set by
+    #: :func:`placed_copies`; each is a collision, reported and counted.
+    lost: tuple[tuple[Path, str], ...] = ()
 
     @property
-    def claimed(self) -> list[str]:
-        """The names these files hold on the shelf, for the orphan check."""
-        return [name for _source, name in self.named if name is not None]
+    def sources(self) -> list[Path]:
+        """Every file this plan was made for, named, unnamed or not."""
+        return sorted(
+            [source for source, _name in self.named]
+            + [source for source, _reason in self.lost]
+        )
 
     @property
     def unnamed(self) -> int:
@@ -145,6 +161,59 @@ def plan_copies(
     return CopyPlan(tuple(zip(copyable, names, strict=True)), evicted)
 
 
+def placed_copies(plan: CopyPlan, copies: Sequence[Assignment]) -> CopyPlan:
+    """
+    Give each file the name the claim pass and the shelf left it.
+
+    :param plan: The files and the names they wanted, from :func:`plan_copies`.
+    :param copies: Their assignments, from
+        :func:`~epubconvert.run.copynames.claim_copies`, placed on the shelf
+        (:func:`~epubconvert.run.placing.settled`).
+
+    :return: The plan, each file under the name it is written to, or lost.
+    """
+    by_source = {item.package: item for item in copies}
+    named: list[tuple[Path, str | None]] = []
+    lost: list[tuple[Path, str]] = []
+    for source, name in plan.named:
+        item = by_source.get(source)
+        if item is None:
+            named.append((source, name))
+        elif item.filename:
+            named.append((source, item.filename))
+        else:
+            lost.append((source, item.reason or "another book claims this name"))
+    return CopyPlan(tuple(named), plan.evicted, tuple(lost))
+
+
+def select_copies(plan: CopyPlan, pattern: str | None) -> CopyPlan:
+    """
+    Narrow the copying to the files a ``--match`` pattern names.
+
+    ``--match hobbit -m 1`` converted one book and copied every PDF and zipped
+    book in the library, which on an iCloud library is a download of all of
+    them. Only the copying is narrowed: the names were claimed against the
+    whole library (:func:`~epubconvert.run.copynames.claim_copies`), so a
+    matched file is written under the name a full run gives it.
+
+    :param plan: The whole library's copies, under the names they are written
+        to.
+    :param pattern: The ``--match`` pattern, or None for every file.
+
+    :return: The plan for the matching files.
+    """
+    if pattern is None:
+        return plan
+    chosen = {
+        source for source in plan.sources if matches_pattern(source.name, pattern)
+    }
+    return CopyPlan(
+        tuple(entry for entry in plan.named if entry[0] in chosen),
+        plan.evicted & chosen,
+        tuple(entry for entry in plan.lost if entry[0] in chosen),
+    )
+
+
 def _group_copies(
     plan: CopyPlan, output_dir: Path, report: Report
 ) -> list[list[tuple[Path, Path]]]:
@@ -163,6 +232,15 @@ def _group_copies(
 
     :return: Sources and targets, grouped by the name a filesystem sees.
     """
+    # A copy that lost its name is a collision, as a package that lost one is,
+    # and named as one: it used to find the winner's file under its name,
+    # take it for its own and say nothing.
+    for source, reason in plan.lost:
+        logger.warning(
+            "Name collision, skipping: %s (%s)",
+            printable(source.name),
+            printable(reason),
+        )
     groups: dict[str, list[tuple[Path, Path]]] = {}
     not_downloaded: list[Path] = []
     for source, name in plan.named:
@@ -177,6 +255,7 @@ def _group_copies(
         )
     with _REPORT_LOCK:
         report.incomplete += len(not_downloaded)
+        report.collisions += len(plan.lost)
     return list(groups.values())
 
 
@@ -187,6 +266,7 @@ def copy_through_all(
     *,
     max_workers: int | None = None,
     min_free_mb: int = 0,
+    dry_run: bool = False,
 ) -> None:
     """
     Put already-valid books on the shelf without converting them.
@@ -200,11 +280,13 @@ def copy_through_all(
     run before the pool existed: a run with ``-w 64`` was seen pulling PDFs one
     at a time at about 4.5 MB/s while every worker sat idle (#10).
 
-    Files that could land on one name are copied by one worker, in sorted
-    order, so the first still wins and the rest find its file and skip -- what
-    the loop did. Which of two same-named PDFs reaches the shelf therefore does
-    not depend on which download finishes first. Names are compared the way
-    APFS compares them, since that is where they collide.
+    Two files wanting one name were copied by one worker, in sorted order, so
+    the first won and the rest found its file and skipped without a word. The
+    claim pass now settles that before the copy
+    (:func:`~epubconvert.run.copynames.claim_copies`): the first in sorted order
+    still wins, whichever download finishes first, and the rest are reported
+    as collisions or take a suffix. Grouping by the name APFS sees is kept as
+    the guard that no two workers write one file.
 
     :param plan: The files and the names they take, from :func:`plan_copies`.
     :param output_dir: Directory to copy into.
@@ -216,8 +298,17 @@ def copy_through_all(
     :param min_free_mb: The ``--min-free`` floor in MiB; 0 disables it.
         Measured before the pool starts, as the export measures, and then
         sampled as each file is copied.
+    :param dry_run: Copy nothing; count in ``report.copied`` the files that
+        would be copied, and report the rest as a real run does. A dry run
+        said nothing about copies at all, and the real run then said
+        "3 copied".
     """
     groups = _group_copies(plan, output_dir, report)
+    if dry_run:
+        report.copied += sum(
+            1 for group in groups for _source, target in group if not target.exists()
+        )
+        return
     if not groups:
         return
     progress = progress_for(

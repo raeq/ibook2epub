@@ -32,7 +32,9 @@ from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
 from .convert import OutputLockedError, output_lock, progress_for
-from .placing import placed
+from .copying import plan_copies
+from .copynames import claim_copies
+from .placing import placed, settled
 from .planning import assign_names
 
 
@@ -90,7 +92,8 @@ def annotations_after_export(
     :param args: Parsed command line arguments.
     :param policy: The naming policy, so a book's archive is found the way the
         plan finds it.
-    :param named: The names the export just used.
+    :param named: The names the export just used, the files it copied
+        through included, so a vault writes a note for each.
     :param found: The annotations this run read, or None.
     :param copyable: The library's already-zipped books and PDFs, the other
         half of telling a highlight's book apart; see
@@ -108,7 +111,10 @@ def annotations_after_export(
             args, found, args.annotations_detached, named, copyable=copyable
         )
     if args.annotations_embedded and not args.annotations_detached and found:
-        _warn_about_stranded(args, policy, found, named, copyable)
+        # A file copied through is copied as it is, with nothing embedded.
+        kept = set(copyable)
+        packages = [item for item in named if item.package not in kept]
+        _warn_about_stranded(args, policy, found, packages, copyable)
     return None if code == exits.SUCCESS else code
 
 
@@ -211,9 +217,57 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     # The copyable files are wanted for the same reason: only a vault matches
     # highlights to books, and a zipped book shares its name with a package.
     markdown = args.annotations_format == "markdown"
-    named = _named(args, policy) if markdown else []
     copyable = collect_copyable(args.source_dir) if markdown else []
+    named = (
+        _with_copies(args, policy, _named(args, policy), copyable, shelf=False)
+        if markdown
+        else []
+    )
     return write_export(args, found, args.annotations_only, named, copyable=copyable)
+
+
+def _with_copies(
+    args: argparse.Namespace,
+    policy: NamingPolicy,
+    assignments: Sequence[Assignment],
+    copyable: Sequence[Path],
+    *,
+    shelf: bool,
+) -> list[Assignment]:
+    """
+    Name the library's books without a package too, for a vault's notes.
+
+    A vault wrote notes for the packages alone, so the highlights of a book
+    that arrived already zipped, or as a PDF, reached no file, and the run
+    said "Wrote 1 note(s)" and exited 0. Each takes the name it is copied
+    through under, claimed after every package's
+    (:func:`~epubconvert.run.copynames.claim_copies`).
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+    :param assignments: Every package's name.
+    :param copyable: The library's already-zipped books and PDFs.
+    :param shelf: Whether to place each book on the shelf, so its note is
+        named after the file it is found at, as the conversion route names it.
+
+    :return: The packages' names, then the other books'.
+    """
+    copies = plan_copies(
+        copyable,
+        policy,
+        max_workers=args.workers,
+        skip_incomplete=args.skip_incomplete,
+    )
+    names = claim_copies(
+        assignments,
+        copies.named,
+        policy,
+        args.on_collision,
+        output_dir=args.output_dir if shelf else None,
+        unopened=copies.evicted,
+    )
+    everything = [*names.packages, *names.copies]
+    return settled(everything, args.output_dir, policy) if shelf else everything
 
 
 def apply_annotations(
@@ -290,8 +344,15 @@ def apply_annotations(
             return code
 
     if args.annotations_detached:
+        # Each note named after the file the book is placed at, as the
+        # conversion route names it: named from the assignment, an edition
+        # moved on to its marked name wrote into the other edition's note.
         written = write_export(
-            args, found, args.annotations_detached, assignments, copyable=copyable
+            args,
+            found,
+            args.annotations_detached,
+            _with_copies(args, policy, assignments, copyable, shelf=True),
+            copyable=copyable,
         )
         # A failed book outranks the destination's own error, the order a
         # conversion run uses too: see run._outcome.
@@ -387,8 +448,19 @@ def _embed_in_shelf(
     try:
         with output_lock(args.output_dir):
             # Read under the lock, and as before a write: a policy that names
-            # from the folder reads the book's own identifier to compare.
-            places = placed(assignments, args.output_dir, policy, writing=True)
+            # from the folder reads the book's own identifier to compare --
+            # only for the books with highlights, the ones rewritten.
+            places = placed(
+                assignments,
+                args.output_dir,
+                policy,
+                writing=True,
+                only={
+                    item.package
+                    for item in assignments
+                    if annotations_for_book(item.package.name, index)
+                },
+            )
             changed, failed, stopped = _refresh_each(args, assignments, index, places)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
