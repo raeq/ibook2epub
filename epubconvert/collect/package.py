@@ -137,18 +137,25 @@ def member_name(info: ZipInfo) -> str:
     name, and keeps the cp437 reading. ``ZipFile(metadata_encoding=)`` would
     say this once per archive, but it arrived in Python 3.11.
 
+    Read from ``orig_filename``, the directory's own name decoded, and never
+    ``filename``: Python 3.14 replaces that with the name a Unicode Path
+    extra field (0x7075) claims, flagged or not, where 3.10 ignores the
+    field, so one book's member had a different name on each. The name ends
+    at a NUL, as zipfile ends ``filename``.
+
     :param info: The member, as the archive's directory describes it.
 
     :return: Its name.
     """
+    name = info.orig_filename.partition("\0")[0]
     if info.flag_bits & _UTF8_NAME:
-        return info.filename
+        return name
     try:
         # zipfile decoded the name as cp437, which maps every byte, so this
         # recovers the bytes the archive holds.
-        return info.filename.encode("cp437").decode("utf-8")
+        return name.encode("cp437").decode("utf-8")
     except UnicodeError:
-        return info.filename
+        return name
 
 
 def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
