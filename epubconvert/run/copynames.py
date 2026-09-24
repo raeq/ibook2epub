@@ -15,9 +15,9 @@ from typing import NamedTuple
 
 from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package
+from ..export.archive import COPYABLE_SUFFIXES
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
-from ..utils.spec import PACKAGE_SUFFIX
 from .claims import Claims, claim_order, lost_to, shelf_names
 from .holders import identifier_on_shelf
 from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
@@ -83,11 +83,7 @@ def claim_copies(
     """
     claiming = _Claiming(
         _Naming(policy, on_collision, getattr(policy, "max_bytes", 0)),
-        existing={
-            filesystem_key(policy.identity(found.name)): found
-            for found in (output_dir.glob(f"*{PACKAGE_SUFFIX}") if output_dir else ())
-            if found.is_file()
-        },
+        existing=_on_shelf(output_dir, policy),
         unopened=unopened,
     )
     for item in assigned:
@@ -99,10 +95,17 @@ def claim_copies(
         ((source, name) for source, name in copies if name is not None),
         key=lambda entry: entry[0],
     )
-    # A copy whose name is on the shelf claims first, as a package does.
+    # A copy whose name is on the shelf claims first, as a package does, and
+    # before it one whose own bytes are that file: two PDFs of one name have
+    # no identifier to tell them apart, and the first in sorted order took the
+    # other's file for its own copy and was never copied.
+    order = sorted(
+        claim_order([name for _, name in wanting], shelf_names(output_dir)),
+        key=lambda index: not claiming.owns(*wanting[index], policy),
+    )
     claimed = {
         index: claiming.name(*wanting[index], policy.identity(wanting[index][1]))
-        for index in claim_order([name for _, name in wanting], shelf_names(output_dir))
+        for index in order
     }
     named = [claimed[index] for index in range(len(wanting))]
     wanted = {filesystem_key(policy.identity(name)) for _, name in copies if name}
@@ -121,6 +124,19 @@ class _Claiming:
     claims: Claims = field(default_factory=Claims)
     #: The name that took each filesystem key.
     holders: dict[str, str] = field(default_factory=dict)
+
+    def owns(self, source: Path, name: str, policy: NamingPolicy) -> bool:
+        """
+        Report whether the shelf's file under *name* can be *source*'s copy.
+
+        :param source: The file to copy.
+        :param name: The name it wants.
+        :param policy: The naming policy in force.
+
+        :return: True if a file is there and is *source*'s size.
+        """
+        found = self.existing.get(filesystem_key(policy.identity(name)))
+        return found is not None and _same_size(source, found)
 
     def name(self, source: Path, name: str, group: str) -> Assignment:
         """
@@ -194,6 +210,28 @@ class _Claiming:
     def _identifier(self, source: Path) -> str | None:
         """Read a file's identifier, unless opening it would download it."""
         return None if source in self.unopened else _copy_identifier(source)
+
+
+def _on_shelf(output_dir: Path | None, policy: NamingPolicy) -> dict[str, Path]:
+    """
+    Find every file on the shelf a copy could have been written to.
+
+    Everything :func:`~epubconvert.export.archive.collect_copyable` takes
+    along, whatever the case of its extension: the pass looked for ``*.epub``
+    alone, so a PDF on the shelf was invisible to it.
+
+    :param output_dir: Directory holding exported files, or None.
+    :param policy: The naming policy in force.
+
+    :return: The files, by filesystem key.
+    """
+    if output_dir is None or not output_dir.is_dir():
+        return {}
+    return {
+        filesystem_key(policy.identity(found.name)): found
+        for found in output_dir.iterdir()
+        if found.suffix.lower() in COPYABLE_SUFFIXES and found.is_file()
+    }
 
 
 def _identified(

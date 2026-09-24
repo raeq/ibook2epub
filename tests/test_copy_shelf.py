@@ -13,7 +13,10 @@ shelf.
 # restate them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 
+import json
 from pathlib import Path
+
+import pytest
 
 from epubconvert.collect import annotations
 from epubconvert.run import run
@@ -194,3 +197,57 @@ class TestNoCopyThroughStillSeesTheCopies:
         assert code == 0
         assert "BETA TEXT" in (vault / "Beta.md").read_text()
         assert "GAMMA TEXT" in (vault / "Gamma.md").read_text()
+
+
+class TestAPdfOnTheShelfIsWeighed:
+    """
+    The claim pass looked only for ``*.epub`` on the shelf, so a PDF of the
+    same name added earlier in sort order took the name, found the first
+    PDF's file there, took it for its own copy and was never copied; the one
+    on the shelf was reported as the collision, or under suffix copied again.
+    """
+
+    @staticmethod
+    def _papers(tmp_path: Path, output_dir: Path, name: str, mode: str) -> list[str]:
+        library = tmp_path / "lib"
+        (library / "a").mkdir(parents=True)
+        (library / "a" / name).write_bytes(b"%PDF-1.4 paper A")
+        argv = ["-s", str(library), "-o", str(output_dir), "--on-collision", mode]
+        run.main([*argv, "-m", "0", "-q"])
+        (library / "0").mkdir()
+        (library / "0" / name).write_bytes(b"%PDF-1.4 paper C, a longer one")
+        return argv
+
+    @pytest.mark.parametrize("name", ["Paper.pdf", "Scan.PDF"])
+    def test_suffix_mode_copies_the_newcomer_beside_it(
+        self, tmp_path, output_dir, capsys, name
+    ):
+        argv = self._papers(tmp_path, output_dir, name, "suffix")
+        stem, suffix = name.split(".")
+
+        run.main([*argv, "-m", "0", "-q"])
+        capsys.readouterr()
+        run.main([*argv, "-m", "0"])
+        again = capsys.readouterr()
+
+        shelved = {
+            path.name: path.read_bytes()
+            for path in output_dir.iterdir()
+            if path.suffix.lower() == ".pdf"
+        }
+        assert shelved == {
+            name: b"%PDF-1.4 paper A",
+            f"{stem} (2).{suffix}": b"%PDF-1.4 paper C, a longer one",
+        }
+        assert " copied" not in again.out
+
+    def test_skip_mode_reports_the_newcomer(self, tmp_path, output_dir, capsys):
+        argv = self._papers(tmp_path, output_dir, "Paper.pdf", "skip")
+        capsys.readouterr()
+
+        run.main([*argv, "--list", "--json"])
+        [row] = json.loads(capsys.readouterr().out)
+
+        assert row["status"] == "collision"
+        assert Path(row["source"]).parent.name == "0"
+        assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4 paper A"
