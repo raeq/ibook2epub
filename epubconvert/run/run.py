@@ -258,6 +258,50 @@ def _plan_options(args: argparse.Namespace) -> PlanOptions:
     )
 
 
+def _survey(
+    args: argparse.Namespace, policy: NamingPolicy, report: Report
+) -> tuple[list[Path], CopyPlan, list[Assignment]]:
+    """
+    Work out what the library holds and what the shelf already has.
+
+    Everything the export needs before it takes the lock: the packages, the
+    files to copy, the names, and the orphans on the shelf.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+    :param report: Counted into for the ignored and orphaned files.
+
+    :return: The packages this run converts, the files it copies, and the
+        names it gives the packages.
+    """
+    discovered = collect_package_dirs(args.source_dir)
+    packages = filter_packages(discovered, args.match)
+    if not packages:
+        logger.warning("No matching *.epub packages found under %s", args.source_dir)
+
+    copies = _plan_copies(args, policy)
+    report.ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
+    shared = _shared_names(packages, discovered, policy, args.on_collision)
+    # The names this run actually uses, computed once. plan_exports would
+    # otherwise work them out again from the same inputs.
+    assigned = (
+        shared
+        if shared is not None
+        else assign_names(packages, policy, args.on_collision)
+    )
+    report.orphaned = len(
+        find_orphans(
+            args.output_dir,
+            policy,
+            discovered,
+            args.on_collision,
+            claimed_extra=copies.claimed,
+            assigned=shared,
+        )
+    )
+    return packages, copies, assigned
+
+
 def _run_export(
     args: argparse.Namespace,
     policy: NamingPolicy,
@@ -282,35 +326,18 @@ def _run_export(
     :raises OutputLockedError: If another run holds the output lock, or the
         lock file could not be opened.
     """
-    discovered = collect_package_dirs(args.source_dir)
-    packages = filter_packages(discovered, args.match)
-    if not packages:
-        logger.warning("No matching *.epub packages found under %s", args.source_dir)
-
     # Held here rather than inside the exporter so the partial counts survive
     # a Ctrl-C.
     report = Report()
-    copies = _plan_copies(args, policy)
-    report.ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
-    shared = _shared_names(packages, discovered, policy, args.on_collision)
-    # The names this run actually uses, computed once. plan_exports would
-    # otherwise work them out again from the same inputs.
-    assigned = (
-        shared
-        if shared is not None
-        else assign_names(packages, policy, args.on_collision)
-    )
-    report.orphaned = len(
-        find_orphans(
-            args.output_dir,
-            policy,
-            discovered,
-            args.on_collision,
-            claimed_extra=copies.claimed,
-            assigned=shared,
-        )
-    )
-
+    try:
+        packages, copies, assigned = _survey(args, policy, report)
+    except KeyboardInterrupt:
+        # Guarded as the export is. Under a metadata policy this reads every
+        # package document, minutes on a cloud library, and a Ctrl-C here was
+        # a traceback with no summary and no 130.
+        report.interrupted = True
+        logger.warning("Interrupted before anything was written.")
+        return report, 0, []
     if args.force and args.max_export_files and len(packages) > args.max_export_files:
         logger.warning(
             "--force selected %d book(s) but -m limits this run to %d; "
@@ -478,6 +505,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     verbosity = 0 if args.quiet else 1 + args.verbose
     app_logger.configure(verbosity=verbosity, log_file=args.log_file)
 
+    try:
+        return _run(args)
+    except KeyboardInterrupt:
+        # The export stops cleanly and says what it finished. Everything else
+        # -- reading the highlights, --list, --verify, the -ar refresh -- has
+        # no report to finish, and a Ctrl-C there was a traceback and exit 1.
+        # Each writes by atomic replace, so nothing is left half-written.
+        logger.warning("Interrupted; rerun to continue.")
+        return exits.INTERRUPTED
+
+
+def _run(args: argparse.Namespace) -> int:
+    """
+    Do what the command line asked, once logging is set up.
+
+    :param args: Parsed command line arguments.
+
+    :return: A process exit code, as for :func:`main`.
+    """
     unusable = _check_environment(args)
     if unusable is not None:
         return unusable

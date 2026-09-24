@@ -28,7 +28,7 @@ from epubconvert.export.archive import (
     write_atomically,
     zip_package,
 )
-from epubconvert.run import convert, run
+from epubconvert.run import annotating, convert, run
 from tests.conftest import make_package, needs_permissions
 
 
@@ -360,6 +360,42 @@ class TestInterrupt:
 
         assert run.main(argv) == 0
         assert len(list(output_dir.glob("*.epub"))) == 2
+
+    @pytest.mark.parametrize("phase", ["find_orphans", "assign_names", "_plan_copies"])
+    def test_an_interrupt_before_the_lock_is_still_a_clean_stop(
+        self, library, output_dir, monkeypatch, capsys, phase
+    ):
+        # Naming and the orphan check run before the lock, and under a
+        # metadata policy they read every package document -- minutes on a
+        # cloud library. Only the work inside the lock was guarded, so a
+        # Ctrl-C here was a traceback with no summary and no 130.
+        def interrupted(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(run, phase, interrupted)
+        # Named per run rather than shared, so assign_names is reached.
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+
+        code = run.main(argv + (["--match", "Book"] if phase == "assign_names" else []))
+
+        assert code == 130
+        assert capsys.readouterr().out.startswith("Interrupted.")
+        assert list(output_dir.glob("*.epub")) == []
+
+    def test_an_interrupt_during_an_annotation_refresh_is_a_clean_stop(
+        self, library, output_dir, monkeypatch
+    ):
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        def interrupted(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(annotating, "collect_annotations", lambda **_kwargs: [])
+        monkeypatch.setattr(annotating, "annotations_for_book", interrupted)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
+
+        assert code == 130
 
 
 class TestDiskFloor:
