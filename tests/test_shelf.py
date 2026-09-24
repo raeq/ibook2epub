@@ -461,3 +461,29 @@ class TestAnArchiveOfABookInTheLibraryIsNotAnOrphan:
         )
 
         assert (lost.filename, lost.identifier) == ("", "urn:uuid:2")
+
+    def test_a_folder_named_book_that_lost_its_name_still_claims_its_archive(
+        self, tmp_path, output_dir, capsys
+    ):
+        # b/dune.epub was exported alone; a/Dune.epub sorts first and takes
+        # the one file a case-insensitive filesystem has for both. Folder
+        # names read no identifier, so only the name said whose it was, and
+        # the loser carries the name it wanted.
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "b", "dune.epub", title="Dune", identifier="urn:uuid:LOWER"
+        )
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:UPPER"
+        )
+        capsys.readouterr()
+
+        orphans = planning.find_orphans(
+            output_dir, PassthroughNaming(), archive.collect_package_dirs(library)
+        )
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "--json"])
+        listed = json.loads(capsys.readouterr().out)
+
+        assert orphans == []
+        assert "orphan" not in {row["status"] for row in listed}
