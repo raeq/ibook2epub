@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import glob
+import os
 import shlex
 import sys
 from collections.abc import Sequence
@@ -695,10 +696,45 @@ def _file_in_the_way(output_dir: Path) -> Path | None:
     :return: The nearest existing part of the path when it is not a directory,
         otherwise None.
     """
+    nearest = _nearest_existing(output_dir)
+    return None if nearest is None or nearest.is_dir() else nearest
+
+
+def _nearest_existing(output_dir: Path) -> Path | None:
+    """
+    Find the part of the output path that ``mkdir(parents=True)`` builds on.
+
+    :param output_dir: The output directory as given.
+
+    :return: The path itself if it exists, else its nearest existing parent.
+    """
     for candidate in (output_dir, *output_dir.parents):
         if candidate.exists():
-            return None if candidate.is_dir() else candidate
+            return candidate
     return None
+
+
+def _unwritable_shelf(args: argparse.Namespace) -> Path | None:
+    """
+    Find what stops this run creating or locking the shelf, when it writes one.
+
+    A dry run on a read-only volume exited 0, and the real run could neither
+    create the shelf nor open its lock file and exited 5: the rehearsal said
+    all was well for a run that could not start. Judged on the part of the
+    path that exists, as :func:`_file_in_the_way` judges it.
+
+    :param args: Parsed command line arguments.
+
+    :return: That directory when it cannot be written, otherwise None. Always
+        None for ``--list`` and ``--verify``, which only read the shelf, and
+        for the runs that never touch it.
+    """
+    if args.list_only or args.verify or args.annotations_only or args.library_export:
+        return None
+    nearest = _nearest_existing(args.output_dir)
+    if nearest is None or os.access(nearest, os.W_OK | os.X_OK):
+        return None
+    return nearest
 
 
 def _check_environment(args: argparse.Namespace) -> int | None:
@@ -748,6 +784,14 @@ def _check_environment(args: argparse.Namespace) -> int | None:
             "Output path is not a directory: %s (%s is a file)",
             args.output_dir,
             blocker,
+        )
+        return exits.NO_OUTPUT
+    unwritable = _unwritable_shelf(args)
+    if unwritable is not None:
+        logger.critical(
+            "Cannot create or lock output directory %s: %s is not writable",
+            args.output_dir,
+            unwritable,
         )
         return exits.NO_OUTPUT
 
