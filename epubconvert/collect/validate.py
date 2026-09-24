@@ -964,6 +964,7 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
     executable = shutil.which(EPUBCHECK)
     if executable is None:
         return ["epubcheck is not on PATH"]
+    name = printable(path.name)
 
     try:
         completed = subprocess.run(  # noqa: S603 - fixed executable, no shell
@@ -980,7 +981,7 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
         # --verify count a sound archive as damaged.
         logger.warning(
             "epubcheck could not check %s, so it was not checked: %s",
-            printable(path.name),
+            name,
             exc,
         )
         return []
@@ -992,6 +993,7 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
     # to stderr, which hid every diagnostic on stdout when only one was read.
     # FATAL is epubcheck's most severe level, and was dropped with the rest.
     output = f"{completed.stderr}\n{completed.stdout}".splitlines()
-    errors = [line.strip() for line in output if _EPUBCHECK_FAILURE.search(line)]
-    logger.debug("epubcheck exited %d for %s", completed.returncode, path.name)
+    failing = [line for line in output if _EPUBCHECK_FAILURE.search(line)]
+    errors = [printable(line.strip()) for line in failing]  # they name its members
+    logger.debug("epubcheck exited %d for %s", completed.returncode, name)
     return errors[:10] or [f"epubcheck failed with exit code {completed.returncode}"]
