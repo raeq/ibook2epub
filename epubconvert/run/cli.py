@@ -67,6 +67,37 @@ CONVERSION_ONLY = (
 #: output volume, and refusing --min-free there left it rebuilding onto a
 #: volume already below the floor with no way to say otherwise.
 REFRESH_WRITES = frozenset({"min_free"})
+#: What ``--verify`` never consults. It checks every archive in the output
+#: directory, running ``--epubcheck`` when asked (``--validate`` is what it
+#: always does, so that one is accepted as saying so). ``--match`` is refused
+#: rather than honoured: its help, and every other use of it, names books in
+#: the library to *convert*, and under a metadata naming policy an archive on
+#: the shelf is not called what its package is. ``--force`` re-exports, and
+#: this converts nothing.
+VERIFY_IGNORES = tuple(
+    (held, spelled)
+    for held, spelled in CONVERSION_ONLY
+    if held not in ("list_only", "verify", "epubcheck", "validate")
+) + (("force", "--force"),)
+
+#: What ``--list`` never consults. It renders the plan, so what shapes a
+#: book's status -- ``--match``, ``--force``, ``--refresh``,
+#: ``--skip-incomplete``, ``--no-copy-through`` -- is honoured, and
+#: ``--workers`` sizes the pool that names the files copied through. What
+#: only happens once a book is written, and the cap on how many are, is not:
+#: the listing shows every book whatever ``-m`` says.
+LIST_IGNORES = tuple(
+    (held, spelled)
+    for held, spelled in CONVERSION_ONLY
+    if held
+    in ("covers", "epubcheck", "validate", "max_export_files", "min_free", "no_shuffle")
+)
+
+#: How each report is described when it refuses a flag.
+REPORTS = {
+    "--list": "shows every book's status and converts nothing",
+    "--verify": "checks every archive in the output directory and converts nothing",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -637,7 +668,8 @@ def _check_reporting_flags(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
     """
-    Refuse a write beside ``--list`` or ``--verify``, which only read.
+    Refuse a write beside ``--list`` or ``--verify``, which only read, and any
+    flag the report never consults.
 
     :param parser: The parser, for reporting the refusal.
     :param args: The parsed arguments.
@@ -666,6 +698,14 @@ def _check_reporting_flags(
                 f"{report} only reads, so {spelled} would write nothing; run "
                 "the annotation export on its own"
             )
+    # Only annotation flags were refused here, so a conversion flag neither
+    # report consults went by without a word: "--verify --match X" verified,
+    # and exited 7 for, books outside X. Judged against the parser's
+    # defaults, as the convert-nothing modes judge them.
+    ignored = VERIFY_IGNORES if args.verify else LIST_IGNORES
+    for held, spelled in ignored:
+        if getattr(args, held) != parser.get_default(held):
+            parser.error(f"{report} {REPORTS[report]}, so {spelled} has nothing to do")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
