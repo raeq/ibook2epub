@@ -664,7 +664,10 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
             target, force=args.force, pending=() if vault is None else (vault,)
         )
     )
-    if refusal is not None and not args.dry_run:
+    if refusal is not None:
+        # In a dry run too, with the real run's exit code, as -ao refuses a
+        # file it cannot write: said only as a warning, the rehearsal exited
+        # 0 for a run that could not write.
         logger.critical("%s", refusal)
         return exits.NO_OUTPUT
     try:
@@ -680,10 +683,6 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
     else:
         logger.info("Read %d book(s) from the library.", len(found))
     if args.dry_run:
-        if refusal is not None:
-            # Said rather than exited on: the estimate is what a dry run is
-            # for, and a real run would stop here with exit code 5.
-            logger.warning("A real run would refuse to write: %s", refusal)
         logger.info("Dry run: %d book(s) read; nothing was written.", len(found))
         return exits.SUCCESS
 
