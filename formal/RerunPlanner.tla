@@ -60,7 +60,9 @@
  * suffix mode, its own name numbered, as a copy has. KeepNumbered is
  * claims.kept_numbers: in suffix mode a package keeps the numbered file of
  * its name that declares its identifier, which is read for this whatever
- * the policy, or the file of its marked name once its crowd has left it;
+ * the policy (unless --skip-incomplete leaves the book unopened, which is
+ * not modelled: then no numbered or marked file of its name is an orphan),
+ * or the file of its marked name once its crowd has left it;
  * with no usable identifier, the one numbered file when no other package
  * wants its name and nothing holds the plain name. One that kept a file a
  * copy keeps claims a name again (_Claiming.reclaim), and with ReclaimOwn so
@@ -175,7 +177,8 @@ Sorted(S) ==
 (* kept_numbers, in suffix mode with KeepNumbered: the numbered file of its
    name each package keeps, in sorted order, never one another kept or one
    under a name another package wants. Where it has a usable identifier,
-   read for this even where naming read none, the lowest-numbered file
+   read for this even where naming read none (a book --skip-incomplete
+   leaves unopened is not modelled), the lowest-numbered file
    declaring it, and, once its crowd has left it, one of its marked name
    declaring it; where it has none, the one numbered file, when no other
    package wants the name and nothing holds the plain name. "" for a

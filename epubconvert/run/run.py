@@ -162,6 +162,7 @@ def _shared_names(
             policy,
             args.on_collision,
             shelf=shelf_names(args.output_dir),
+            unopened=copies.unopened,
         ),
         copies.named,
         policy,

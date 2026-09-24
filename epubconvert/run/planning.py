@@ -24,7 +24,9 @@ from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
+    MARKED,
     MAX_SUFFIX,
+    NUMBERED,
     Claims,
     Wanting,
     claim_order,
@@ -201,6 +203,7 @@ def assign_names(
     on_collision: CollisionMode,
     *,
     shelf: Collection[str] = frozenset(),
+    unopened: Container[Path] = frozenset(),
 ) -> list[Assignment]:
     """
     Give every package an output name, resolving collisions deterministically.
@@ -240,10 +243,15 @@ def assign_names(
     :param shelf: The names of the files on the shelf, from
         :func:`~epubconvert.run.claims.shelf_names`. Every caller that names
         the library for a run passes the same shelf, so every route agrees.
+    :param unopened: The books not to open, because opening them downloads
+        them: under ``--skip-incomplete``, a package iCloud has evicted
+        (:class:`~epubconvert.run.holders.Unopened`).
 
     :return: One :class:`Assignment` per package, in sorted order.
     """
-    setup = _Naming(policy, on_collision, getattr(policy, "max_bytes", 0))
+    setup = _Naming(
+        policy, on_collision, getattr(policy, "max_bytes", 0), unopened=unopened
+    )
     wanted = _wanted_names(packages, policy)
     crowded = Counter(policy.identity(name) for _, name, _ in wanted)
     claims = Claims()
@@ -255,11 +263,8 @@ def assign_names(
         *kept,
         *(i for i in claim_order([b for b, _ in bases], shelf) if i not in kept),
     ]:
-        package, name, metadata = wanted[index]
         named[index] = _assign_one(
-            package,
-            name,
-            metadata,
+            *wanted[index],
             setup=setup,
             claims=claims,
             crowded=crowded,
@@ -309,6 +314,7 @@ def _kept_on_shelf(
         ],
         shelf,
         policy,
+        setup.unopened,
     )
 
 
@@ -320,6 +326,8 @@ class _Naming:
     on_collision: CollisionMode
     #: The policy's byte budget, or 0 for no clamping.
     budget: int
+    #: The books not to open, because opening them downloads them.
+    unopened: Container[Path] = frozenset()
 
 
 def _wanted_names(
@@ -552,10 +560,14 @@ def find_orphans(
     """
     if assigned is None:
         assigned = assign_names(
-            packages, policy, on_collision, shelf=shelf_names(output_dir)
+            packages,
+            policy,
+            on_collision,
+            shelf=shelf_names(output_dir),
+            unopened=unopened,
         )
     shelf = read_shelf(output_dir, policy, assigned, unopened=unopened)
-    claimed: set[str] = set()
+    claimed = _unopened_forms(assigned, frozenset(packages), shelf)
     for item in assigned:
         clash = place(item, shelf).clash
         if item.unverified and not copied:
@@ -572,6 +584,49 @@ def find_orphans(
         if (key := filesystem_key(policy.identity(found.name))) not in claimed
         and not (live and key in shelf.spoken and identifier_on_shelf(found) in live)
     )
+
+
+def _unopened_forms(
+    assigned: Sequence[Assignment], packages: Container[Path], shelf: Shelf
+) -> set[str]:
+    """
+    Find the numbered and marked files of the names of packages left unopened.
+
+    Under ``--skip-incomplete`` an evicted package's identifier is not read,
+    so nothing says which numbered or marked file of its name is its own
+    (:func:`~epubconvert.run.claims.kept_numbers`): it takes its plain name,
+    and its own archive under a number was listed as an orphan. Any of them
+    may be its own, as the file under the name a book lost may be
+    (:func:`_held_by_loser`), so none is listed.
+
+    :param assigned: Every book's name.
+    :param packages: The library's packages, of the books in *assigned*.
+    :param shelf: The archives already present; *shelf.unopened* says which
+        books are left unopened.
+
+    :return: The filesystem keys of those files.
+    """
+    forms: dict[str, list[str]] = {}
+    for key in shelf.existing:
+        plain = _plain(key)
+        if plain != key:
+            forms.setdefault(plain, []).append(key)
+    if not forms:
+        return set()
+    return {
+        key
+        for item in assigned
+        if item.package in packages
+        and (keys := forms.get(_plain(filesystem_key(item.identity))))
+        and item.package in shelf.unopened
+        for key in keys
+    }
+
+
+def _plain(key: str) -> str:
+    """A filesystem key less any digest marker and ``" (n)"``."""
+    found = MARKED.fullmatch(key) or NUMBERED.fullmatch(key)
+    return key if found is None else found["stem"] + (found["extension"] or "")
 
 
 def _held_by_loser(item: Assignment, shelf: Shelf) -> Existing | None:
@@ -657,17 +712,17 @@ def plan_exports(
     # one per element -- two workers writing the same target.
     packages = list(dict.fromkeys(packages))
 
+    unopened = Unopened(packages=settings.check_incomplete)
     if assigned is None:
         assigned = assign_names(
-            packages, policy, settings.on_collision, shelf=shelf_names(output_dir)
+            packages,
+            policy,
+            settings.on_collision,
+            shelf=shelf_names(output_dir),
+            unopened=unopened,
         )
     assignments = assigned
-    shelf = read_shelf(
-        output_dir,
-        policy,
-        assignments,
-        unopened=Unopened(packages=settings.check_incomplete),
-    )
+    shelf = read_shelf(output_dir, policy, assignments, unopened=unopened)
     # Neither is a failure, and both change what the shelf looks like. A run
     # that says nothing leaves the only way to notice as looking afterwards
     # and wondering.

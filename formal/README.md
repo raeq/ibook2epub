@@ -136,7 +136,9 @@ identifier, and a file under a name a package was given is that package's
 unless the identifiers say otherwise. `KeepNumbered` switches on
 `claims.kept_numbers`: in suffix mode a package keeps the numbered file of its
 name that declares its identifier, which is read for this whatever the
-policy, or the file of its marked name once its crowd has left it; with no
+policy (unless `--skip-incomplete` leaves an evicted book unopened, which the
+model does not describe; the orphan check then lists no numbered or marked
+file of its name), or the file of its marked name once its crowd has left it; with no
 usable identifier, the one numbered file when no other package wants the name
 and nothing holds the plain name. A copy that keeps that file sends the
 package back to claim a name (`_Claiming.reclaim`). `ReclaimOwn` widens that

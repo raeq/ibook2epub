@@ -11,14 +11,19 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Collection, Container, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 from ..collect.identifiers import usable_identifier
-from ..collect.source import is_evicted
 from ..export.archive import COPYABLE_SUFFIXES, PARTIAL_PREFIX
-from ..export.naming import encode_name, filesystem_key, split_extension, truncate_bytes
+from ..export.naming import (
+    DISAMBIGUATOR_CHARS,
+    encode_name,
+    filesystem_key,
+    split_extension,
+    truncate_bytes,
+)
 from .holders import identifier_on_shelf, source_identifier
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -32,6 +37,13 @@ MAX_SUFFIX = 99
 #: A name numbered by :func:`suffixed`, as a filesystem key: its stem, the
 #: number, and the extension.
 NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
+
+#: A name marked by planning._stable_base, numbered or not, as a filesystem
+#: key: its stem, the digest, and the extension.
+MARKED = re.compile(
+    rf"(?P<stem>.*) \[(?P<digest>[0-9a-f]{{{DISAMBIGUATOR_CHARS}}})\]"
+    r"(?: \(\d+\))?(?P<extension>\.[^.]*)?"
+)
 
 
 def suffixed(filename: str, position: int, max_bytes: int) -> str:
@@ -284,7 +296,10 @@ class Wanting(NamedTuple):
 
 
 def kept_numbers(
-    books: Sequence[Wanting], shelf: Collection[str], policy: NamingPolicy
+    books: Sequence[Wanting],
+    shelf: Collection[str],
+    policy: NamingPolicy,
+    unopened: Container[Path] = frozenset(),
 ) -> dict[int, str]:
     """
     Find the numbered file on the shelf each package in suffix mode keeps.
@@ -307,14 +322,19 @@ def kept_numbers(
 
     Identifiers are read only for a name with numbered files on the shelf,
     or a marked name with any: under a policy that names from the folder,
-    the book's own too, unless iCloud has evicted it. A rerun over a shelf
-    with neither reads nothing. A copy's own bytes are its own whatever an
+    the book's own too, unless the run leaves it unopened. A rerun over a
+    shelf with neither reads nothing. A copy's own bytes are its own whatever an
     identifier says, so a copy that keeps the file sends the package back to
     claim a name (copynames._Claiming.reclaim).
 
     :param books: Each package, in sorted order.
     :param shelf: The shelf's names, from :func:`shelf_names`.
     :param policy: The naming policy in force.
+    :param unopened: The books not to open for their identifier: under
+        ``--skip-incomplete``, a package iCloud has evicted
+        (:class:`~epubconvert.run.holders.Unopened`). Left unread whatever
+        the run was asked, an evicted book kept nothing, and without the
+        flag its only archive was listed as an orphan.
 
     :return: The file kept, by index into *books*.
     """
@@ -337,7 +357,7 @@ def kept_numbers(
         if directory is None or (all(n == 1 for n, _ in numbers) and not marked_forms):
             continue
         identifier = book.identifier
-        if identifier is None and book.unread and not is_evicted(book.unread):
+        if identifier is None and book.unread and book.unread not in unopened:
             identifier = source_identifier(book.unread)
         if identifier is not None:
             found = [

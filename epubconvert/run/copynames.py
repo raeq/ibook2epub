@@ -8,7 +8,6 @@ the files that are taken along rather than converted.
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass, field, replace
@@ -17,10 +16,11 @@ from typing import NamedTuple
 
 from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package
-from ..export.naming import DISAMBIGUATOR_CHARS, disambiguator, filesystem_key
+from ..export.naming import disambiguator, filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
+    MARKED,
     NUMBERED,
     Claims,
     claim_order,
@@ -30,13 +30,6 @@ from .claims import (
 )
 from .holders import identifier_on_shelf
 from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
-
-#: A name marked by planning._stable_base, numbered or not, as a filesystem
-#: key: its stem, the digest, and the extension.
-_MARKED = re.compile(
-    rf"(?P<stem>.*) \[(?P<digest>[0-9a-f]{{{DISAMBIGUATOR_CHARS}}})\]"
-    r"(?: \(\d+\))?(?P<extension>\.[^.]*)?"
-)
 
 
 class Names(NamedTuple):
@@ -174,7 +167,7 @@ class _Claiming:
                 plain = numbered["stem"] + (numbered["extension"] or "")
                 position = int(numbered["position"])
                 self.numbered.setdefault(plain, []).append((position, found))
-            if marked := _MARKED.fullmatch(key):
+            if marked := MARKED.fullmatch(key):
                 plain = marked["stem"] + (marked["extension"] or "")
                 self.marked.setdefault(plain, []).append((marked["digest"], found))
 
