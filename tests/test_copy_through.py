@@ -450,6 +450,38 @@ class TestAFailedCopyIsCounted:
         assert "2 remaining. 2 held back by --max-export-files" in summary
         assert "failed: see the errors above" not in summary
 
+    def test_a_failed_copy_is_not_blamed_on_a_book_the_floor_stopped(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Two failed copies were taken as two of the remaining books having
+        # failed, so of three books the floor stopped before they started the
+        # summary said one was not attempted and two "failed: see the errors
+        # above" -- errors that named only the PDFs.
+        library = tmp_path / "lib"
+        for index in range(3):
+            make_package(library, f"Book {index}.epub")
+        for name in ("A.pdf", "B.pdf"):
+            (library / name).write_bytes(b"%PDF-1.4\n")
+
+        def full(_source, _target):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(copying, "copy_through", full)
+        # Room for the copies' first measurement, none for the conversion's.
+        readings = iter([10_000])
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: next(readings, 1))
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "4"]
+            + ["--min-free", "100"]
+        )
+
+        summary = capsys.readouterr().out.strip().splitlines()[-1]
+        assert code == 1
+        assert "failed 2" in summary
+        assert "3 remaining. 3 not attempted: rerun to continue." in summary
+        assert "failed: see the errors above" not in summary
+
 
 class TestCopiesRunConcurrently:
     """

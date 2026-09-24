@@ -44,6 +44,8 @@ def write_export(
     found: list[dict[str, Any]],
     destination: str,
     named: Sequence[Assignment],
+    *,
+    copyable: Sequence[Path],
 ) -> int:
     """
     Write the detached export, in whichever shape this run asked for.
@@ -57,11 +59,14 @@ def write_export(
     :param found: Every annotation this run read.
     :param destination: The file or directory named on the command line.
     :param named: The names this run gave every book.
+    :param copyable: The library's files that are books without being
+        packages, for telling a highlight's book apart; see
+        :func:`~epubconvert.export.archive.index_by_package`.
 
     :return: A process exit code.
     """
     if args.annotations_format == "markdown":
-        return notes.write_vault(found, destination, named)
+        return notes.write_vault(found, destination, named, copyable=copyable)
     return _write_detached(found, destination)
 
 

@@ -639,7 +639,9 @@ class TestTheSidecarCannotTakeAnotherBooksName:
             return _annotation(id=text, text=text, book={"source": source})
 
         vault = tmp_path / "vault"
-        notes.write_vault([mine(f"{stem}.epub", "first")], str(vault), named)
+        notes.write_vault(
+            [mine(f"{stem}.epub", "first")], str(vault), named, copyable=()
+        )
         note = vault / f"{stem}.md"
         note.write_text(
             note.read_text(encoding="utf-8").replace("> first", "> mine"),
@@ -651,7 +653,7 @@ class TestTheSidecarCannotTakeAnotherBooksName:
             mine(f"{stem}.epub", "second"),
             mine("Short.epub", "short"),
         ]
-        code = notes.write_vault(found, str(vault), named)
+        code = notes.write_vault(found, str(vault), named, copyable=())
 
         sidecar = notes.sidecar_for(note)
         assert code == 0
@@ -774,7 +776,10 @@ class TestFailuresThatDoNotNeedAPermissionBit:
 
         monkeypatch.setattr(Path, "mkdir", refuse)
 
-        assert notes.write_vault(self._annotations(), str(tmp_path / "v"), []) != 0
+        assert (
+            notes.write_vault(self._annotations(), str(tmp_path / "v"), [], copyable=())
+            != 0
+        )
 
     def test_the_run_reports_a_failed_write(
         self,
@@ -798,7 +803,9 @@ class TestFailuresThatDoNotNeedAPermissionBit:
             )
         ]
 
-        code = notes.write_vault(self._annotations(), str(tmp_path / "v"), named)
+        code = notes.write_vault(
+            self._annotations(), str(tmp_path / "v"), named, copyable=()
+        )
 
         assert code != 0
         assert "could not be written" in capsys.readouterr().err

@@ -43,7 +43,9 @@ from .planning import COLLISION_MODES, SKIP, STATUSES
 #: where books go, a released version accepted it beside -ao, and it cannot
 #: change what an export contains -- refusing it would break a wrapper script
 #: to prevent no confusion about the file's contents. The exports name their
-#: own destination and say where they wrote it.
+#: own destination and say where they wrote it. --min-free is accepted by
+#: --annotations-refresh alone, which rebuilds every archive it refreshes on
+#: the shelf's own volume; see REFRESH_WRITES.
 CONVERSION_ONLY = (
     ("list_only", "--list"),
     ("verify", "--verify"),
@@ -59,6 +61,12 @@ CONVERSION_ONLY = (
     ("no_copy_through", "--no-copy-through"),
     ("no_shuffle", "--no-shuffle"),
 )
+
+#: The CONVERSION_ONLY flags --annotations-refresh still has a use for. It
+#: rebuilds each archive beside the original, a whole copy of the book on the
+#: output volume, and refusing --min-free there left it rebuilding onto a
+#: volume already below the floor with no way to say otherwise.
+REFRESH_WRITES = frozenset({"min_free"})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -616,6 +624,8 @@ def _check_convert_nothing_flags(
             "and standard output has nothing to replace."
         )
     for held, spelled in CONVERSION_ONLY:
+        if mode == "--annotations-refresh" and held in REFRESH_WRITES:
+            continue
         if getattr(args, held) != parser.get_default(held):
             parser.error(
                 f"{mode} reads Apple's container and converts nothing, so "

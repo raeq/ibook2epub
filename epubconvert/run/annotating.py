@@ -20,6 +20,8 @@ from ..collect.annotations import for_book as annotations_for_book
 from ..collect.coredata import ContainerUnavailableError
 from ..collect.validate import UNREADABLE_MEMBER, ArchiveInvalidError
 from ..export.archive import (
+    NoRoomError,
+    collect_copyable,
     collect_package_dirs,
     index_by_package,
     replace_annotations,
@@ -30,6 +32,7 @@ from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
 from .convert import OutputLockedError, output_lock, progress_for
+from .placing import placed
 from .planning import assign_names
 
 
@@ -69,6 +72,8 @@ def annotations_after_export(
     policy: NamingPolicy,
     named: Sequence[Assignment],
     found: list[dict[str, Any]] | None,
+    *,
+    copyable: Sequence[Path],
 ) -> int | None:
     """
     Finish the annotation work the conversion could not do itself.
@@ -83,29 +88,36 @@ def annotations_after_export(
     asking for it.
 
     :param args: Parsed command line arguments.
-    :param policy: The naming policy in force.
-    :param named: The names the export just used, so the refresh looks for the
-        archives the export actually wrote.
+    :param policy: The naming policy, so a book's archive is found the way the
+        plan finds it.
+    :param named: The names the export just used.
     :param found: The annotations this run read, or None.
+    :param copyable: The library's already-zipped books and PDFs, the other
+        half of telling a highlight's book apart; see
+        :func:`~epubconvert.export.archive.index_by_package`.
 
     :return: An exit code when something went wrong, None otherwise.
     """
     if args.dry_run:
         return None
+    # -ar never reaches here: it is its own route, apply_annotations, which
+    # converts nothing.
     code = exits.SUCCESS
-    if args.annotations_refresh and found is not None:
-        code = _embed_in_shelf(args, policy, found, True, named)
-    if code == exits.SUCCESS and args.annotations_detached and found is not None:
-        code = write_export(args, found, args.annotations_detached, named)
+    if args.annotations_detached and found is not None:
+        code = write_export(
+            args, found, args.annotations_detached, named, copyable=copyable
+        )
     if args.annotations_embedded and not args.annotations_detached and found:
-        _warn_about_stranded(args, found, named)
+        _warn_about_stranded(args, policy, found, named, copyable)
     return None if code == exits.SUCCESS else code
 
 
 def _warn_about_stranded(
     args: argparse.Namespace,
+    policy: NamingPolicy,
     found: list[dict[str, Any]],
     named: Sequence[Assignment],
+    copyable: Sequence[Path],
 ) -> None:
     """
     Say so when highlights had nowhere to go.
@@ -125,18 +137,24 @@ def _warn_about_stranded(
     file, so there is nothing to warn about.
 
     :param args: Parsed command line arguments.
+    :param policy: The naming policy the names came from.
     :param found: Every annotation this run read.
-    :param named: The names the export used, which is the only place that knows
-        what each book's archive would be called.
+    :param named: The names the export used.
+    :param copyable: The library's already-zipped books and PDFs.
     """
     # Quiet: the conversion before this read the same annotations against
     # the same library and has already said which it could not place.
-    index = index_by_package(found, [item.package for item in named], quiet=True)
+    index = index_by_package(
+        found, [item.package for item in named], copyable=copyable, quiet=True
+    )
+    # Found where the plan finds it, not by name: a file under the book's name
+    # may hold another book, and then these highlights went nowhere and the
+    # warning, seeing a file there, said nothing.
+    places = placed(named, args.output_dir, policy)
     stranded_books: list[str] = []
     stranded = 0
     for item in named:
-        target = args.output_dir / item.filename if item.filename else None
-        if target is not None and target.is_file():
+        if places.get(item.package) is not None:
             continue
         mine = annotations_for_book(item.package.name, index)
         if mine:
@@ -190,8 +208,12 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     # -ao reads Apple's container and nothing else, but a note's filename comes
     # from the naming policy, so the library still has to be named. Naming is
     # cheap under the default policy and only reached for markdown.
-    named = _named(args, policy) if args.annotations_format == "markdown" else []
-    return write_export(args, found, args.annotations_only, named)
+    # The copyable files are wanted for the same reason: only a vault matches
+    # highlights to books, and a zipped book shares its name with a package.
+    markdown = args.annotations_format == "markdown"
+    named = _named(args, policy) if markdown else []
+    copyable = collect_copyable(args.source_dir) if markdown else []
+    return write_export(args, found, args.annotations_only, named, copyable=copyable)
 
 
 def apply_annotations(
@@ -225,13 +247,6 @@ def apply_annotations(
 
     :return: A process exit code.
     """
-    # Guarded here rather than at the call sites. It was checked on the route
-    # through annotations_after_export and not on the -ar route, so
-    # "--dry-run -ae -ar" rewrote every archive on the shelf.
-    if args.dry_run:
-        logger.info("Dry run: annotations were read but nothing was written.")
-        return exits.SUCCESS
-
     try:
         found = gather_annotations(args, policy, required=not converted)
     except ContainerUnavailableError as exc:
@@ -246,19 +261,48 @@ def apply_annotations(
         # when it had been found and used.
         return exits.SUCCESS if converted else exits.NO_SOURCE
 
+    # Guarded here rather than at the call sites. It was checked on the route
+    # through annotations_after_export and not on the -ar route, so
+    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
+    # read rather than before it: returning first, the dry run said the
+    # annotations "were read" having read nothing, and exited 0 where the
+    # real run was refused the container and exited 8. -ao -d reads first.
+    if args.dry_run:
+        logger.info("Dry run: annotations were read but nothing was written.")
+        return exits.SUCCESS
+
     # Named once, here, and passed to everything that needs it. Under a
     # metadata policy naming re-parses every package document, and computing it
     # in two places is the 2x read this project has already fixed twice.
     assignments = list(named) if named is not None else _named(args, policy)
+    # Walked whether or not a conversion would copy them: a zipped book in the
+    # library shares its name with a package either way.
+    copyable = collect_copyable(args.source_dir)
 
+    code = exits.SUCCESS
     if args.annotations_embedded:
-        code = _embed_in_shelf(args, policy, found, converted, assignments)
-        if code != exits.SUCCESS:
+        code = _embed_in_shelf(
+            args,
+            policy,
+            found,
+            converted=converted,
+            assignments=assignments,
+            copyable=copyable,
+        )
+        # A book the refresh could not rebuild is that book's failure, and the
+        # detached file is somewhere else, so it is still written. Anything
+        # else -- no shelf, the lock held -- stops here as it always did.
+        if code not in (exits.SUCCESS, exits.FAILED):
             return code
 
     if args.annotations_detached:
-        return write_export(args, found, args.annotations_detached, assignments)
-    return exits.SUCCESS
+        written = write_export(
+            args, found, args.annotations_detached, assignments, copyable=copyable
+        )
+        # A failed book outranks the destination's own error, the order a
+        # conversion run uses too: see run._outcome.
+        return code if code != exits.SUCCESS else written
+    return code
 
 
 def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
@@ -279,17 +323,27 @@ def _embed_in_shelf(
     args: argparse.Namespace,
     policy: NamingPolicy,
     found: list[dict[str, Any]],
+    *,
     converted: bool,
-    named: Sequence[Assignment] | None,
+    assignments: Sequence[Assignment],
+    copyable: Sequence[Path],
 ) -> int:
     """
     Put each book's annotations inside the archive already on the shelf.
 
+    The archive is the one the plan would call the book's own, not the file
+    under its name: that file may hold another book -- the edition the name
+    was given to first, likely the last copy of one deleted from the library
+    -- and a refresh wrote this book's highlights into it, while the book
+    itself, moved on to its marked name, got none.
+
     :param args: Parsed command line arguments.
-    :param policy: The naming policy in force.
+    :param policy: The naming policy the names came from.
     :param found: Every annotation read from Apple.
     :param converted: Whether this run also converted books.
-    :param named: The names the export worked out, or None to work them out.
+    :param assignments: The names every package was given.
+    :param copyable: The library's already-zipped books and PDFs, which
+        answer to a package's name too.
 
     :return: A process exit code.
     """
@@ -300,15 +354,15 @@ def _embed_in_shelf(
         logger.critical("Output directory does not exist: %s", args.output_dir)
         return exits.NO_OUTPUT
 
-    assignments = list(named) if named is not None else _named(args, policy)
     # Quiet after a conversion, which embedded from the same index and has
     # already said which annotations it could not place.
     index = index_by_package(
-        found, [item.package for item in assignments], quiet=converted
+        found,
+        [item.package for item in assignments],
+        copyable=copyable,
+        quiet=converted,
     )
 
-    changed = 0
-    progress = progress_for(len(assignments), 1)
     # The same lock the export takes. These writes go into the output
     # directory and leave partials there, and a concurrent run's sweep cannot
     # tell one of those from an abandoned one. Refused on this route, the
@@ -316,40 +370,94 @@ def _embed_in_shelf(
     # traceback and exit 1.
     try:
         with output_lock(args.output_dir):
-            for item in assignments:
-                marker = progress.tick()
-                target = args.output_dir / item.filename if item.filename else None
-                if target is None or not target.is_file():
-                    continue
-                mine = annotations_for_book(item.package.name, index)
-                if not mine:
-                    continue
-                try:
-                    if replace_annotations(target, mine):
-                        changed += 1
-                        logger.info(
-                            "%s Refreshed %d annotation(s) in %s",
-                            marker,
-                            len(mine),
-                            printable(target.name),
-                        )
-                except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
-                    # BadZipFile is not an OSError, so one damaged archive used to
-                    # abort the whole refresh and every book after it went
-                    # untouched; nor is what a damaged compressed stream raises,
-                    # which did the same until #21. A damaged archive is an
-                    # expected state: --verify exists to find them.
-                    logger.error(
-                        "Could not refresh %s: %s", printable(target.name), exc
-                    )
+            # Read under the lock, and as before a write: a policy that names
+            # from the folder reads the book's own identifier to compare.
+            places = placed(assignments, args.output_dir, policy, writing=True)
+            changed, failed, stopped = _refresh_each(args, assignments, index, places)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
-    if converted:
-        logger.info("Refreshed annotations in %d book(s).", changed)
-    else:
-        logger.info("Refreshed annotations in %d book(s); converted nothing.", changed)
+
+    # Every book it could not refresh is a failure, and so is a refresh the
+    # floor stopped, as for a conversion. Both were logged and the run exited
+    # 0, so a scheduled refresh that hit ENOSPC on every book reported success.
+    parts = [f"Refreshed annotations in {changed} book(s)"]
+    if failed:
+        parts.append(f"could not refresh {failed}")
+    if stopped:
+        parts.append("stopped at the --min-free floor before the rest")
+    if not converted:
+        parts.append("converted nothing")
+    summary = "; ".join(parts) + "."
+    if failed or stopped:
+        logger.error("%s", summary)
+        return exits.FAILED
+    logger.info("%s", summary)
     return exits.SUCCESS
+
+
+def _refresh_each(
+    args: argparse.Namespace,
+    assignments: Sequence[Assignment],
+    index: dict[str, list[dict[str, Any]]],
+    places: dict[Path, Path | None],
+) -> tuple[int, int, bool]:
+    """
+    Rebuild every archive on the shelf whose annotations changed.
+
+    Each rebuild writes a whole copy of the book beside the original, so it
+    answers to ``--min-free`` as a conversion does, through the conversions'
+    own sticky sampler. It never did: a refresh went on rebuilding onto a
+    volume already below the floor, which is the SD card or Kindle the floor
+    exists for.
+
+    :param args: Parsed command line arguments.
+    :param assignments: The names every package was given.
+    :param index: The annotations, by book.
+    :param places: Each book's own archive on the shelf, or None.
+
+    :return: How many archives were rewritten, how many could not be, and
+        whether the floor stopped the refresh before the rest.
+    """
+    changed = failed = 0
+    # An interval of one: rebuilds run one at a time, so every one is
+    # measured, one statvfs per book that is actually rewritten.
+    progress = progress_for(len(assignments), 1)
+
+    def room() -> bool:
+        return progress.has_room(args.output_dir, args.min_free)
+
+    for item in assignments:
+        marker = progress.tick()
+        target = places.get(item.package)
+        if target is None:
+            continue
+        mine = annotations_for_book(item.package.name, index)
+        if not mine:
+            continue
+        try:
+            if replace_annotations(target, mine, room=room):
+                changed += 1
+                logger.info(
+                    "%s Refreshed %d annotation(s) in %s",
+                    marker,
+                    len(mine),
+                    printable(target.name),
+                )
+        except NoRoomError:
+            # Sticky, like the conversions' floor: the volume does not get
+            # emptier by asking again, so every book after this one stops too.
+            return changed, failed, True
+        except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
+            # BadZipFile is not an OSError, so one damaged archive used to
+            # abort the whole refresh and every book after it went untouched;
+            # nor is what a damaged compressed stream raises, which did the
+            # same until #21. A damaged archive is an expected state: --verify
+            # exists to find them. Counted as well as logged, so the run's
+            # exit code says a book was left behind.
+            failed += 1
+            logger.error("Could not refresh %s: %s", printable(target.name), exc)
+    return changed, failed, False
 
 
 def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:

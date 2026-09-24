@@ -131,7 +131,7 @@ class Report:
     exported: int = 0
     files_written: int = 0
     skipped: int = 0
-    failed: int = 0
+    failed: int = 0  # Books whose conversion failed; failed copies are apart.
     planned: int = 0  # Dry-run only: exports that would have been attempted.
     collisions: int = 0  # Distinct packages that share one output name.
     drm: int = 0  # Packages skipped as DRM-protected.
@@ -141,6 +141,10 @@ class Report:
     ignored: int = 0  # Things in the source that were not *.epub/ packages.
     orphaned: int = 0  # Archives on the shelf no book in the library claims.
     copied: int = 0  # Files taken along unchanged rather than converted.
+    #: Files whose copy failed. Kept out of ``failed`` because the summary's
+    #: advice about what remains is about books to convert, and a failed copy
+    #: counted there turned a book the floor stopped into one that "failed".
+    copies_failed: int = 0
     held_back: int = 0  # Pending books the export cap left for a later run.
 
 
@@ -744,9 +748,10 @@ def _remaining_hint(report: Report, remaining: int) -> str:
     advice is split by cause.
 
     The held-back count is taken first because it is exact: the cap counts it
-    where it is applied. ``report.failed`` also counts failed copies, which
-    are not among the books remaining, and taken first it turned a book the
-    cap held back into one that had failed.
+    where it is applied. Failed copies are not among the books remaining, so
+    they are counted apart in ``report.copies_failed``: counted in
+    ``report.failed`` they turned a book the cap held back, and then a book
+    the ``--min-free`` floor stopped, into one that had failed.
 
     :param report: The run's report.
     :param remaining: Pending books this run did not export.
@@ -792,7 +797,9 @@ def _clauses(report: Report, *, failures: bool) -> str:
         (report.orphaned, "{} orphaned"),
     ]
     if failures:
-        parts.append((report.failed, "failed {}"))
+        # One figure for both: a PDF that did not reach the shelf is as much
+        # a failure as a book that did not convert, and the exit code says so.
+        parts.append((report.failed + report.copies_failed, "failed {}"))
     return "".join(f", {phrase.format(count)}" for count, phrase in parts if count)
 
 
@@ -859,9 +866,10 @@ def exit_code(report: Report) -> int:
 
     :param report: The run's report.
 
-    :return: 130 if interrupted, 1 if anything failed or the run could not
-        proceed at all, otherwise 0.
+    :return: 130 if interrupted, 1 if a conversion or a copy failed or the run
+        could not proceed at all, otherwise 0.
     """
     if report.interrupted:
         return exits.INTERRUPTED
-    return exits.FAILED if report.failed or report.aborted else exits.SUCCESS
+    failed = report.failed or report.copies_failed
+    return exits.FAILED if failed or report.aborted else exits.SUCCESS

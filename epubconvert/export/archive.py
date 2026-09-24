@@ -15,7 +15,7 @@ import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
@@ -626,7 +626,11 @@ def _members(source_dir: Path) -> list[Path]:
 
 
 def index_by_package(
-    found: list[dict[str, Any]], packages: Sequence[Path], *, quiet: bool = False
+    found: list[dict[str, Any]],
+    packages: Sequence[Path],
+    *,
+    copyable: Sequence[Path],
+    quiet: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     """
     Index annotations by book, leaving out any whose book cannot be told apart.
@@ -640,26 +644,38 @@ def index_by_package(
     an index of their own and gave one highlight to both books. Every one of
     them builds it here now.
 
+    A book that arrived already zipped answers to a name too: ``b/Foo.epub``
+    the file and ``a/Foo.epub/`` the package are one key. Only package
+    directories were counted, so the zipped book's highlights were embedded in
+    the package's archive and written into its vault note. Every caller passes
+    the library's copyable files as well, whether or not this run copies them:
+    the file is in the library either way, and so are its highlights.
+
     :param found: Every annotation collected.
     :param packages: Every package the run knows about, which is the only
         place the paths are known.
+    :param copyable: Every file in the library that
+        :func:`collect_copyable` finds. Keyword-only and required, so a new
+        caller cannot leave the zipped books out by omission, which is how the
+        defect above was written.
     :param quiet: Leave the warning to a caller that has already given it.
 
     :return: What :func:`~epubconvert.collect.annotations.index_by_book`
-        builds, less every name more than one package answers to.
+        builds, less every name more than one book answers to.
     """
     index = index_by_book(found)
     seen: dict[str, Path] = {}
     ambiguous: set[str] = set()
-    for package in packages:
-        if seen.setdefault(package.name, package) != package:
-            ambiguous.add(package.name)
+    for book in (*packages, *copyable):
+        if seen.setdefault(book.name, book) != book:
+            ambiguous.add(book.name)
     for name in sorted(ambiguous & index.keys()):
         dropped = index.pop(name)
         if not quiet:
             logger.warning(
-                "Skipped %d annotation(s) for %s: more than one package directory "
-                "has that name, so which book they belong to cannot be told apart.",
+                "Skipped %d annotation(s) for %s: more than one package or "
+                "already-zipped book in the library has that name, so which "
+                "book they belong to cannot be told apart.",
                 len(dropped),
                 printable(name),
             )
@@ -691,8 +707,20 @@ def _same_annotations(
     return bool(stored == list(annotations))
 
 
+class NoRoomError(Exception):
+    """
+    Raised when a rebuild was due and the volume is below the floor.
+
+    Not an ``OSError``: a refresh treats those as one damaged book and goes on
+    to the next, and a full volume is the same answer for every book after it.
+    """
+
+
 def replace_annotations(
-    target_archive: Path, annotations: Sequence[dict[str, object]]
+    target_archive: Path,
+    annotations: Sequence[dict[str, object]],
+    *,
+    room: Callable[[], bool] | None = None,
 ) -> bool:
     """
     Swap the embedded annotation set of an archive already on the shelf.
@@ -708,8 +736,14 @@ def replace_annotations(
 
     :param target_archive: The archive to refresh.
     :param annotations: The annotations this book should now carry.
+    :param room: Asked once a rebuild is known to be due, just before the
+        copy is started beside the original. Asking earlier refused a refresh
+        that had nothing to write, and a shelf already up to date on a full
+        volume reported a failure.
 
     :return: True if the archive was rewritten, False if it already said this.
+
+    :raises NoRoomError: If *room* said there is no room for the copy.
     """
     # An empty set is not an instruction to delete. A package that arrived
     # carrying its own annotations lost them silently when this run happened
@@ -730,6 +764,8 @@ def replace_annotations(
             # 6.4 MB book, to decide against rewriting it.
             if _same_annotations(held, annotations):
                 return False
+            if room is not None and not room():
+                raise NoRoomError(target_archive.name)
 
             members = [
                 info for info in reading.infolist() if info.filename != EMBEDDED_PATH

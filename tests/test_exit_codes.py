@@ -21,9 +21,10 @@ import pytest
 from epubconvert.collect import annotations
 from epubconvert.collect import library as library_module
 from epubconvert.export import naming
-from epubconvert.run import convert, run
+from epubconvert.run import annotating, convert, run
 from epubconvert.utils import exits
 from tests.conftest import make_package, needs_permissions
+from tests.test_annotations import highlight, library_row, make_databases
 
 
 class TestTheCodesAreDistinct:
@@ -365,3 +366,132 @@ class TestTheDocumentedTableMatchesTheCode:
         code = run.main(["-s", str(source), "-o", str(output_dir), "--verify", "-q"])
 
         assert code == exits.SUCCESS
+
+
+@pytest.fixture(name="annotated")
+def _annotated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A library of two books, each with a highlight in Apple's container."""
+    library = tmp_path / "lib"
+    rows, books = [], []
+    for index, name in enumerate(("Old.epub", "Other.epub")):
+        package = make_package(library, name)
+        rows.append(highlight(uuid=f"U{index}", asset=f"A{index}"))
+        books.append(library_row(asset=f"A{index}", path=str(package)))
+    make_databases(tmp_path / "container", rows=rows, books=books)
+    monkeypatch.setattr(
+        annotating,
+        "collect_annotations",
+        lambda policy=None: annotations.collect(tmp_path / "container", policy),
+    )
+    return library
+
+
+def _interrupt(*_args, **_kwargs):
+    raise KeyboardInterrupt
+
+
+class TestAnInterruptedRunLeavesTheHighlightsAlone:
+    """
+    Ctrl-C stops the run. The annotation work after the export went on
+    regardless: it wrote a vault of notes after the reader had asked the run
+    to stop, and warned that highlights "reached no file" for books that were
+    simply never attempted.
+    """
+
+    def test_no_note_is_written_after_ctrl_c(
+        self, annotated, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(run, "export_planned", _interrupt)
+        vault = tmp_path / "vault"
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0"]
+
+        code = run.main([*argv, "-ad", str(vault), "--annotations-format", "markdown"])
+
+        assert code == exits.INTERRUPTED
+        assert not vault.exists()
+        assert "highlights were not written" in capsys.readouterr().err
+
+    def test_books_never_attempted_are_not_called_stranded(
+        self, annotated, output_dir, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(run, "export_planned", _interrupt)
+
+        run.main(["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-ae"])
+
+        assert "reached no file" not in capsys.readouterr().err
+
+
+class TestTheExitCodeAgreesWithTheSummary:
+    """
+    An annotation destination's error replaced the run's own code, so a run
+    stopped with Ctrl-C, or one whose book failed, exited 5 under a summary
+    that said "Interrupted" or "failed 1".
+    """
+
+    @pytest.fixture(name="unwritable")
+    def _unwritable(self, tmp_path: Path) -> Path:
+        # Not JSON, so the detached export will not merge into it.
+        destination = tmp_path / "highlights.json"
+        destination.write_text("not json", encoding="utf-8")
+        return destination
+
+    def test_the_destination_alone_gives_its_own_code(
+        self, annotated, output_dir, unwritable
+    ):
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-q"]
+
+        assert run.main([*argv, "-ad", str(unwritable)]) == exits.NO_OUTPUT
+
+    def test_an_interrupt_outranks_the_destination(
+        self, annotated, output_dir, unwritable, monkeypatch
+    ):
+        monkeypatch.setattr(run, "export_planned", _interrupt)
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-q"]
+
+        assert run.main([*argv, "-ad", str(unwritable)]) == exits.INTERRUPTED
+
+    def test_a_failed_book_outranks_the_destination(
+        self, annotated, output_dir, unwritable, monkeypatch, capsys
+    ):
+        def broken(*_args, **_kwargs):
+            raise OSError("disk error")
+
+        monkeypatch.setattr(convert, "zip_package", broken)
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0"]
+
+        code = run.main([*argv, "-ad", str(unwritable)])
+
+        assert code == exits.FAILED
+        assert "failed 2" in capsys.readouterr().out.strip().splitlines()[-1]
+
+
+class TestAnOutputPathUnderAFileIsRefusedEverywhere:
+    """
+    ``-o afile/books`` does not exist, so the check for a file where the shelf
+    should be passed it: a dry run and --list read an empty "shelf" and exited
+    0, and the real run failed at mkdir with 5.
+    """
+
+    @pytest.mark.parametrize("mode", [["-d"], ["--list"], []])
+    def test_every_mode_exits_as_the_real_run_does(self, tmp_path, mode, capsys):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        blocker = tmp_path / "afile"
+        blocker.write_text("x", encoding="utf-8")
+
+        code = run.main(["-s", str(library), "-o", str(blocker / "books"), *mode])
+
+        assert code == exits.NO_OUTPUT
+        assert "afile" in capsys.readouterr().err
+
+    def test_a_missing_directory_under_a_directory_is_still_made(
+        self, tmp_path, output_dir
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = output_dir / "new" / "shelf"
+
+        code = run.main(["-s", str(library), "-o", str(shelf), "-q"])
+
+        assert code == exits.SUCCESS
+        assert (shelf / "Book.epub").is_file()

@@ -63,7 +63,7 @@ def _copy_and_record(
             # Counted, not only logged: a copy that failed silently left the
             # run exiting 0 with a clean summary and the book not on the shelf.
             with _REPORT_LOCK:
-                report.failed += 1
+                report.copies_failed += 1
             logger.error("Could not copy %s: %s", printable(source.name), exc)
             continue
         with _REPORT_LOCK:

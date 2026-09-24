@@ -281,6 +281,16 @@ class TestHighlightsThatReachedNoFileAreReported:
         assert "reached no file" not in capsys.readouterr().err
 
 
+def _embedded(output_dir: Path) -> list[str]:
+    """The archives on the shelf that carry an embedded annotation set."""
+    carrying = []
+    for book in sorted(output_dir.glob("*.epub")):
+        with ZipFile(book) as opened:
+            if annotations.EMBEDDED_PATH in opened.namelist():
+                carrying.append(book.name)
+    return carrying
+
+
 class TestAHighlightTwoBooksCouldOwnGoesToNeither:
     """
     An annotation names its book by package directory name, not by path, so
@@ -306,22 +316,13 @@ class TestAHighlightTwoBooksCouldOwnGoesToNeither:
         )
         return library
 
-    @staticmethod
-    def _embedded(output_dir: Path) -> list[str]:
-        carrying = []
-        for book in sorted(output_dir.glob("*.epub")):
-            with ZipFile(book) as opened:
-                if annotations.EMBEDDED_PATH in opened.namelist():
-                    carrying.append(book.name)
-        return carrying
-
     def test_the_conversion_embeds_it_in_neither(self, twins, output_dir, capsys):
         argv = ["-s", str(twins), "-o", str(output_dir), "-m", "0", "-ae"]
 
         main([*argv, "--on-collision", "suffix"])
 
         assert len(list(output_dir.glob("*.epub"))) == 2
-        assert self._embedded(output_dir) == []
+        assert _embedded(output_dir) == []
         assert "more than one package" in capsys.readouterr().err
 
     def test_a_refresh_embeds_it_in_neither(self, twins, output_dir):
@@ -330,7 +331,7 @@ class TestAHighlightTwoBooksCouldOwnGoesToNeither:
 
         main([*argv, "-ae", "-ar", "-q"])
 
-        assert self._embedded(output_dir) == []
+        assert _embedded(output_dir) == []
 
     def test_a_vault_gives_it_to_neither(self, twins, tmp_path):
         vault = tmp_path / "vault"
@@ -349,3 +350,80 @@ class TestAHighlightTwoBooksCouldOwnGoesToNeither:
         warned = capsys.readouterr().err
         assert "reached no file" not in warned
         assert "more than one package" in warned
+
+
+class TestAZippedBookSharesItsNameWithAPackage:
+    """
+    An already-zipped ``b/Book.epub`` answers to the same name as a package
+    ``a/Book.epub/``, and a highlight names its book by that name alone. Only
+    package directories were counted when looking for a name two books share,
+    so the zipped book's highlight was embedded in the package's archive and
+    written into the package's vault note -- another book's words, on the
+    wrong book. Whether the file is copied through changes nothing: it is in
+    the library, and so are its highlights.
+    """
+
+    #: Named by their metadata, so the package and the zipped book land on
+    #: the shelf side by side and either could be handed the highlight.
+    NAMING = ["--name-by", "author-title"]
+
+    @pytest.fixture(name="zipped_twin")
+    def _zipped_twin(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "a", "Book.epub", title="Package", creator="P Writer"
+        )
+        other = make_metadata_package(
+            tmp_path / "staging", "Z.epub", title="Zipped", creator="Z Writer"
+        )
+        zipped = library / "b" / "Book.epub"
+        zipped.parent.mkdir(parents=True)
+        with ZipFile(zipped, "w") as opened:
+            for member in sorted(other.rglob("*")):
+                if member.is_file():
+                    opened.write(member, member.relative_to(other).as_posix())
+        theirs = {
+            "id": "Z1",
+            "book": {"title": "Book", "source": "Book.epub"},
+            "text": "a line from the zipped book",
+            "created": "2018-12-25T22:44:28Z",
+        }
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda **_kwargs: [theirs],
+        )
+        return library
+
+    @pytest.mark.parametrize("copy_through", [[], ["--no-copy-through"]])
+    def test_the_conversion_embeds_it_in_neither(
+        self, zipped_twin, tmp_path, copy_through, capsys
+    ):
+        shelf = tmp_path / "shelf"
+        argv = ["-s", str(zipped_twin), "-o", str(shelf), "-m", "0", "-ae"]
+
+        main([*argv, *self.NAMING, *copy_through])
+
+        assert len(list(shelf.glob("*.epub"))) == 2 - len(copy_through)
+        assert _embedded(shelf) == []
+        assert "more than one package" in capsys.readouterr().err
+
+    def test_a_refresh_embeds_it_in_neither(self, zipped_twin, tmp_path):
+        shelf = tmp_path / "shelf"
+        argv = ["-s", str(zipped_twin), "-o", str(shelf), *self.NAMING]
+        main([*argv, "-m", "0", "-q"])
+        assert len(list(shelf.glob("*.epub"))) == 2
+
+        main([*argv, "-ae", "-ar", "-q"])
+
+        assert _embedded(shelf) == []
+
+    @pytest.mark.parametrize("route", ["-ao", "-ad"])
+    def test_a_vault_gives_it_to_neither(self, zipped_twin, tmp_path, route):
+        vault = tmp_path / "vault"
+        argv = ["-s", str(zipped_twin), *self.NAMING, "-q"]
+        if route == "-ad":
+            argv += ["-o", str(tmp_path / "shelf"), "-m", "0"]
+
+        main([*argv, route, str(vault), "--annotations-format", "markdown"])
+
+        assert list(vault.glob("*.md")) == []

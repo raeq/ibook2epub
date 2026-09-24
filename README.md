@@ -641,6 +641,9 @@ ibook2epub -ao                            # to stdout, for piping
 almost nothing: the archive is built once, not built and then rebuilt. A book
 that was already on the shelf is not rewritten by a run that had nothing else
 to do with it, so bringing an older shelf up to date is what `-ar` is for.
+Each book it refreshes is rebuilt beside the original, so `-ar` stops at the
+`--min-free` floor as a conversion does, and exits `1` if the floor stopped it
+or a book could not be refreshed.
 
 `-ad` and `-ao` write to standard output when given no filename, so
 `ibook2epub -ao \| jq '.annotations[].text'` works. Everything else then goes to
@@ -997,6 +1000,12 @@ output volume is below `--min-free`. Nothing is counted as *failed* in that
 case, because nothing was attempted.
 
 A book that fails to convert is logged and the run continues with the rest.
+
+When more than one applies, a run exits with the first of these: `130` if it
+was stopped with Ctrl-C, `1` if a book failed or the run could not proceed,
+then the code for wherever the highlights were to go — `5` for a destination
+it could not write, for example. The summary line describes the books, so the
+code that leads is the one that agrees with it; the other reason is on stderr.
 
 Name collisions do **not** change the exit code. If you run this from a script
 or a cron job and need to know that books were skipped, check the summary line

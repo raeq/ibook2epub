@@ -294,7 +294,7 @@ def _run_export(
     args: argparse.Namespace,
     policy: NamingPolicy,
     found: list[dict[str, Any]] | None,
-) -> tuple[Report, int, list[Assignment]]:
+) -> tuple[Report, int, list[Assignment], list[Path]]:
     """
     Collect, select and export, under the output directory lock.
 
@@ -309,7 +309,8 @@ def _run_export(
         names it gave every book it converted. Annotations are applied against
         that same assignment afterwards: naming the library again disagreed
         with it under ``--match`` with a collision suffix, so the archive the
-        refresh looked for did not exist.
+        refresh looked for did not exist. And the library's copyable files,
+        which the annotation step needs for the same reason the embed does.
 
     :raises OutputLockedError: If another run holds the output lock, or the
         lock file could not be opened.
@@ -325,7 +326,7 @@ def _run_export(
         # a traceback with no summary and no 130.
         report.interrupted = True
         logger.warning("Interrupted before anything was written.")
-        return report, 0, []
+        return report, 0, [], []
     if args.force and args.max_export_files and len(packages) > args.max_export_files:
         logger.warning(
             "--force selected %d book(s) but -m limits this run to %d; "
@@ -334,13 +335,14 @@ def _run_export(
             args.max_export_files,
         )
 
+    copyable = _copyable(args, copies) if found is not None else []
     options = ExportOptions(
         covers=args.covers,
         min_free_mb=args.min_free,
         validation=ValidationOptions(enabled=args.validate, epubcheck=args.epubcheck),
         plan=_plan_options(args),
         annotations=(
-            index_by_package(found, packages)
+            index_by_package(found, packages, copyable=copyable)
             if found is not None and args.annotations_embedded and not args.dry_run
             else None
         ),
@@ -406,7 +408,32 @@ def _run_export(
     # off: counting only exports said "-m 0 -d" would leave every book it
     # had just listed.
     done = report.planned if args.dry_run else report.exported
-    return report, max(0, pending_before - done), _selected(assigned, packages)
+    return (
+        report,
+        max(0, pending_before - done),
+        _selected(assigned, packages),
+        copyable,
+    )
+
+
+def _copyable(args: argparse.Namespace, copies: CopyPlan) -> list[Path]:
+    """
+    Every file in the library that is a book without being a package.
+
+    Wanted for the annotations, which name a book only by its name: a zipped
+    ``b/Foo.epub`` and a package ``a/Foo.epub/`` are one key, and counting
+    only the packages gave the zipped book's highlights to the package.
+
+    :param args: Parsed command line arguments.
+    :param copies: The plan this run already made, which walked for them.
+
+    :return: The files, from the plan when it has them. Under
+        ``--no-copy-through`` it has none, but the zipped book is still in the
+        library and still owns its highlights, so the library is walked.
+    """
+    if args.no_copy_through:
+        return collect_copyable(args.source_dir)
+    return [source for source, _name in copies.named]
 
 
 def _selected(
@@ -453,6 +480,26 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
     return None
 
 
+def _file_in_the_way(output_dir: Path) -> Path | None:
+    """
+    Find a file that stands where the shelf, or a directory above it, must go.
+
+    Only the path itself used to be checked, and only if it existed, so
+    ``-o afile/books`` passed: a dry run and ``--list`` exited 0 and the real
+    run failed at ``mkdir`` with 5. The nearest part of the path that exists
+    is what ``mkdir(parents=True)`` will build on, so that is what is judged.
+
+    :param output_dir: The output directory as given.
+
+    :return: The nearest existing part of the path when it is not a directory,
+        otherwise None.
+    """
+    for candidate in (output_dir, *output_dir.parents):
+        if candidate.exists():
+            return None if candidate.is_dir() else candidate
+    return None
+
+
 def _check_environment(args: argparse.Namespace) -> int | None:
     """
     Check what the run needs from the machine, before it does anything.
@@ -494,8 +541,13 @@ def _check_environment(args: argparse.Namespace) -> int | None:
     # 0: the rehearsal said all was well for a run that could not start. The
     # runs that read only Apple's container never touch the shelf.
     uses_shelf = not (args.annotations_only or args.library_export)
-    if uses_shelf and args.output_dir.exists() and not args.output_dir.is_dir():
-        logger.critical("Output path is not a directory: %s", args.output_dir)
+    blocker = _file_in_the_way(args.output_dir) if uses_shelf else None
+    if blocker is not None:
+        logger.critical(
+            "Output path is not a directory: %s (%s is a file)",
+            args.output_dir,
+            blocker,
+        )
         return exits.NO_OUTPUT
 
     if args.epubcheck and not epubcheck_available():
@@ -533,6 +585,47 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Each writes by atomic replace, so nothing is left half-written.
         logger.warning("Interrupted; rerun to continue.")
         return exits.INTERRUPTED
+
+
+def _after_export(
+    args: argparse.Namespace,
+    policy: NamingPolicy,
+    report: Report,
+    *,
+    named: Sequence[Assignment],
+    found: list[dict[str, Any]] | None,
+    copyable: Sequence[Path],
+) -> int | None:
+    """
+    Do the annotation work the export leaves over, unless the run was stopped.
+
+    Ctrl-C asks the run to stop, and this went on regardless: it wrote a vault
+    of notes after the reader had asked for nothing more to be written, and
+    warned that highlights "reached no file" for books that were never
+    attempted, which says a book cannot be converted when it was only not
+    reached.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy the names came from.
+    :param report: The export's report, which says whether it was stopped.
+    :param named: The names the export used.
+    :param found: The annotations this run read, or None.
+    :param copyable: The library's already-zipped books and PDFs.
+
+    :return: What :func:`~epubconvert.run.annotating.annotations_after_export`
+        returns, or None when the run was stopped.
+    """
+    if not report.interrupted:
+        return annotations_after_export(args, policy, named, found, copyable=copyable)
+    # Said only when there was somewhere else for them to go. Under -ae alone
+    # every book converted before the Ctrl-C already carries its own.
+    elsewhere = args.annotations_detached or args.annotations_refresh
+    if found is not None and elsewhere and not args.dry_run:
+        logger.warning(
+            "Your highlights were not written: the run was interrupted first. "
+            "Rerun to write them."
+        )
+    return None
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -574,14 +667,16 @@ def _run(args: argparse.Namespace) -> int:
     found = gather_annotations(args, policy)
 
     try:
-        report, remaining, named = _run_export(args, policy, found)
+        report, remaining, named, copyable = _run_export(args, policy, found)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
 
     # After the books are on the shelf, so annotations reach them by the same
     # path --annotations-refresh uses. A dry run writes nothing, here included.
-    annotated = annotations_after_export(args, policy, named, found)
+    annotated = _after_export(
+        args, policy, report, named=named, found=found, copyable=copyable
+    )
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     # Standard output belongs to the document when one is going there; a
     # summary in the middle of it would make the JSON unparsable, which is the
@@ -590,6 +685,37 @@ def _run(args: argparse.Namespace) -> int:
     # Recorded in the log file only: the console already has it from the
     # print above, and logging it plainly printed every run's summary twice.
     app_logger.file_only(summary)
-    logger.debug("Run finished: %d exported, %d failed", report.exported, report.failed)
+    logger.debug(
+        "Run finished: %d exported, %d failed",
+        report.exported,
+        report.failed + report.copies_failed,
+    )
 
-    return annotated if annotated is not None else exit_code(report)
+    return _outcome(report, annotated)
+
+
+def _outcome(report: Report, annotated: int | None) -> int:
+    """
+    Choose the one exit code for a run that converted and then annotated.
+
+    The first of these that applies: 130 if the run was stopped with Ctrl-C;
+    1 if a book failed or the run could not proceed; the annotation step's
+    own code, such as 5 for a destination it could not write; otherwise 0.
+    The README's exit-code section states the same order.
+
+    The annotation code used to win outright, so a run stopped with Ctrl-C,
+    or one whose book had failed, exited 5 under a summary that said
+    "Interrupted" or "failed 1". The summary describes the books, and the
+    books are what the run is for, so their outcome comes first; the
+    annotation step has already logged its own reason on stderr.
+
+    :param report: The export's report.
+    :param annotated: The annotation step's exit code, or None when it had
+        nothing to report.
+
+    :return: A process exit code.
+    """
+    converted = exit_code(report)
+    if converted != exits.SUCCESS or annotated is None:
+        return converted
+    return annotated
