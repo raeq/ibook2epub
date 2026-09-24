@@ -12,6 +12,7 @@ them cost something.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import errno
+import io
 import logging
 import os
 import threading
@@ -205,6 +206,35 @@ class TestAMemberThatIsNotAFileIsNotOpened:
         raised = _within(5, fifo, lambda: contained.open_contained(fifo))
 
         assert isinstance(raised, OSError)
+
+    def test_a_container_swapped_for_a_fifo_after_the_check_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        package = make_package(tmp_path / "lib", "Swapped.epub")
+        fifo = tmp_path / "swapped"
+        os.mkfifo(fifo)
+        monkeypatch.setattr(
+            validate, "open_contained", lambda _path: contained.open_contained(fifo)
+        )
+
+        raised = _within(5, fifo, lambda: validate.read_package_dir(package))
+
+        assert isinstance(raised, validate.ValidationError)
+        assert "could not read" in str(raised)
+
+
+class TestAMemberThatGrowsWhileReadIsStillBounded:
+    def test_the_read_stops_at_the_bound(self, tmp_path, monkeypatch):
+        # The size is measured before the open, so a file that grows in
+        # between used to be read whole, however large it had become.
+        package = make_package(tmp_path / "lib", "Growing.epub")
+        monkeypatch.setattr(validate, "MAX_XML_BYTES", 64)
+        monkeypatch.setattr(
+            validate, "open_contained", lambda _path: io.BytesIO(b" " * 1000)
+        )
+
+        with pytest.raises(validate.ValidationError, match="grew while read"):
+            validate.read_package_dir(package)
 
 
 def _symlink_loop(parent: Path, name: str) -> Path:
