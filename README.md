@@ -932,7 +932,8 @@ what a current one would.
 A file at that path that the merge cannot account for in full is left exactly
 as it is, and the run stops with exit code `5` and names it: one that is not
 an export, an annotation with no id, two annotations sharing an id, or a
-top-level key the tool does not write. Merging any of those would drop
+key the tool does not write, at the top of the file, on an annotation or on
+an annotation's book. Merging any of those would drop
 something without a word, so move the file aside or fix it and rerun.
 
 [anno]: https://w3c.github.io/epub-specs/epub34/annotations/

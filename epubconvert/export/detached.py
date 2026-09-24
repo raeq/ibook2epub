@@ -199,8 +199,10 @@ def _unmergeable(document: dict[str, Any]) -> str | None:
     reader's own went with the old envelope. This file is the one place
     highlights deleted in Books are kept, so it is refused, as any other file
     that is not the document expected is, rather than rewritten less some of
-    what it held. The schema allows no other top-level key, so the reader's
-    are not carried through either.
+    what it held. The schema allows no other key -- at the top, on an entry
+    or on an entry's book -- so the reader's are not carried through either:
+    one on an entry or its book was dropped without a word while one at the
+    top was refused.
 
     :param document: The export read back, already known to be an object
         holding an ``annotations`` list.
@@ -218,11 +220,37 @@ def _unmergeable(document: dict[str, Any]) -> str | None:
         if key in seen:
             return f"two of its annotations share the id {key!r}"
         seen.add(key)
+        foreign = _foreign_key(entry)
+        if foreign is not None:
+            return f"its annotation {position} has {foreign}"
     return None
 
 
-#: The top-level keys the export's schema allows; it allows no others.
-ENVELOPE_KEYS = frozenset(schema.load(SCHEMA_PATH)["properties"])
+def _foreign_key(entry: dict[str, Any]) -> str | None:
+    """
+    Name a key on an entry, or on its book, that the schema does not allow.
+
+    :param entry: One annotation, already known to be an object.
+
+    :return: The key, as the end of a sentence, or None when there is none.
+    """
+    extra = sorted(set(entry) - ENTRY_KEYS)
+    if extra:
+        return f"a key this tool does not write ({extra[0]!r})"
+    book = entry.get("book")
+    extra = sorted(set(book) - BOOK_KEYS) if isinstance(book, dict) else []
+    if extra:
+        return f"a key on its book this tool does not write ({extra[0]!r})"
+    return None
+
+
+#: The keys the export's schema allows at each level: the envelope, an
+#: annotation and its book. Read from the schema, so a key added there is
+#: allowed here; it allows no others at any of them.
+_SCHEMA = schema.load(SCHEMA_PATH)
+ENVELOPE_KEYS = frozenset(_SCHEMA["properties"])
+ENTRY_KEYS = frozenset(_SCHEMA["$defs"]["annotation"]["properties"])
+BOOK_KEYS = frozenset(_SCHEMA["$defs"]["book"]["properties"])
 
 
 def _read_back(target: Path) -> str | None:
