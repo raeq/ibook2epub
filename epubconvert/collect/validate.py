@@ -21,6 +21,7 @@ from __future__ import annotations
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import zlib
 from dataclasses import dataclass
@@ -410,16 +411,27 @@ class _DirectoryMembers:  # pylint: disable=too-few-public-methods
         if path is None:
             raise ValidationError(f"{name} is not a readable file")
         try:
-            size = path.stat().st_size
+            info = path.stat()
         except OSError as exc:
             raise ValidationError(f"missing {name}") from exc
-        if size > MAX_XML_BYTES:
-            raise ValidationError(f"{name} is implausibly large ({size} bytes)")
+        # A FIFO here passed every check and stats at size 0; opening it then
+        # waited for a writer for ever. open_contained refuses one on the
+        # descriptor too, which is what holds if the name is swapped after
+        # this check.
+        if not stat.S_ISREG(info.st_mode):
+            raise ValidationError(f"could not read {name}: not a regular file")
+        if info.st_size > MAX_XML_BYTES:
+            raise ValidationError(f"{name} is implausibly large ({info.st_size} bytes)")
         try:
             with open_contained(path) as handle:
-                return handle.read()
+                # Bounded, because the size above was measured before the open
+                # and a file can grow in between.
+                data = handle.read(MAX_XML_BYTES + 1)
         except OSError as exc:
             raise ValidationError(f"could not read {name}: {exc}") from exc
+        if len(data) > MAX_XML_BYTES:
+            raise ValidationError(f"{name} is implausibly large (grew while read)")
+        return data
 
 
 def _element(members: _Members, name: str) -> ElementTree.Element:

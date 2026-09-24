@@ -13,6 +13,9 @@ them cost something.
 
 import errno
 import logging
+import os
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -22,6 +25,7 @@ from epubconvert.collect import source, validate
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import StripNaming
 from epubconvert.run import convert, run
+from epubconvert.utils import contained
 from epubconvert.utils.app_logger import logger
 from epubconvert.utils.display import printable
 from tests.conftest import make_package, needs_permissions
@@ -85,6 +89,62 @@ class TestUntrustedXmlIsBounded:
 
         with pytest.raises(validate.ValidationError, match="implausibly large"):
             validate.read_package_dir(package)
+
+
+def _within(seconds: float, fifo: Path, call: Callable[[], object]) -> object:
+    """
+    Run *call*, failing rather than hanging if it blocks on *fifo*.
+
+    Opening a FIFO for reading blocks until a writer appears. On a timeout the
+    FIFO is opened for writing and closed, which releases the stuck reader, so
+    a regression fails the test instead of freezing the suite.
+    """
+    outcome: list[object] = []
+
+    def run_it() -> None:
+        try:
+            outcome.append(call())
+        except (validate.ValidationError, OSError) as exc:
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run_it, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(seconds)
+        pytest.fail(f"blocked opening {fifo.name}")
+    return outcome[0]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="this platform has no FIFOs")
+class TestAMemberThatIsNotAFileIsNotOpened:
+    """
+    A FIFO passes every containment check: it is no link, it resolves inside
+    the package, and it stats at size 0. Opening one for reading then waits for
+    a writer that never comes, and the library export, the annotation export,
+    metadata naming and cover extraction all froze on it.
+    """
+
+    def test_a_fifo_for_a_container_is_refused_not_waited_on(self, tmp_path):
+        package = make_package(tmp_path / "lib", "Piped.epub")
+        container = package / "META-INF" / "container.xml"
+        container.unlink()
+        os.mkfifo(container)
+
+        raised = _within(5, container, lambda: validate.read_package_dir(package))
+
+        assert isinstance(raised, validate.ValidationError)
+
+    def test_the_rule_refuses_a_fifo_at_the_descriptor(self, tmp_path):
+        # The check-time test can be raced: a file swapped for a FIFO between
+        # the stat and the open. The open itself must not wait on one.
+        fifo = tmp_path / "member.xhtml"
+        os.mkfifo(fifo)
+
+        raised = _within(5, fifo, lambda: contained.open_contained(fifo))
+
+        assert isinstance(raised, OSError)
 
 
 class TestMimetypeIsNotReadWhole:
