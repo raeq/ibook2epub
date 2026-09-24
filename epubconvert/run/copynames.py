@@ -38,7 +38,7 @@ def claim_copies(
     policy: NamingPolicy,
     on_collision: CollisionMode,
     *,
-    output_dir: Path,
+    output_dir: Path | None,
     unopened: Collection[Path] = frozenset(),
 ) -> Names:
     """
@@ -73,7 +73,9 @@ def claim_copies(
         was left unnamed; see :class:`epubconvert.run.copying.CopyPlan`.
     :param policy: The naming policy in force.
     :param on_collision: How a collision is settled.
-    :param output_dir: Directory holding exported files.
+    :param output_dir: Directory holding exported files, or None to name the
+        files without looking at the shelf, as a run that reads only Apple's
+        container does.
     :param unopened: Files not to open, because opening them downloads them.
 
     :return: The packages' names, some with an identifier read, and the copies'.
@@ -82,7 +84,7 @@ def claim_copies(
         _Naming(policy, on_collision, getattr(policy, "max_bytes", 0)),
         existing={
             filesystem_key(policy.identity(found.name)): found
-            for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
+            for found in (output_dir.glob(f"*{PACKAGE_SUFFIX}") if output_dir else ())
             if found.is_file()
         },
         unopened=unopened,

@@ -21,6 +21,7 @@ from epubconvert.collect import annotations
 from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
+from tests.test_copy_claims import zipped_book
 
 PLAIN_NOTE = "Frank Herbert - Dune.md"
 
@@ -106,3 +107,80 @@ class TestANoteFollowsTheBooksArchive:
         notes = self._notes(vault)
         assert "EDITION B TEXT" not in notes[PLAIN_NOTE]
         assert "EDITION B TEXT" in notes[moved.stem + ".md"]
+
+
+class TestABookWithNoPackageGetsANote:
+    """
+    A vault wrote notes for the packages alone, so the highlights of a book
+    that arrived already zipped reached no file: "Wrote 1 note(s)", exit 0,
+    and nothing said.
+    """
+
+    @staticmethod
+    def _library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        library, container = tmp_path / "lib", tmp_path / "container"
+        _read_from(monkeypatch, container)
+        alpha = make_metadata_package(
+            library / "pkg", "Alpha.epub", title="Alpha", identifier="urn:uuid:A"
+        )
+        beta = zipped_book(tmp_path, library / "zipped" / "Beta.epub", "urn:uuid:B")
+        make_databases(
+            container,
+            rows=[
+                highlight(asset="A", uuid="UA", text="ALPHA TEXT"),
+                highlight(asset="B", uuid="UB1", text="BETA ONE"),
+                highlight(asset="B", uuid="UB2", text="BETA TWO"),
+            ],
+            books=[
+                library_row(asset="A", path=str(alpha), title="Alpha"),
+                library_row(asset="B", path=str(beta), title="Beta"),
+            ],
+        )
+        return library
+
+    @staticmethod
+    def _assert_both(vault: Path) -> None:
+        assert sorted(note.name for note in vault.glob("*.md")) == [
+            "Alpha.md",
+            "Beta.md",
+        ]
+        beta = (vault / "Beta.md").read_text()
+        assert "BETA ONE" in beta
+        assert "BETA TWO" in beta
+
+    def test_after_a_conversion(self, tmp_path, monkeypatch):
+        library = self._library(tmp_path, monkeypatch)
+        vault = tmp_path / "vault"
+
+        code = main(
+            ["-s", str(library), "-o", str(tmp_path / "out"), "-m", "0", "-q"]
+            + ["-ad", str(vault), "--annotations-format", "markdown"]
+        )
+
+        assert code == 0
+        self._assert_both(vault)
+
+    def test_after_a_refresh(self, tmp_path, monkeypatch):
+        library = self._library(tmp_path, monkeypatch)
+        output, vault = tmp_path / "out", tmp_path / "vault"
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-q"])
+
+        code = main(
+            ["-s", str(library), "-o", str(output), "-ae", "-ar", "-q"]
+            + ["-ad", str(vault), "--annotations-format", "markdown"]
+        )
+
+        assert code == 0
+        self._assert_both(vault)
+
+    def test_with_nothing_converted(self, tmp_path, monkeypatch):
+        library = self._library(tmp_path, monkeypatch)
+        vault = tmp_path / "vault"
+
+        code = main(
+            ["-s", str(library), "-ao", str(vault), "--annotations-format", "markdown"]
+            + ["-q"]
+        )
+
+        assert code == 0
+        self._assert_both(vault)

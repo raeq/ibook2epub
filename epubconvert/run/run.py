@@ -518,7 +518,13 @@ def _run_export(
     return (
         report,
         max(0, pending_before - done),
-        _selected(assigned, packages, decisions, policy),
+        # The files it copies too: a vault writes a note for each of them.
+        _selected(
+            assigned,
+            [*packages, *select_copies(copies, args.match).sources],
+            decisions,
+            policy,
+        ),
         copyable,
     )
 
