@@ -41,7 +41,9 @@ class TestEpubcheck:
         # Was a usage error, indistinguishable from a typo'd flag. Whether the
         # tool is installed is a fact about the machine, not about the command
         # line, so it is checked in run.main and carries its own code.
-        monkeypatch.setattr("epubconvert.run.run.epubcheck_available", lambda: False)
+        monkeypatch.setattr(
+            "epubconvert.run.preflight.epubcheck_available", lambda: False
+        )
 
         code = run.main(
             ["-s", str(library), "-o", str(tmp_path / "out"), "--epubcheck", "-q"]

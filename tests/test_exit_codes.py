@@ -24,7 +24,7 @@ from epubconvert.collect import annotations
 from epubconvert.collect import library as library_module
 from epubconvert.collect.coredata import ContainerPermissionError
 from epubconvert.export import archive, naming
-from epubconvert.run import annotating, convert, run
+from epubconvert.run import annotating, convert, repair, run
 from epubconvert.utils import exits
 from tests.conftest import make_package, needs_permissions
 from tests.test_annotations import highlight, library_row, make_databases
@@ -95,7 +95,9 @@ class TestEachFailureHasItsOwnCode:
         assert code == exits.MISSING_TOOL
 
     def test_a_missing_external_tool_has_its_own_code(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("epubconvert.run.run.epubcheck_available", lambda: False)
+        monkeypatch.setattr(
+            "epubconvert.run.preflight.epubcheck_available", lambda: False
+        )
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
 
@@ -774,12 +776,15 @@ class TestAnInterruptedRefreshSaysWhatItDid:
 
     @pytest.mark.parametrize(
         ("mode", "phase"),
-        [("--list", "render_listing"), ("--verify", "verify_output")],
+        [
+            ("--list", (run, "render_listing")),
+            ("--verify", (repair, "verify_output")),
+        ],
     )
     def test_a_report_ends_with_130(self, tmp_path, monkeypatch, capsys, mode, phase):
         make_package(tmp_path / "lib", "Book.epub")
         (tmp_path / "out").mkdir()
-        monkeypatch.setattr(run, phase, _interrupt)
+        monkeypatch.setattr(*phase, _interrupt)
 
         code = run.main(
             ["-s", str(tmp_path / "lib"), "-o", str(tmp_path / "out"), mode]

@@ -56,6 +56,9 @@ except ImportError:  # pragma: no cover - Windows has no fcntl
 
 LOCK_NAME = ".ibook2epub.lock"
 
+#: What a lock file that is a link, or not a regular file, is said to be.
+NOT_PLAIN = "is not a plain file"
+
 #: How long a temporary must have gone unmodified before a sweep takes it for
 #: abandoned. Holding the lock does not make this run the only writer: a run
 #: that was refused locking with an errno outside _CONTENDED carries on
@@ -585,12 +588,6 @@ def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
     file between the two calls and this one truncated the holder details it
     was about to report.
 
-    Opened by name, it was followed: a symlink planted at the lock's name had
-    its target truncated for the holder's pid, a dangling one created a file
-    wherever it pointed, and a hard link truncated its other name. The rule is
-    :func:`~epubconvert.utils.contained.open_contained`'s -- ``O_NOFOLLOW`` at
-    open, then the descriptor judged: a regular file with one name.
-
     :param path: The lock file.
     :param output_dir: The directory it locks, for the message.
 
@@ -599,33 +596,81 @@ def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
     :raises OutputLockedError: If it cannot be opened, or is not a plain file.
         Nothing has been written to it either way.
     """
-    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
     shown = printable(str(output_dir))
-    not_plain = f"cannot lock {shown}: its lock file is not a plain file"
     try:
-        descriptor = os.open(path, flags, 0o644)
+        descriptor = _open_plain_lock(path, create=True)
+    except _NotPlainFileError as exc:
+        raise OutputLockedError(
+            f"cannot lock {shown}: its lock file {NOT_PLAIN}", contended=False
+        ) from exc
     except OSError as exc:
-        # ELOOP is O_NOFOLLOW refusing a symlink. Anything else -- a read-only
-        # output directory got past main's mkdir(exist_ok=True) and died here
-        # with a raw traceback -- is an unopenable lock file. main turns either
-        # into a clean exit 5.
-        message = (
-            not_plain
-            if exc.errno == errno.ELOOP
-            else f"cannot lock {shown}: {printable(str(exc))}"
-        )
-        raise OutputLockedError(message, contended=False) from exc
-    try:
-        info = os.fstat(descriptor)
-    except OSError as exc:  # pragma: no cover - fstat on an open descriptor
-        os.close(descriptor)
+        # A read-only output directory got past main's mkdir(exist_ok=True)
+        # and died here with a raw traceback. main makes either a clean 5.
         raise OutputLockedError(
             f"cannot lock {shown}: {printable(str(exc))}", contended=False
         ) from exc
+    return os.fdopen(descriptor, "rb+", buffering=0)
+
+
+def lock_file_refusal(path: Path) -> str | None:
+    """
+    Judge an existing lock file as :func:`output_lock` will open it.
+
+    By opening it as the run does: the pre-flight check restated the rule,
+    once in full and once as a mode, and a restated rule drifts from the run.
+
+    :param path: The lock file, known to exist.
+
+    :return: None when the run could open it, otherwise why not, worded to
+        follow the file's name: :data:`NOT_PLAIN`, or "is not writable".
+    """
+    try:
+        os.close(_open_plain_lock(path, create=False))
+    except _NotPlainFileError:
+        return NOT_PLAIN
+    except OSError:
+        return "is not writable"
+    return None
+
+
+class _NotPlainFileError(OSError):
+    """A lock file that is a link, or not a regular file."""
+
+
+def _open_plain_lock(path: Path, *, create: bool) -> int:
+    """
+    Open a lock file by the one rule every route judges it by.
+
+    Opened by name, it was followed: a symlink planted at the lock's name had
+    its target truncated for the holder's pid, a dangling one created a file
+    wherever it pointed, and a hard link truncated its other name. The rule is
+    :func:`~epubconvert.utils.contained.open_contained`'s -- ``O_NOFOLLOW`` at
+    open, then the descriptor judged: a regular file with one name.
+
+    :param path: The lock file.
+    :param create: Whether to create it when it is absent.
+
+    :return: A descriptor open for reading and writing.
+
+    :raises _NotPlainFileError: If it is not a plain file.
+    :raises OSError: If it cannot be opened.
+    """
+    flags = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | (os.O_CREAT if create else 0)
+    try:
+        descriptor = os.open(path, flags, 0o644)
+    except OSError as exc:
+        if exc.errno != errno.ELOOP:  # O_NOFOLLOW refusing a symlink
+            raise
+        raise _NotPlainFileError(exc.errno, NOT_PLAIN, str(path)) from exc
+    try:
+        info = os.fstat(descriptor)
+    except OSError:  # pragma: no cover - fstat on an open descriptor
+        os.close(descriptor)
+        raise
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         os.close(descriptor)
-        raise OutputLockedError(not_plain, contended=False)
-    return os.fdopen(descriptor, "rb+", buffering=0)
+        raise _NotPlainFileError(errno.EINVAL, NOT_PLAIN, str(path))
+    return descriptor
 
 
 def _record_holder(handle: BinaryIO, path: Path) -> None:

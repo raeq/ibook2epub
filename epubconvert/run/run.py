@@ -3,8 +3,10 @@ Driving one run from the command line.
 
 Everything between parsing arguments and returning an exit code: what a run
 announces before it starts, the read-only ``--list`` and ``--verify`` branches,
-and the export itself under the output directory lock. Where the reader's
-annotations go is :mod:`epubconvert.run.annotating`'s concern.
+and the export itself under the output directory lock. What the run needs from
+the machine is judged by :mod:`epubconvert.run.preflight`, ``--verify`` and its
+advice are :mod:`epubconvert.run.repair`'s, and where the reader's annotations
+go is :mod:`epubconvert.run.annotating`'s concern.
 
 Held apart from :mod:`epubconvert.run.convert` so the exporter can be used as a
 library without argparse in the call chain.
@@ -14,19 +16,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import glob
-import os
-import shlex
-import stat
 import sys
-import unicodedata
 from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 from ..collect.annotations import STDOUT
-from ..collect.validate import ValidationOptions, epubcheck_available
+from ..collect.validate import ValidationOptions
 from ..export.archive import (
     collect_copyable,
     collect_package_dirs,
@@ -34,7 +31,6 @@ from ..export.archive import (
     index_by_package,
 )
 from ..export.detached import vault_of
-from ..export.inspect_output import verify_output
 from ..export.naming import (
     PortableNamesUnavailableError,
     PortableNaming,
@@ -43,7 +39,6 @@ from ..export.naming import (
 )
 from ..utils import app_logger, exits
 from ..utils.app_logger import logger
-from ..utils.defaults import SOURCE_CANDIDATES
 from ..utils.display import emit, printable
 from ..utils.policy import Assignment, NamingPolicy
 from .afterwards import after_export, outcome, pending_packages, selected_names
@@ -55,7 +50,6 @@ from .annotating import (
 from .claims import shelf_names
 from .cli import parse_args
 from .convert import (
-    LOCK_NAME,
     ExportOptions,
     OutputLockedError,
     Report,
@@ -64,7 +58,6 @@ from .convert import (
     export_planned,
     filter_packages,
     format_summary,
-    matches_pattern,
     output_lock,
     sweep_partials,
 )
@@ -87,6 +80,8 @@ from .planning import (
     plan_exports,
     render_listing,
 )
+from .preflight import check_environment
+from .repair import run_verify
 
 
 def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
@@ -259,188 +254,6 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
         if ignored:
             emit(f"{ignored} ignored (not books)")
     return 0
-
-
-def _run_verify(args: argparse.Namespace) -> int:
-    """
-    Check the archives already in the output directory.
-
-    :param args: Parsed command line arguments.
-
-    :return: A process exit code; non-zero if anything is damaged.
-    """
-    # A glob over a missing directory yields nothing, which read as a clean
-    # bill of health: the one command whose purpose is finding damage reported
-    # success having checked not a single file.
-    if not args.output_dir.is_dir():
-        logger.critical(
-            "Output directory does not exist: %s", printable(str(args.output_dir))
-        )
-        return exits.NO_OUTPUT
-
-    checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
-    if not checked:
-        emit(f"No archives found in {printable(str(args.output_dir))}.")
-        return 0
-    shelf = printable(str(args.output_dir))
-    emit(f"Verified {checked} archive(s) in {shelf}: {damaged} damaged.")
-    if damaged:
-        _advise_repair(args, broken)
-    return exits.DAMAGED if damaged else exits.SUCCESS
-
-
-def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
-    """
-    Tell the reader how to replace each damaged archive, in words that work.
-
-    Naming them matters: ``--force`` alone re-exports the whole library, and
-    the default cap then picks its subset at random, so following that advice
-    literally could leave every damaged book untouched and still report
-    success.
-
-    Only an archive named exactly as a package in the library is sent to
-    ``--match``, with a pattern checked against the rule that will read it.
-    The stem used to be printed for every file, and ``--match`` reads ``?``,
-    ``[`` and ``*`` as a glob against the whole package name, so ``Who Moved
-    My Cheese?`` and ``Foundation [Asimov]`` matched nothing and the run it
-    advised exited 0 having repaired nothing. A file copied through from the
-    library, or named by a suffix or a naming option, is no package's name,
-    and ``--force`` does not copy a file again: it is moved aside instead,
-    and any run puts back a book missing from the shelf.
-
-    :param args: Parsed command line arguments.
-    :param broken: The damaged archives' names.
-    """
-    # Read only now, and only if it is there: --verify checks a shelf on a
-    # machine that may never have had a library.
-    packages = collect_package_dirs(args.source_dir) if args.source_dir.is_dir() else []
-    patterns = {name: _repair_pattern(name, packages) for name in broken}
-    forced = [name for name in broken if patterns[name] is not None]
-    aside = [name for name in broken if patterns[name] is None]
-    # Quoting makes a name one shell word, and does nothing about the ESC and
-    # CR that rewrite the line: a path is spelt in $'...' (see _shell_word), a
-    # name to move aside is escaped with printable, and a pattern holds "?"
-    # for each such character instead, since --match would read the escape
-    # literally (see _repair_pattern).
-    if forced:
-        emit("Re-export each damaged book, for example:")
-        shelf = _shelf_flags(args)
-        for name in forced[:3]:
-            # Joined to the flag, so a name that starts with a dash is not
-            # read as one.
-            quoted = shlex.quote(patterns[name] or "")
-            emit(f"  ibook2epub --match={quoted} --force {shelf}")
-        if len(forced) > 3:
-            emit(f"  ...and {len(forced) - 3} more")
-        # --verify refuses them, so it cannot know what the shelf was named by.
-        emit("  (add the --name-by/-p/--on-collision flags you export with)")
-    if aside:
-        emit(
-            f"Move each of these out of {printable(str(args.output_dir))} and "
-            "rerun as before: --force cannot single it out, and a run puts "
-            "back a book missing from the shelf."
-        )
-        for name in aside[:3]:
-            emit(f"  {printable(name)}")
-        if len(aside) > 3:
-            emit(f"  ...and {len(aside) - 3} more")
-
-
-def _shelf_flags(args: argparse.Namespace) -> str:
-    """
-    Spell out the shelf and the library a repair command has to name.
-
-    The advice named neither. Run as printed, it looked for the library in
-    its default home and exited 4; given ``-s`` it wrote a fresh copy to
-    ``~/Books`` and left the damaged file where it was.
-
-    :param args: Parsed command line arguments.
-
-    :return: ``-s`` when the library was given rather than discovered, and
-        ``-o`` always, each quoted as one shell word safe to display.
-    """
-    flags = [] if args.source_auto else ["-s", _as_word(args.source_dir)]
-    return " ".join(
-        _shell_word(word) for word in [*flags, "-o", _as_word(args.output_dir)]
-    )
-
-
-def _shell_word(word: str) -> str:
-    """
-    Quote one word so a shell reads it back exactly, and a terminal shows it.
-
-    Escaping the quoted command for display turned a TAB into the four
-    characters ``\\x09``, which a shell reads literally: the repair command
-    created a directory named that, converted into it, and exited 0. A word
-    that needs escaping is written in bash and zsh's ANSI-C quoting instead,
-    where ``\\xNN`` means that byte, so it is both safe to print and the path
-    it names. Every other word keeps POSIX quoting.
-
-    :param word: One word of the command.
-
-    :return: The word, quoted.
-    """
-    if printable(word) == word:
-        return shlex.quote(word)
-    spelt = "".join(
-        char
-        if printable(char) == char and char not in "'\\"
-        else "".join(f"\\x{byte:02x}" for byte in os.fsencode(char))
-        for char in word
-    )
-    return f"$'{spelt}'"
-
-
-def _as_word(path: Path) -> str:
-    """
-    Spell a path so that argparse cannot take it for a flag.
-
-    :param path: A path as the user gave it.
-
-    :return: The path, led by ``./`` when it would otherwise start with a dash.
-    """
-    text = str(path)
-    return f"./{text}" if text.startswith("-") else text
-
-
-def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
-    """
-    Find a ``--match`` pattern that selects exactly the packages named *name*.
-
-    :param name: A damaged archive's name on the shelf.
-    :param packages: Every package in the library.
-
-    :return: The plainest pattern that selects them and nothing else, or None
-        when no package has that name, or none can be printed that does.
-    """
-    # Composed on both sides, as --match reads them: a shelf on HFS+ hands a
-    # name back decomposed, and lower() alone found no package for it.
-    key = unicodedata.normalize("NFC", name).lower()
-    wanted = {
-        package
-        for package in packages
-        if unicodedata.normalize("NFC", package.name).lower() == key
-    }
-    if not wanted:
-        return None
-    stem, suffix = Path(name).stem, Path(name).suffix
-    # The stem reads best but matches anywhere, so "Plain" finds Complain too.
-    # The escaped name is anchored only if escaping gave it a bracket. The
-    # bracketed dot makes the last a glob, which matches the whole name.
-    for pattern in (
-        stem,
-        glob.escape(name),
-        f"{glob.escape(stem)}[.]{suffix[1:]}",
-    ):
-        # What the advice prints is escaped for display, and --match reads
-        # "\x1b" as four characters: a character printable would escape
-        # becomes "?", which makes the pattern a glob, and is then checked
-        # like any other, since "?" matches more than that one character.
-        masked = "".join(char if printable(char) == char else "?" for char in pattern)
-        chosen = {p for p in packages if matches_pattern(p.name, masked)}
-        if chosen == wanted:
-            return masked
-    return None
 
 
 def _plan_options(args: argparse.Namespace) -> PlanOptions:
@@ -683,209 +496,7 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
     if args.list_only:
         return _run_listing(args, policy)
     if args.verify:
-        return _run_verify(args)
-    return None
-
-
-def _file_in_the_way(output_dir: Path) -> Path | None:
-    """
-    Find a file that stands where the shelf, or a directory above it, must go.
-
-    Only the path itself used to be checked, and only if it existed, so
-    ``-o afile/books`` passed: a dry run and ``--list`` exited 0 and the real
-    run failed at ``mkdir`` with 5. The nearest part of the path that exists
-    is what ``mkdir(parents=True)`` will build on, so that is what is judged.
-
-    :param output_dir: The output directory as given.
-
-    :return: The nearest existing part of the path when it is not a directory,
-        otherwise None.
-    """
-    nearest = _nearest_existing(output_dir)
-    return None if nearest is None or nearest.is_dir() else nearest
-
-
-def _nearest_existing(output_dir: Path) -> Path | None:
-    """
-    Find the part of the output path that ``mkdir(parents=True)`` builds on.
-
-    :param output_dir: The output directory as given.
-
-    :return: The path itself if it exists, else its nearest existing parent.
-    """
-    for candidate in (output_dir, *output_dir.parents):
-        # lexists: a symlink loop or a dangling link never exists(), so the
-        # search looked past it to a writable parent, while mkdir fails on it.
-        if os.path.lexists(candidate):
-            return candidate
-    return None
-
-
-def _unwritable_shelf(args: argparse.Namespace) -> Path | None:
-    """
-    Find what stops this run creating or locking the shelf, when it writes one.
-
-    A dry run on a read-only volume exited 0, and the real run could neither
-    create the shelf nor open its lock file and exited 5: the rehearsal said
-    all was well for a run that could not start. Judged on the part of the
-    path that exists, as :func:`_file_in_the_way` judges it.
-
-    :param args: Parsed command line arguments.
-
-    The lock file is what the run opens, so when there is one it is judged
-    instead: the directory alone let a lock file the run could not open (mode
-    444) pass the rehearsal, and refused a read-only shelf whose lock file
-    would have opened. On a read-only volume opening it fails too, with EROFS.
-
-    :return: The lock file or directory that cannot be written, otherwise
-        None. Always None for ``--list`` and ``--verify``, which only read the
-        shelf, and for the runs that never touch it.
-    """
-    if args.list_only or args.verify or args.annotations_only or args.library_export:
-        return None
-    lock = args.output_dir / LOCK_NAME
-    if os.path.lexists(lock):
-        return None if _lock_opens(lock) else lock
-    nearest = _nearest_existing(args.output_dir)
-    if nearest is None or os.access(nearest, os.W_OK | os.X_OK):
-        return None
-    return nearest
-
-
-def _plain_file(path: Path) -> bool:
-    """
-    Report whether a path is a regular file with one name, not a link of either
-    kind: what :func:`~epubconvert.run.convert.output_lock` accepts.
-
-    :param path: The path, known to exist.
-
-    :return: True for a plain file.
-    """
-    try:
-        info = path.lstat()
-    except OSError:
-        return False
-    return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
-
-
-def _lock_opens(lock: Path) -> bool:
-    """
-    Report whether the run could open an existing lock file, as it opens it.
-
-    :param lock: The lock file, known to exist.
-
-    :return: True for a plain file -- not a link of either kind, as
-        :func:`~epubconvert.run.convert.output_lock` requires -- that opens
-        for writing.
-    """
-    if not _plain_file(lock):
-        return False
-    try:
-        os.close(os.open(lock, os.O_RDWR | os.O_NOFOLLOW))
-    except OSError:
-        return False
-    return True
-
-
-def _check_environment(args: argparse.Namespace) -> int | None:
-    """
-    Check what the run needs from the machine, before it does anything.
-
-    Kept out of argparse deliberately. ``parser.error`` always exits 2, so
-    validating the environment there made a missing library, a missing extra
-    and a typo'd flag indistinguishable to a script.
-
-    :param args: Parsed command line arguments.
-
-    :return: An exit code, or None when the environment is usable.
-    """
-    # A vault names its notes the way the shelf names its books, so writing
-    # one needs the library even though -ao otherwise does not. Without this
-    # the run reported "Wrote 0 note(s)" and exited 0, having written none.
-    #
-    # An independent reason rather than an exception to the convert-nothing
-    # modes: written as one, adding --library-export to the same command
-    # cancelled it and the empty vault came back.
-    writes_a_vault = vault_of(args) is not None
-    converts = not (args.verify or args.annotations_only or args.library_export)
-    if (converts or writes_a_vault) and not args.source_dir.is_dir():
-        if args.source_auto:
-            # Both known homes were probed and neither held books. Naming only
-            # the fallback reads as "this one path is wrong" rather than "we
-            # looked in these places, and here is what to do about it".
-            probed = "\n".join(f"  {path}" for path in SOURCE_CANDIDATES)
-            logger.critical(
-                "No Apple Books library found. Looked in:\n%s\n"
-                "If your books are somewhere else, pass -s DIR.",
-                probed,
-            )
-        else:
-            logger.critical(
-                "Source directory does not exist: %s", printable(str(args.source_dir))
-            )
-        return exits.NO_SOURCE
-
-    # A file where the shelf should be. The real run failed at mkdir with 5,
-    # but a dry run and --list only read, found an empty "shelf" and exited
-    # 0: the rehearsal said all was well for a run that could not start. The
-    # runs that read only Apple's container never touch the shelf.
-    uses_shelf = not (args.annotations_only or args.library_export)
-    blocker = _file_in_the_way(args.output_dir) if uses_shelf else None
-    if blocker is not None:
-        # "is a file" was said of a dangling symlink and of a symlink loop too.
-        try:
-            mode = blocker.lstat().st_mode
-        except OSError:  # pragma: no cover - removed since it was found
-            mode = 0
-        kind = "is not a directory"
-        if stat.S_ISLNK(mode):
-            kind = "is a symlink to no directory"
-        elif stat.S_ISREG(mode):
-            kind = "is a file"
-        logger.critical(
-            "Output path is not a directory: %s (%s %s)",
-            printable(str(args.output_dir)),
-            printable(str(blocker)),
-            kind,
-        )
-        return exits.NO_OUTPUT
-    # A shelf that cannot be listed reads as an empty one: --verify found "No
-    # archives", --list showed every book pending, and a run on a directory
-    # it could write but not read (mode 300) exported them all again.
-    if uses_shelf and args.output_dir.is_dir():
-        try:
-            os.scandir(args.output_dir).close()
-        except OSError as exc:
-            logger.critical(
-                "Cannot read output directory %s: %s",
-                printable(str(args.output_dir)),
-                printable(exc.strerror or str(exc)),
-            )
-            return exits.NO_OUTPUT
-    unwritable = _unwritable_shelf(args)
-    if unwritable is not None:
-        # A lock file that is a link is refused for what it is, as the real
-        # run's output_lock refuses it, not called unwritable.
-        what = (
-            "is not a plain file"
-            if unwritable.name == LOCK_NAME and not _plain_file(unwritable)
-            else "is not writable"
-        )
-        logger.critical(
-            "Cannot create or lock output directory %s: %s %s",
-            printable(str(args.output_dir)),
-            printable(str(unwritable)),
-            what,
-        )
-        return exits.NO_OUTPUT
-
-    if args.epubcheck and not epubcheck_available():
-        logger.critical(
-            "--epubcheck needs the 'epubcheck' tool on PATH "
-            "(brew install epubcheck, or see w3c.github.io/epubcheck)"
-        )
-        return exits.MISSING_TOOL
-
+        return run_verify(args)
     return None
 
 
@@ -924,7 +535,7 @@ def _run(args: argparse.Namespace) -> int:
 
     :return: A process exit code, as for :func:`main`.
     """
-    unusable = _check_environment(args)
+    unusable = check_environment(args)
     if unusable is not None:
         return unusable
 
