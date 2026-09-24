@@ -610,10 +610,8 @@ def _run(args: argparse.Namespace) -> int:
     # Standard output belongs to the document when one is going there; a
     # summary in the middle of it would make the JSON unparsable, which is the
     # one thing a pipe cannot tolerate.
-    if args.annotations_detached == STDOUT:
-        print(summary, file=sys.stderr)
-    else:
-        emit(summary)  # `ibook2epub | head` closes the pipe before it.
+    # Either way, `ibook2epub | head` closes the pipe before it.
+    emit(summary, sys.stderr if args.annotations_detached == STDOUT else None)
     # Recorded in the log file only: the console already has it from the
     # print above, and logging it plainly printed every run's summary twice.
     app_logger.file_only(summary)

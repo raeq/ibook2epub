@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+from typing import TextIO
 
 #: Unicode's bidirectional formatting characters: ALM, LRM and RLM, the
 #: embeddings and overrides, and the isolates. None is a control character, so
@@ -92,7 +93,7 @@ def printable_json(document: str) -> str:
     )
 
 
-def emit(text: str) -> None:
+def emit(text: str, stream: TextIO | None = None) -> None:
     """
     Print a report's text on standard output, and stop quietly if nobody reads.
 
@@ -102,14 +103,19 @@ def emit(text: str) -> None:
     on to its own exit code: a ``--verify`` still exits 7 for a damaged shelf.
 
     :param text: What to print; a newline is added.
+    :param stream: Where to print it, when not standard output: a summary
+        goes to standard error when ``-ad -`` has standard output for its
+        document, and ``... -ad - 2>&1 | head -c0`` ended that in a
+        traceback too, after every book was written.
     """
+    target = sys.stdout if stream is None else stream
     try:
-        print(text, flush=True)
+        print(text, file=target, flush=True)
     except BrokenPipeError:
-        # Standard output is pointed at the null device, so neither the next
-        # line nor the interpreter's flush at exit can raise again.
+        # The stream is pointed at the null device, so neither the next line
+        # nor the interpreter's flush at exit can raise again.
         devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
+        os.dup2(devnull, target.fileno())
         os.close(devnull)
 
 
