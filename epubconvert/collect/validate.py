@@ -21,6 +21,7 @@ import re
 import shutil
 import stat
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
@@ -143,19 +144,22 @@ def _check_unique(names: list[str]) -> list[str]:
     shows different content in each. zipfile merely warns when writing one,
     and the validator passed it, so --verify called such an archive sound.
 
+    Counted rather than searched for: each duplicate was looked up in a list
+    of those found so far, so 80,000 names took 6.6 s to check.
+
     :param names: The archive's member names, in its own order.
 
-    :return: One problem per duplicated name.
+    :return: Up to five duplicated names, and a count of the rest.
     """
-    seen: set[str] = set()
-    repeated: list[str] = []
-    for name in names:
-        if name in seen and name not in repeated:
-            repeated.append(name)
-        seen.add(name)
-    return [
-        f"member name appears more than once: {printable(name)}" for name in repeated
+    repeated = [name for name, count in Counter(names).items() if count > 1]
+    problems = [
+        f"member name appears more than once: {printable(name)}"
+        for name in repeated[:5]
     ]
+    if len(repeated) > 5:
+        more = len(repeated) - 5
+        problems.append(f"...and {more} more member name(s) appearing more than once")
+    return problems
 
 
 def _check_methods(archive: ZipFile) -> list[str]:

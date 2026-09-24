@@ -11,6 +11,7 @@ the writer chose, so it says nothing about what comes first in the file.
 # restate them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
+# pylint: disable=protected-access
 
 import warnings
 from pathlib import Path
@@ -108,3 +109,32 @@ class TestEveryMemberNameIsUnique:
         assert problems == [
             "member name appears more than once: OEBPS/text/chapter1.xhtml"
         ]
+
+    def test_every_duplicate_is_counted_but_five_are_named(self):
+        names = [f"n{index}" for index in range(7)] * 2
+
+        problems = validate._check_unique(names)
+
+        assert problems[:5] == [
+            f"member name appears more than once: n{index}" for index in range(5)
+        ]
+        assert problems[5:] == ["...and 2 more member name(s) appearing more than once"]
+
+    def test_the_work_grows_with_the_names_not_their_square(self):
+        # Each duplicate was looked for in a list of the duplicates found so
+        # far: 80,000 names took 6.6 s. Counted by comparisons, not by time.
+        compared = [0]
+
+        class Name(str):
+            __hash__ = str.__hash__
+
+            def __eq__(self, other: object) -> bool:
+                compared[0] += 1
+                return str.__eq__(self, other)
+
+        once: list[str] = [Name(f"d/{index:05d}") for index in range(2000)]
+        names = once * 2
+
+        validate._check_unique(names)
+
+        assert compared[0] < 5 * len(names)
