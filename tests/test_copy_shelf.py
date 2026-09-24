@@ -15,8 +15,10 @@ shelf.
 
 from pathlib import Path
 
+from epubconvert.collect import annotations
 from epubconvert.run import run
 from tests.conftest import make_metadata_package
+from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import SUFFIX, identifier_of, listing, shelf, zipped_book
 
 
@@ -156,3 +158,39 @@ class TestNoCopyThroughStillSeesTheCopies:
         assert not list(output_dir.glob("*.epub"))
         assert not list(output_dir.glob("*.pdf"))
         assert " copied" not in capsys.readouterr().out
+
+    def test_a_vault_still_has_a_note_for_each_book_not_copied(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # The highlights are the point of a note, and the book not being
+        # copied takes nothing from them.
+        library, container = tmp_path / "lib", tmp_path / "container"
+        zipped = zipped_book(tmp_path, library / "zipped" / "Beta.epub", "urn:uuid:B")
+        paper = library / "papers" / "Gamma.pdf"
+        paper.parent.mkdir(parents=True)
+        paper.write_bytes(b"%PDF-1.4 fake")
+        make_databases(
+            container,
+            rows=[
+                highlight(asset="B", uuid="UB", text="BETA TEXT"),
+                highlight(asset="C", uuid="UC", text="GAMMA TEXT"),
+            ],
+            books=[
+                library_row(asset="B", path=str(zipped), title="Beta"),
+                library_row(asset="C", path=str(paper), title="Gamma"),
+            ],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(container, policy),
+        )
+        vault = tmp_path / "vault"
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q", self.NO_COPY]
+            + ["-ad", str(vault), "--annotations-format", "markdown"]
+        )
+
+        assert code == 0
+        assert "BETA TEXT" in (vault / "Beta.md").read_text()
+        assert "GAMMA TEXT" in (vault / "Gamma.md").read_text()

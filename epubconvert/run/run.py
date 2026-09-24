@@ -567,7 +567,9 @@ def _run_export(
     return (
         report,
         max(0, pending_before - done),
-        # The files it copies too: a vault writes a note for each of them.
+        # The files --match selects too, copied or not: a vault writes a note
+        # for each. Under --no-copy-through their highlights are still the
+        # point of a note, and the vault had none for a zipped book or a PDF.
         _selected(
             assigned,
             [*packages, *select_copies(copies, args.match).sources],
