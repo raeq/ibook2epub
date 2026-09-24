@@ -18,6 +18,7 @@ import errno
 import fnmatch
 import os
 import socket
+import stat
 import threading
 import time
 import unicodedata
@@ -27,7 +28,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from random import shuffle
-from typing import TextIO
+from typing import BinaryIO
 
 from ..collect.annotations import for_book as annotations_for_book
 from ..collect.validate import ValidationOptions
@@ -529,23 +530,7 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
         return
 
     path = output_dir / LOCK_NAME
-    # Opened "r+" always, creating it only if absent. The old
-    # exists()-then-open("w") had a window where a concurrent run created the
-    # file between the two calls and this one truncated the holder details it
-    # was about to report. flock semantics were never affected; the message
-    # was.
-    try:
-        try:
-            handle = path.open("r+")
-        except FileNotFoundError:
-            handle = path.open("a+")
-            handle.seek(0)
-    except OSError as exc:
-        # A read-only output directory got past main's mkdir(exist_ok=True) and
-        # died here with a raw traceback. main turns this into a clean exit 5.
-        raise OutputLockedError(
-            f"cannot lock {output_dir}: {exc}", contended=False
-        ) from exc
+    handle = _open_lock_file(path, output_dir)
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -584,7 +569,58 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
         handle.close()
 
 
-def _record_holder(handle: TextIO, path: Path) -> None:
+def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
+    """
+    Open the lock file for writing, creating it if absent, never through a link.
+
+    Opened read-write always, creating it only if absent. The old
+    exists()-then-open("w") had a window where a concurrent run created the
+    file between the two calls and this one truncated the holder details it
+    was about to report.
+
+    Opened by name, it was followed: a symlink planted at the lock's name had
+    its target truncated for the holder's pid, a dangling one created a file
+    wherever it pointed, and a hard link truncated its other name. The rule is
+    :func:`~epubconvert.utils.contained.open_contained`'s -- ``O_NOFOLLOW`` at
+    open, then the descriptor judged: a regular file with one name.
+
+    :param path: The lock file.
+    :param output_dir: The directory it locks, for the message.
+
+    :return: The open lock file, not yet locked.
+
+    :raises OutputLockedError: If it cannot be opened, or is not a plain file.
+        Nothing has been written to it either way.
+    """
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+    not_plain = f"cannot lock {output_dir}: its lock file is not a plain file"
+    try:
+        descriptor = os.open(path, flags, 0o644)
+    except OSError as exc:
+        # ELOOP is O_NOFOLLOW refusing a symlink. Anything else -- a read-only
+        # output directory got past main's mkdir(exist_ok=True) and died here
+        # with a raw traceback -- is an unopenable lock file. main turns either
+        # into a clean exit 5.
+        message = (
+            not_plain
+            if exc.errno == errno.ELOOP
+            else f"cannot lock {output_dir}: {exc}"
+        )
+        raise OutputLockedError(message, contended=False) from exc
+    try:
+        info = os.fstat(descriptor)
+    except OSError as exc:  # pragma: no cover - fstat on an open descriptor
+        os.close(descriptor)
+        raise OutputLockedError(
+            f"cannot lock {output_dir}: {exc}", contended=False
+        ) from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(descriptor)
+        raise OutputLockedError(not_plain, contended=False)
+    return os.fdopen(descriptor, "rb+", buffering=0)
+
+
+def _record_holder(handle: BinaryIO, path: Path) -> None:
     """
     Note this run's pid and host in the lock file, for a refused run to quote.
 
@@ -609,7 +645,7 @@ def _record_holder(handle: TextIO, path: Path) -> None:
         logger.debug("Could not record the lock holder in %s: %s", path, exc)
 
 
-def _read_lock_holder(handle: TextIO) -> str:
+def _read_lock_holder(handle: BinaryIO) -> str:
     """
     Describe whoever currently holds the lock, for the error message.
 

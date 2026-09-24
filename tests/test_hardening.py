@@ -29,7 +29,7 @@ from epubconvert.collect.library import read_package_once
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import StripNaming
 from epubconvert.run import convert, run
-from epubconvert.utils import contained
+from epubconvert.utils import contained, exits
 from epubconvert.utils.app_logger import logger
 from epubconvert.utils.display import printable
 from tests.conftest import make_metadata_package, make_package, needs_permissions
@@ -497,22 +497,122 @@ class TestLockFailuresAreDistinguished:
         ):
             pass
 
-    @pytest.mark.skipif(not Path("/dev/full").exists(), reason="needs /dev/full")
     def test_a_full_volume_does_not_stop_the_run_at_the_lock(
         self, output_dir, monkeypatch
     ):
         # The holder's pid is diagnostic, and writing it was unguarded: on a
         # full volume ENOSPC escaped, again when the buffered handle closed,
         # and the run died with two tracebacks and exit 1 before --min-free
-        # could stop it cleanly. /dev/full answers every write with ENOSPC; it
-        # also refuses truncation, which a real full volume allows, so that is
-        # let through.
-        (output_dir / convert.LOCK_NAME).symlink_to("/dev/full")
-        monkeypatch.setattr(os, "ftruncate", lambda _fd, _length: None)
+        # could stop it cleanly. This used a lock file linked to /dev/full,
+        # which a linked lock file is now refused for; every write answers
+        # ENOSPC instead, as a full volume does.
+        def full(_fd, _data):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(os, "write", full)
 
         # Locked for real: only the note of who holds it was lost.
         with convert.output_lock(output_dir) as locked:
             assert locked
+
+
+class TestALinkedLockFileIsNeitherFollowedNorTruncated:
+    """
+    The lock file was opened by name and then truncated for the holder's pid.
+    A symlink planted at ``.ibook2epub.lock`` truncated the file it pointed
+    at, a dangling one created a file wherever it pointed, and a hard link
+    truncated its other name. Each is refused as a lock file that is not a
+    plain file, exit 5, with nothing written through it.
+    """
+
+    @staticmethod
+    def _convert(tmp_path: Path, output_dir: Path) -> int:
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        return run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+    def test_a_symlink_to_a_file_leaves_that_file_alone(self, tmp_path, output_dir):
+        victim = tmp_path / "notes.txt"
+        victim.write_text("my important notes\n", encoding="utf-8")
+        (output_dir / convert.LOCK_NAME).symlink_to(victim)
+
+        code = self._convert(tmp_path, output_dir)
+
+        assert code == exits.NO_OUTPUT
+        assert victim.read_text(encoding="utf-8") == "my important notes\n"
+        assert not list(output_dir.glob("*.epub"))
+
+    def test_a_dangling_symlink_creates_nothing_elsewhere(self, tmp_path, output_dir):
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (output_dir / convert.LOCK_NAME).symlink_to(elsewhere / "planted.txt")
+
+        code = self._convert(tmp_path, output_dir)
+
+        assert code == exits.NO_OUTPUT
+        assert not list(elsewhere.iterdir())
+
+    def test_a_symlink_loop_is_the_same_refusal(self, output_dir):
+        _symlink_loop(output_dir, convert.LOCK_NAME)
+
+        with (
+            pytest.raises(convert.OutputLockedError, match="not a plain file") as err,
+            convert.output_lock(output_dir),
+        ):
+            pass
+
+        assert not err.value.contended
+
+    def test_a_hard_link_leaves_its_other_name_alone(self, tmp_path, output_dir):
+        victim = tmp_path / "precious.txt"
+        victim.write_text("precious\n", encoding="utf-8")
+        os.link(victim, output_dir / convert.LOCK_NAME)
+
+        code = self._convert(tmp_path, output_dir)
+
+        assert code == exits.NO_OUTPUT
+        assert victim.read_text(encoding="utf-8") == "precious\n"
+
+    def test_the_lock_itself_refuses_a_hard_link(self, tmp_path, output_dir):
+        # Judged on the descriptor, so a link made after any earlier check is
+        # refused as well.
+        victim = tmp_path / "precious.txt"
+        victim.write_text("precious\n", encoding="utf-8")
+        os.link(victim, output_dir / convert.LOCK_NAME)
+
+        with (
+            pytest.raises(convert.OutputLockedError, match="not a plain file"),
+            convert.output_lock(output_dir),
+        ):
+            pass
+
+        assert victim.read_text(encoding="utf-8") == "precious\n"
+
+    def test_the_refresh_refuses_a_linked_lock_file_too(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        victim = tmp_path / "notes.txt"
+        victim.write_text("keep\n", encoding="utf-8")
+        (output_dir / convert.LOCK_NAME).symlink_to(victim)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
+
+        assert code == exits.NO_OUTPUT
+        assert victim.read_text(encoding="utf-8") == "keep\n"
+
+    def test_a_plain_lock_file_is_still_reused(self, output_dir):
+        (output_dir / convert.LOCK_NAME).write_text("pid=1 host=old\n", "utf-8")
+
+        with convert.output_lock(output_dir) as locked:
+            assert locked
+            held = (output_dir / convert.LOCK_NAME).read_text(encoding="utf-8")
+
+        assert held.startswith(f"pid={os.getpid()} ")
 
 
 class TestUnwritablePathsAreReported:
