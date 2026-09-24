@@ -599,7 +599,8 @@ def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
         Nothing has been written to it either way.
     """
     flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
-    not_plain = f"cannot lock {output_dir}: its lock file is not a plain file"
+    shown = printable(str(output_dir))
+    not_plain = f"cannot lock {shown}: its lock file is not a plain file"
     try:
         descriptor = os.open(path, flags, 0o644)
     except OSError as exc:
@@ -610,7 +611,7 @@ def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
         message = (
             not_plain
             if exc.errno == errno.ELOOP
-            else f"cannot lock {output_dir}: {exc}"
+            else f"cannot lock {shown}: {printable(str(exc))}"
         )
         raise OutputLockedError(message, contended=False) from exc
     try:
@@ -618,7 +619,7 @@ def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
     except OSError as exc:  # pragma: no cover - fstat on an open descriptor
         os.close(descriptor)
         raise OutputLockedError(
-            f"cannot lock {output_dir}: {exc}", contended=False
+            f"cannot lock {shown}: {printable(str(exc))}", contended=False
         ) from exc
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         os.close(descriptor)
@@ -926,11 +927,11 @@ def _has_room(output_dir: Path, min_free_mb: int) -> bool:
         logger.critical(
             "Only %d MiB free on %s, below the --min-free floor of %d MiB.",
             free,
-            output_dir,
+            printable(str(output_dir)),
             min_free_mb,
         )
         return False
-    logger.debug("%d MiB free on %s", free, output_dir)
+    logger.debug("%d MiB free on %s", free, printable(str(output_dir)))
     return True
 
 

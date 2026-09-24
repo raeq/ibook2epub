@@ -103,14 +103,16 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
     converts_nothing = bool(args.library_export or args.annotations_only)
     if not converts_nothing or vault_of(args) is not None:
         if args.source_auto:
-            logger.info("Using discovered iBooks library: %s", args.source_dir)
+            logger.info(
+                "Using discovered iBooks library: %s", printable(str(args.source_dir))
+            )
         else:
-            logger.info("Examining source: %s", args.source_dir)
+            logger.info("Examining source: %s", printable(str(args.source_dir)))
     if args.list_only or args.verify:
         # Both only read the shelf, and "Writing" said otherwise.
-        logger.info("Reading output directory: %s", args.output_dir)
+        logger.info("Reading output directory: %s", printable(str(args.output_dir)))
     elif not converts_nothing:
-        logger.info("Writing output to: %s", args.output_dir)
+        logger.info("Writing output to: %s", printable(str(args.output_dir)))
     # Keyed off the policy object rather than re-derived from the raw argument.
     # Two independent statements of one fact drift apart the moment
     # build_policy's mapping changes, and the debug line above is the one that
@@ -739,6 +741,22 @@ def _unwritable_shelf(args: argparse.Namespace) -> Path | None:
     return nearest
 
 
+def _plain_file(path: Path) -> bool:
+    """
+    Report whether a path is a regular file with one name, not a link of either
+    kind: what :func:`~epubconvert.run.convert.output_lock` accepts.
+
+    :param path: The path, known to exist.
+
+    :return: True for a plain file.
+    """
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+
+
 def _lock_opens(lock: Path) -> bool:
     """
     Report whether the run could open an existing lock file, as it opens it.
@@ -749,10 +767,9 @@ def _lock_opens(lock: Path) -> bool:
         :func:`~epubconvert.run.convert.output_lock` requires -- that opens
         for writing.
     """
+    if not _plain_file(lock):
+        return False
     try:
-        info = lock.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            return False
         os.close(os.open(lock, os.O_RDWR | os.O_NOFOLLOW))
     except OSError:
         return False
@@ -813,7 +830,10 @@ def _check_environment(args: argparse.Namespace) -> int | None:
         elif stat.S_ISREG(mode):
             kind = "is a file"
         logger.critical(
-            "Output path is not a directory: %s (%s %s)", args.output_dir, blocker, kind
+            "Output path is not a directory: %s (%s %s)",
+            printable(str(args.output_dir)),
+            printable(str(blocker)),
+            kind,
         )
         return exits.NO_OUTPUT
     # A shelf that cannot be listed reads as an empty one: --verify found "No
@@ -831,10 +851,18 @@ def _check_environment(args: argparse.Namespace) -> int | None:
             return exits.NO_OUTPUT
     unwritable = _unwritable_shelf(args)
     if unwritable is not None:
+        # A lock file that is a link is refused for what it is, as the real
+        # run's output_lock refuses it, not called unwritable.
+        what = (
+            "is not a plain file"
+            if unwritable.name == LOCK_NAME and not _plain_file(unwritable)
+            else "is not writable"
+        )
         logger.critical(
-            "Cannot create or lock output directory %s: %s is not writable",
-            args.output_dir,
-            unwritable,
+            "Cannot create or lock output directory %s: %s %s",
+            printable(str(args.output_dir)),
+            printable(str(unwritable)),
+            what,
         )
         return exits.NO_OUTPUT
 
