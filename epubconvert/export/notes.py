@@ -682,10 +682,10 @@ def _gather(
     only onto a name nothing is at. A sidecar beside it (``.md.new``) holds
     new highlights the reader has yet to merge, and would be left beside
     nothing: the note is not moved while one is there. Nor is a note
-    another book of the run is given, or one of two tagged for the book.
+    another book of the run is given, or one of two that are the book's.
 
     :param directory: The vault.
-    :param strays: The notes tagged for the book under other names.
+    :param strays: The book's notes under other names.
     :param name: The note name the book is given.
     :param given: Every note name the run gives.
 
@@ -697,7 +697,7 @@ def _gather(
     sidecar = sidecar_for(old)
     try:
         if len(strays) > 1:
-            reason = "another note is tagged for the same book"
+            reason = "another note is the same book's"
         elif filesystem_key(old.name) in others:
             reason = "another book is given that name"
         elif _present(target):

@@ -290,8 +290,9 @@ class Naming:
     #: The packages given a name whose note is another book's all the same:
     #: without suffix a book keeps its name, and writing it reports the note.
     refused: set[Path] = field(default_factory=set)
-    #: Each package's notes tagged for it under a name it is no longer
-    #: given, as the vault lists them, when the one it is given is not.
+    #: Each package's notes under a name it is no longer given, as the vault
+    #: lists them, when the one it is given is not its own
+    #: (:meth:`_Names.owner`).
     strays: dict[Path, list[str]] = field(default_factory=dict)
 
 
@@ -301,12 +302,14 @@ class _Names:
     def __init__(
         self,
         named: Sequence[Assignment],
+        claimants: Mapping[Path, Claimant],
         vault: Vault,
         known: Collection[str] | None,
         *,
         suffix: bool,
     ) -> None:
         self.named = named
+        self.claimants = claimants
         self.vault = vault
         self.known = known
         self.suffix = suffix
@@ -317,6 +320,18 @@ class _Names:
         #: package it is the note of, or None when two books hold it alike.
         self.owners: dict[str, Path | None] = {}
         self._wanting: dict[str, list[Assignment]] | None = None
+        #: Each highlight, as :func:`_words` has it, and the books holding it.
+        self._with_words: dict[str, set[Path]] | None = None
+        #: Each tag, and the books with highlights answering to it.
+        self._tagged: dict[str, list[Path]] = {}
+        #: Each file a book is read from, and the books with highlights read from it.
+        self._sources: dict[str, list[Path]] = {}
+        for item in named:
+            book = claimants.get(item.package)
+            if book is not None:
+                for tag in book.tags:
+                    self._tagged.setdefault(tag, []).append(item.package)
+                self._sources.setdefault(_source(item), []).append(item.package)
 
     def free(self, name: str) -> bool:
         """Whether no book has been given *name*, as the filesystem compares."""
@@ -335,9 +350,90 @@ class _Names:
         held = self.vault.held(listed)
         verdict = holding(held, book, self.known)
         unclaimed = verdict is Holding.UNCLAIMED and held.quoted
+        if unclaimed and self.silent(held) and self.holders(held):
+            return Holding.ANOTHER
         if unclaimed and self.contested(listed, item, held.source):
             return Holding.ANOTHER
         return verdict
+
+    def silent(self, held: Held) -> bool:
+        """
+        Whether only the highlights in a note can say whose it is.
+
+        A note naming no file, tagged for no book the run knows or for none
+        at all -- as every release up to 2.3.1 wrote it -- with a highlight
+        in it.
+        """
+        tagged = held.tag is not None and self.knows(held.tag)
+        return bool(held.quoted) and held.source is None and not tagged
+
+    def knows(self, tag: str) -> bool:
+        """Whether a tag is a book's this run knows of: see :func:`holding`."""
+        return self.known is None or tag in self.known
+
+    def holders(self, held: Held) -> list[Path]:
+        """
+        Every book of the run holding each of a silent note's highlights.
+
+        Asked of every book with highlights, whichever names it wants. Only
+        the books wanting the note's name were asked, so when the book it was
+        written for had been renamed the note went with its name to another
+        holding none of its highlights, and its region was written over with
+        that book's, the reader's writing left under them. To every book but
+        these it is another book's now (:meth:`judge`).
+
+        :param held: The note, :meth:`silent`.
+
+        :return: Their packages, in no particular order.
+        """
+        if self._with_words is None:
+            self._with_words = {}
+            for package, book in self.claimants.items():
+                for words in book.words:
+                    self._with_words.setdefault(words, set()).add(package)
+        candidates = set.intersection(
+            *(self._with_words.get(words, set()) for words in held.quoted)
+        )
+        return [
+            package
+            for package in candidates
+            if holding(held, self.claimants[package], self.known) is Holding.MINE
+        ]
+
+    def owner(self, listed: str) -> Path | None:
+        """
+        The one book of the run a note is the note of, wherever it lies.
+
+        Tagged for the book; or tagged for no book the run knows, or for
+        none, and naming the file the book is read from; or, naming no file
+        either, holding nothing but the book's highlights (:meth:`holders`).
+        Only a tagged note was looked for under the names a book had before,
+        but every release up to 2.3.1 wrote its notes untagged, and a book
+        removed from Books and added again keeps its note tagged for the
+        asset id it had until the note is rewritten: a rename left either
+        behind.
+
+        :param listed: The note's name, as the vault lists it.
+
+        :return: Its package, or None when no book or more than one is its.
+        """
+        held = self.vault.held(listed)
+        if held.kind is not Holding.UNCLAIMED:
+            return None
+        if listed in self.owners:
+            return self.owners[listed]
+        if self.silent(held):
+            owners = self.holders(held)
+        elif held.tag is not None and self.knows(held.tag):
+            owners = self._tagged.get(held.tag, [])
+        else:
+            owners = [
+                package
+                for package in self._sources.get(held.source or "", ())
+                if holding(held, self.claimants[package], self.known)
+                is not Holding.ANOTHER
+            ]
+        return owners[0] if len(owners) == 1 else None
 
     def adopts(self, listed: str, item: Assignment, book: Claimant) -> bool:
         """
@@ -450,7 +546,7 @@ def note_names(
 
     :return: Each package's note name, and which of them to refuse.
     """
-    names = _Names(named, vault, known, suffix=suffix)
+    names = _Names(named, claimants, vault, known, suffix=suffix)
     tagged = {
         item.package: Claimant(frozenset(tags), frozenset(), frozenset())
         for item in named
@@ -515,36 +611,33 @@ def _strays(
     Find each book's note left under a name the book no longer has.
 
     A book's name can change under it -- ``--name-by author-title``
-    adopted, or its metadata corrected -- and its tagged note was looked
-    for only under the names it has now: a fresh note was started beside
-    it, and the reader's writing stayed behind in the old one without a
-    word. Looked for only when the note the book is given is not tagged for
-    it, among the ``.md`` files already listed; every one of them is read
-    then, once.
+    adopted, or its metadata corrected -- and its note was looked for only
+    under the names it has now: a fresh note was started beside it, and the
+    reader's writing stayed behind in the old one without a word. Looked
+    for only when the note the book is given is not its own already, among
+    the ``.md`` files already listed; every one of them is read then, once.
 
     :param named: Every book of the run with a name, in the run's order.
     :param claimants: Each book with highlights.
     :param names: The names given, whose strays are added in place.
     """
-    tagged: dict[str, list[str]] | None = None
+    owned: dict[Path, list[str]] | None = None
     for item in named:
-        book = claimants.get(item.package)
         given = names.given.get(item.package)
-        if book is None or given is None or names.vault.held(given).tag in book.tags:
+        if item.package not in claimants or given is None:
             continue
-        if tagged is None:
-            tagged = {}
-            for listed in names.vault.notes():
-                tag = names.vault.held(listed).tag
-                if tag is not None:
-                    tagged.setdefault(tag, []).append(listed)
+        listed = names.vault.spelling(given)
+        if listed and names.owner(listed) == item.package:
+            continue
+        if owned is None:
+            owned = {}
+            for note in names.vault.notes():
+                if (found := names.owner(note)) is not None:
+                    owned.setdefault(found, []).append(note)
         key = filesystem_key(given)
-        mine = sorted(
-            listed
-            for tag in book.tags
-            for listed in tagged.get(tag, ())
-            if filesystem_key(listed) != key
-        )
+        mine = [
+            note for note in owned.get(item.package, ()) if filesystem_key(note) != key
+        ]
         if mine:
             names.naming.strays[item.package] = mine
 
