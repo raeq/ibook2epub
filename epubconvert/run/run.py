@@ -69,6 +69,7 @@ from .convert import (
 )
 from .copying import (
     CopyPlan,
+    copy_decisions,
     copy_through_all,
     placed_copies,
     plan_copies,
@@ -228,11 +229,9 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     decisions = plan_exports(
         packages, args.output_dir, policy, _plan_options(args), assigned=everything
     )
-    # The copies that lost their name, as the run reports them.
-    decisions += [
-        Decision(source, COLLISION, reason=reason)
-        for source, reason in _to_copy(args, copies).lost
-    ]
+    # The files it copies, as the run settles them: a listing that left them
+    # out said nothing where -d said "2 to copy".
+    decisions += copy_decisions(_to_copy(args, copies), args.output_dir)
     # Orphans come from the whole library, not this run's filtered subset:
     # --match narrows a run, not the shelf. Files copied through claim their
     # names too, or the shelf would report what this run just put there.
@@ -247,8 +246,12 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     )
     emit(render_listing(decisions + orphans, args.as_json))
     ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
-    if ignored and not args.as_json:
-        emit(f"{ignored} ignored (not books)")
+    if not args.as_json:
+        uncopied = len(select_copies(copies, args.match).sources)
+        if args.no_copy_through and uncopied:
+            emit(f"{uncopied} not copied (--no-copy-through)")
+        if ignored:
+            emit(f"{ignored} ignored (not books)")
     return 0
 
 

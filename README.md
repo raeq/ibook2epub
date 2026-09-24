@@ -256,10 +256,11 @@ Deciding what to do:
   -f, --force           Re-export books even if they are already in the
                         output directory. With --library-export, replace the
                         file it names.
-  --list                List every *.epub/ package with its status (pending,
-                        exported, collision, drm, incomplete, orphan) and
-                        exit without converting anything. Anything in the
-                        source that is not a package is counted, not listed.
+  --list                List every *.epub/ package, and every PDF or zipped
+                        epub file copied through, with its status (pending,
+                        exported, collision, drm, incomplete, orphan, copy,
+                        copied) and exit without converting anything.
+                        Anything else in the source is counted, not listed.
   --json                With --list, emit machine-readable JSON instead of a
                         table.
   --refresh             Re-export a book when its source directory is newer

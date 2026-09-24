@@ -44,7 +44,9 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
 #: contract, not an internal detail: ``--list`` names them all in its help text
 #: and ``--list --json`` emits them verbatim. Typing them keeps a mistyped
 #: comparison from passing the type checker.
-Status = Literal["pending", "exported", "collision", "drm", "incomplete", "orphan"]
+Status = Literal[
+    "pending", "exported", "collision", "drm", "incomplete", "orphan", "copy", "copied"
+]
 
 #: The :class:`~epubconvert.run.convert.Report` fields the outcome table may bump.
 ReportField = Literal["skipped", "collisions", "drm", "incomplete"]
@@ -59,6 +61,11 @@ INCOMPLETE: Status = "incomplete"
 #: Not a decision about a book in the library at all: an archive on the shelf
 #: that no book in the library claims. Reported, never acted on.
 ORPHAN: Status = "orphan"
+
+#: What ``--list`` says of a PDF or an already-zipped book the run takes along
+#: unchanged: to be copied, or already on the shelf.
+COPY: Status = "copy"
+COPIED: Status = "copied"
 
 #: How ``--on-collision`` may be set.
 CollisionMode = Literal["skip", "suffix"]
@@ -77,6 +84,8 @@ STATUSES: tuple[Status, ...] = (
     DRM,
     INCOMPLETE,
     ORPHAN,
+    COPY,
+    COPIED,
 )
 
 

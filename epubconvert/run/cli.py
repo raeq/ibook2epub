@@ -266,10 +266,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="list_only",
         help=(
-            f"List every *.epub/ package with its status "
-            f"({', '.join(STATUSES)}) and exit without converting anything. "
-            f"Anything in the source that is not a package is counted, not "
-            f"listed."
+            f"List every *.epub/ package, and every PDF or zipped epub file "
+            f"copied through, with its status ({', '.join(STATUSES)}) "
+            f"and exit without converting anything. Anything else in the "
+            f"source is counted, not listed."
         ),
     )
     planning.add_argument(

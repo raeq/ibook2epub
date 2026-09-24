@@ -76,7 +76,7 @@ class TestSuffixModeKeepsACopyAtItsFile:
         assert "copied" not in again.out
         assert "orphan" not in again.out
         assert shelf(output_dir) == ["Book (2).epub", "Book.epub"]
-        assert sorted(listed) == [("Book.epub", "exported")]
+        assert sorted(listed) == [("Book.epub", "copied"), ("Book.epub", "exported")]
 
     def test_a_copy_added_before_it_in_sort_order_does_not_duplicate_it(
         self, tmp_path, output_dir, capsys
@@ -246,10 +246,12 @@ class TestAPdfOnTheShelfIsWeighed:
         capsys.readouterr()
 
         run.main([*argv, "--list", "--json"])
-        [row] = json.loads(capsys.readouterr().out)
+        rows = json.loads(capsys.readouterr().out)
 
-        assert row["status"] == "collision"
-        assert Path(row["source"]).parent.name == "0"
+        assert {Path(row["source"]).parent.name: row["status"] for row in rows} == {
+            "0": "collision",
+            "a": "copied",
+        }
         assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4 paper A"
 
 
