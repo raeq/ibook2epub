@@ -347,6 +347,27 @@ class TestTheIdentifierComesFromTheBook:
         assert row["ISBN13"] == ""
         assert row["ISBN"] == ""
 
+    @pytest.mark.parametrize("declared", ["4006381333931", "urn:ean:4006381333931"])
+    def test_a_barcode_that_is_not_a_book_number_is_not_an_isbn(
+        self, tmp_path, declared
+    ):
+        # Every ISBN-13 is an EAN-13, but only one in the 978 or 979 "Bookland"
+        # prefix is an ISBN. The check digit alone relabelled this product
+        # barcode urn:isbn and exported it to a tracker as the book's ISBN13.
+        self._package(tmp_path, declared)
+
+        found = library.collect(tmp_path)
+        row = _csv_rows(catalogue.goodreads_csv(found, unknown_shelf=None))[0]
+
+        assert found[0]["identifier"] == declared
+        assert catalogue.matchable_count(found) == 0
+        assert row["ISBN13"] == ""
+
+    def test_a_979_isbn_is_still_an_isbn(self, tmp_path):
+        self._package(tmp_path, "979-10-90636-07-1")
+
+        assert library.collect(tmp_path)[0]["identifier"] == "urn:isbn:9791090636071"
+
     def test_the_shelf_name_is_claimed_only_when_the_book_was_read(self, tmp_path):
         # Under --name-by author-title the policy needs the package document
         # to name a book; without it, it falls back to the package name, and

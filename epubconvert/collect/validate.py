@@ -139,12 +139,13 @@ def canonical_identifier(value: str) -> str:
     tools therefore did not match each other.
 
     Only what can be *verified* is normalised. An ISBN is recognised by its
-    check digit, never by counting digits: 68 identifiers in that library are
-    10 or 13 digits and fail it, and a digit count would have relabelled every
-    one of them. An ISBN-10 becomes the ISBN-13 meaning the same book, which is
-    exact arithmetic rather than a guess. Anything unrecognised is returned
-    exactly as it came in, because the specification says this field is opaque
-    and reshaping an opaque string is a claim about it.
+    book prefix and check digit, never by counting digits: 68 identifiers in
+    that library are 10 or 13 digits and fail the check, and a digit count
+    would have relabelled every one of them. An ISBN-10 becomes the ISBN-13
+    meaning the same book, which is exact arithmetic rather than a guess.
+    Anything unrecognised is returned exactly as it came in, because the
+    specification says this field is opaque and reshaping an opaque string is
+    a claim about it.
 
     :param value: The identifier the package document declares.
 
@@ -171,14 +172,14 @@ def isbn13_of(identifier: object) -> str | None:
     """
     Take the bare ISBN out of a canonical identifier, when it is one.
 
-    Judged by check digit, never by prefix. :func:`canonical_identifier`
-    leaves an identifier it cannot verify exactly as declared, so ``urn:isbn:``
-    in front of something is not evidence that an ISBN follows: 68 identifiers
-    in a surveyed library are ten or thirteen digits and fail their check, and
-    a tracker handed one of those matches the wrong book or none. Derived by
-    stripping the prefix rather than looked up again, so it cannot disagree
-    with the field it came from. About 41% of books have one: 1,108
-    ``urn:isbn`` against 1,448 ``urn:uuid`` in that library.
+    Judged by :func:`_is_isbn13`, never by the ``urn:isbn:`` in front of it.
+    :func:`canonical_identifier` leaves an identifier it cannot verify exactly
+    as declared, so that prefix is not evidence that an ISBN follows: 68
+    identifiers in a surveyed library are ten or thirteen digits and fail
+    their check, and a tracker handed one of those matches the wrong book or
+    none. Derived by stripping the prefix rather than looked up again, so it
+    cannot disagree with the field it came from. About 41% of books have one:
+    1,108 ``urn:isbn`` against 1,448 ``urn:uuid`` in that library.
 
     :param identifier: The canonical identifier, or None.
 
@@ -213,9 +214,17 @@ def _isbn10_sum(body: str) -> int:
     return sum((10 - i) * int(c) for i, c in enumerate(body))
 
 
+#: The EAN-13 prefixes ISO 2108 assigns to books. Every ISBN-13 is an EAN-13,
+#: but an EAN outside these is a product barcode, and the check digit alone
+#: relabelled one ``urn:isbn`` and exported it to a tracker as an ISBN13.
+ISBN13_PREFIXES = ("978", "979")
+
+
 def _is_isbn13(digits: str) -> bool:
-    """Whether *digits* is thirteen digits carrying a valid check digit."""
+    """Whether *digits* is a book's EAN-13: 978 or 979, and a valid check digit."""
     if len(digits) != 13 or not _ascii_digits(digits):
+        return False
+    if not digits.startswith(ISBN13_PREFIXES):
         return False
     return _isbn13_sum(digits) % 10 == 0
 
