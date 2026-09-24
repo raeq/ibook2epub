@@ -14,13 +14,19 @@ source directory can go unmentioned.
 
 import os
 import shlex
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from epubconvert.run import cli, run
+from epubconvert.utils.display import printable
 from tests.conftest import make_metadata_package, make_package
+
+#: The checkout, for a subprocess to import the package from.
+_ROOT = Path(__file__).resolve().parent.parent
 
 
 class TestAdviceThatWorks:
@@ -271,6 +277,50 @@ class TestVerifyAdviceRepairsTheBook:
         assert "\n  Dune (2).epub\n" in advice
         (output_dir / "Dune (2).epub").unlink()
         run.main([*base, *flags, "-q"])
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+    @pytest.mark.parametrize(
+        ("library_name", "shelf_name"),
+        [
+            ("lib", "my\tshelf"),
+            # What a path that is not UTF-8 decodes to.
+            ("lib", os.fsdecode(b"B\xfccher")),
+            ("my\x1b[2Klib", "shelf's \\ end"),
+            ("Bücher", "Bü\rcher"),
+        ],
+    )
+    def test_a_path_display_escapes_is_printed_so_the_shell_reads_it_back(
+        self, tmp_path, capsys, library_name, shelf_name
+    ):
+        # printable() turned a TAB into the four characters "\x09", which a
+        # shell reads literally: the command as printed created a directory
+        # named that, exported the book into it and exited 0, and the damaged
+        # file stayed where it was.
+        library = tmp_path / library_name
+        output_dir = tmp_path / shelf_name
+        self._book(library, "Dune.epub")
+        base, advice = self._damage_and_verify(library, output_dir, "Dune.epub", capsys)
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        assert printable(command) == command
+        before = sorted(tmp_path.iterdir())
+        # The program's name as printed, spelt out for a shell that has no
+        # ibook2epub on its PATH.
+        repaired = subprocess.run(
+            ["bash", "-c", command.replace("ibook2epub", '"$PY" -m epubconvert', 1)],
+            cwd=tmp_path,
+            env={**os.environ, "PY": sys.executable, "PYTHONPATH": str(_ROOT)},
+            capture_output=True,
+            check=False,
+        )
+
+        assert repaired.returncode == 0, repaired.stderr
+        assert sorted(tmp_path.iterdir()) == before
         assert run.main([*base, "--verify", "-q"]) == 0
 
 

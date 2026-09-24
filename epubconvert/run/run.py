@@ -306,9 +306,10 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
     forced = [name for name in broken if patterns[name] is not None]
     aside = [name for name in broken if patterns[name] is None]
     # Quoting makes a name one shell word, and does nothing about the ESC and
-    # CR that rewrite the line: a path or a name is escaped with printable,
-    # and a pattern holds "?" for each such character instead, since --match
-    # would read the escape literally (see _repair_pattern).
+    # CR that rewrite the line: a path is spelt in $'...' (see _shell_word), a
+    # name to move aside is escaped with printable, and a pattern holds "?"
+    # for each such character instead, since --match would read the escape
+    # literally (see _repair_pattern).
     if forced:
         emit("Re-export each damaged book, for example:")
         shelf = _shelf_flags(args)
@@ -344,10 +345,38 @@ def _shelf_flags(args: argparse.Namespace) -> str:
     :param args: Parsed command line arguments.
 
     :return: ``-s`` when the library was given rather than discovered, and
-        ``-o`` always, each quoted as one shell word and escaped for display.
+        ``-o`` always, each quoted as one shell word safe to display.
     """
     flags = [] if args.source_auto else ["-s", _as_word(args.source_dir)]
-    return printable(shlex.join([*flags, "-o", _as_word(args.output_dir)]))
+    return " ".join(
+        _shell_word(word) for word in [*flags, "-o", _as_word(args.output_dir)]
+    )
+
+
+def _shell_word(word: str) -> str:
+    """
+    Quote one word so a shell reads it back exactly, and a terminal shows it.
+
+    Escaping the quoted command for display turned a TAB into the four
+    characters ``\\x09``, which a shell reads literally: the repair command
+    created a directory named that, converted into it, and exited 0. A word
+    that needs escaping is written in bash and zsh's ANSI-C quoting instead,
+    where ``\\xNN`` means that byte, so it is both safe to print and the path
+    it names. Every other word keeps POSIX quoting.
+
+    :param word: One word of the command.
+
+    :return: The word, quoted.
+    """
+    if printable(word) == word:
+        return shlex.quote(word)
+    spelt = "".join(
+        char
+        if printable(char) == char and char not in "'\\"
+        else "".join(f"\\x{byte:02x}" for byte in os.fsencode(char))
+        for char in word
+    )
+    return f"$'{spelt}'"
 
 
 def _as_word(path: Path) -> str:
