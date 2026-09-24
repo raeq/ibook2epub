@@ -69,13 +69,12 @@ from .copying import (
     select_copies,
 )
 from .copynames import Names, claim_copies
+from .orphans import find_orphans, orphan_decisions
 from .placing import settled
 from .planning import (
     Decision,
     PlanOptions,
     assign_names,
-    find_orphans,
-    orphan_decisions,
     plan_exports,
 )
 from .preflight import ShelfUnwritableError, check_environment, check_writable
