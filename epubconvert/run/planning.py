@@ -521,6 +521,11 @@ def find_orphans(
 
     Asks the planner for the names rather than deriving them, so a book that
     took a ``" (2)"`` suffix is not reported as abandoning the name it holds.
+    And a file is claimed only when the planner would call it that book's:
+    one holding another book is the plan's collision, and counting it as
+    claimed hid the archive of a book deleted from the library, which can be
+    its last copy. Under ``--name-by author-title`` that reads each claimed
+    archive's identifier, as planning does (:mod:`epubconvert.run.holders`).
 
     Nothing is deleted, here or anywhere. The never-deletes stance is
     deliberate; the gap was that nothing would say either.
@@ -537,8 +542,14 @@ def find_orphans(
     """
     if assigned is None:
         assigned = assign_names(packages, policy, on_collision)
-    claimed = {filesystem_key(item.identity) for item in assigned if item.filename}
-    claimed |= {filesystem_key(policy.identity(name)) for name in claimed_extra}
+    existing = _read_shelf(output_dir, policy)
+    claimed = {filesystem_key(policy.identity(name)) for name in claimed_extra}
+    for item in assigned:
+        clash = existing.get(filesystem_key(item.identity))
+        if item.filename and clash is not None:
+            reason = foreign(clash.path, clash.identity, item.identity, item.identifier)
+            if reason is None:
+                claimed.add(filesystem_key(item.identity))
 
     return sorted(
         found
@@ -560,6 +571,28 @@ def orphan_decisions(orphans: Sequence[Path]) -> list[Decision]:
         Decision(path, ORPHAN, path, reason="no book in the library claims this name")
         for path in orphans
     ]
+
+
+def _read_shelf(output_dir: Path, policy: NamingPolicy) -> dict[str, _Existing]:
+    """
+    Read the archives already on the shelf, keyed as the filesystem sees them.
+
+    :param output_dir: Directory holding exported files.
+    :param policy: Naming policy supplying identities.
+
+    :return: Each archive by the key of its name.
+    """
+    # Missing directories glob to nothing, which is what a dry run wants.
+    # Keyed through the same fold the name assignment uses. Folding one and
+    # not the other meant a book already exported under a different case was
+    # never recognised, and was re-exported on every run for ever.
+    return {
+        filesystem_key(policy.identity(found.name)): _Existing(
+            path=found, identity=policy.identity(found.name)
+        )
+        for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
+        if found.is_file()
+    }
 
 
 def plan_exports(
@@ -589,17 +622,7 @@ def plan_exports(
     # one per element -- two workers writing the same target.
     packages = list(dict.fromkeys(packages))
 
-    # Missing directories glob to nothing, which is what a dry run wants.
-    # Keyed through the same fold the name assignment uses. Folding one and
-    # not the other meant a book already exported under a different case was
-    # never recognised, and was re-exported on every run for ever.
-    existing = {
-        filesystem_key(policy.identity(found.name)): _Existing(
-            path=found, identity=policy.identity(found.name)
-        )
-        for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-        if found.is_file()
-    }
+    existing = _read_shelf(output_dir, policy)
     if assigned is None:
         assigned = assign_names(packages, policy, settings.on_collision)
     assignments = assigned

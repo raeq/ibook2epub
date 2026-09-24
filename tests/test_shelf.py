@@ -19,7 +19,7 @@ the gap was that it would not tell you either.
 import json
 
 from epubconvert.export import archive
-from epubconvert.export.naming import PassthroughNaming, StripNaming
+from epubconvert.export.naming import MetadataNaming, PassthroughNaming, StripNaming
 from epubconvert.run import planning, run
 from tests.conftest import make_metadata_package, make_package, remove_tree
 
@@ -306,3 +306,52 @@ class TestTheListingNamesTheFileItWillWrite:
         row = json.loads(capsys.readouterr().out)[0]
         assert row["name"] == "Earthsea.epub"
         assert row["target"].endswith("Le Guin, Ursula K. - A Wizard of Earthsea.epub")
+
+
+class TestAFileHoldingAnotherBookIsNotClaimed:
+    """
+    A file is claimed by the book the planner would call it, not by its name.
+
+    The planner reports a book whose name is held by another book's archive
+    as a collision. The orphan check still counted that file as the book's,
+    so the archive of a book deleted from the library -- likely its last
+    copy -- was reported as nothing at all.
+    """
+
+    def test_a_deleted_editions_archive_is_an_orphan(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        for number, folder in enumerate(("Dune (1965)", "Dune (Ace)"), 1):
+            make_metadata_package(
+                library,
+                f"{folder}.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=f"urn:uuid:{number}",
+            )
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+            + ["--name-by", "author-title"]
+        )
+        remove_tree(library / "Dune (1965).epub")
+
+        orphans = planning.find_orphans(
+            output_dir, MetadataNaming(), archive.collect_package_dirs(library)
+        )
+
+        assert [path.name for path in orphans] == ["Frank Herbert - Dune.epub"]
+
+    def test_a_file_of_another_identity_is_an_orphan(self, tmp_path, output_dir):
+        # One file to a case-insensitive filesystem, two books to passthrough:
+        # the planner calls BOOK.epub a collision with Book.epub.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        remove_tree(library / "Book.epub")
+        make_package(library, "BOOK.epub")
+        packages = archive.collect_package_dirs(library)
+
+        orphans = planning.find_orphans(output_dir, PassthroughNaming(), packages)
+
+        [decision] = planning.plan_exports(packages, output_dir, PassthroughNaming())
+        assert decision.status == planning.COLLISION
+        assert [path.name for path in orphans] == ["Book.epub"]
