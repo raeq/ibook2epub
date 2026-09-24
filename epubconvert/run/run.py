@@ -485,40 +485,48 @@ def _embed_in_shelf(
     progress = progress_for(len(assignments), 1)
     # The same lock the export takes. These writes go into the output
     # directory and leave partials there, and a concurrent run's sweep cannot
-    # tell one of those from an abandoned one.
-    with output_lock(args.output_dir):
-        for item in assignments:
-            marker = progress.tick()
-            target = args.output_dir / item.filename if item.filename else None
-            if target is None or not target.is_file():
-                continue
-            if item.package.name in ambiguous:
-                logger.warning(
-                    "Skipped annotations for %s: more than one package "
-                    "directory has that name, so which book they belong to "
-                    "cannot be told apart.",
-                    printable(item.package.name),
-                )
-                continue
-            mine = annotations_for_book(item.package.name, index)
-            if not mine:
-                continue
-            try:
-                if replace_annotations(target, mine):
-                    changed += 1
-                    logger.info(
-                        "%s Refreshed %d annotation(s) in %s",
-                        marker,
-                        len(mine),
-                        printable(target.name),
+    # tell one of those from an abandoned one. Refused on this route, the
+    # error escaped main -- which maps it only around the export -- as a
+    # traceback and exit 1.
+    try:
+        with output_lock(args.output_dir):
+            for item in assignments:
+                marker = progress.tick()
+                target = args.output_dir / item.filename if item.filename else None
+                if target is None or not target.is_file():
+                    continue
+                if item.package.name in ambiguous:
+                    logger.warning(
+                        "Skipped annotations for %s: more than one package "
+                        "directory has that name, so which book they belong to "
+                        "cannot be told apart.",
+                        printable(item.package.name),
                     )
-            except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
-                # BadZipFile is not an OSError, so one damaged archive used to
-                # abort the whole refresh and every book after it went
-                # untouched; nor is what a damaged compressed stream raises,
-                # which did the same until #21. A damaged archive is an
-                # expected state: --verify exists to find them.
-                logger.error("Could not refresh %s: %s", printable(target.name), exc)
+                    continue
+                mine = annotations_for_book(item.package.name, index)
+                if not mine:
+                    continue
+                try:
+                    if replace_annotations(target, mine):
+                        changed += 1
+                        logger.info(
+                            "%s Refreshed %d annotation(s) in %s",
+                            marker,
+                            len(mine),
+                            printable(target.name),
+                        )
+                except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
+                    # BadZipFile is not an OSError, so one damaged archive used to
+                    # abort the whole refresh and every book after it went
+                    # untouched; nor is what a damaged compressed stream raises,
+                    # which did the same until #21. A damaged archive is an
+                    # expected state: --verify exists to find them.
+                    logger.error(
+                        "Could not refresh %s: %s", printable(target.name), exc
+                    )
+    except OutputLockedError as exc:
+        logger.critical("%s", exc)
+        return exc.exit_code
     if converted:
         logger.info("Refreshed annotations in %d book(s).", changed)
     else:

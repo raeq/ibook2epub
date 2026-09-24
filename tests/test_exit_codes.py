@@ -166,6 +166,39 @@ class TestEachFailureHasItsOwnCode:
 
         assert code == exits.NO_OUTPUT
 
+    def test_a_refresh_under_a_held_lock_has_the_same_code(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # -ar takes the lock on its own route, and only the export's route
+        # turned the refusal into a code: a refresh started while a scheduled
+        # conversion ran died with a traceback and exit 1.
+        monkeypatch.setattr(
+            "epubconvert.run.run.collect_annotations", lambda **_kwargs: []
+        )
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+
+        with convert.output_lock(output_dir):
+            code = run.main(
+                ["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"]
+            )
+
+        assert code == exits.LOCKED
+
+    def test_a_refresh_with_an_unopenable_lock_file_has_the_same_code(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "epubconvert.run.run.collect_annotations", lambda **_kwargs: []
+        )
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        (output_dir / convert.LOCK_NAME).mkdir()
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
+
+        assert code == exits.NO_OUTPUT
+
 
 @pytest.fixture(name="refused")
 def _refused(tmp_path):
