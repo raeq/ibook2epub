@@ -470,14 +470,14 @@ def _run_export(
             # makes that run's closing replace fail.
             if locked and not args.dry_run:
                 sweep_partials(args.output_dir)
-            if not args.dry_run:
-                copy_through_all(
-                    select_copies(copies, args.match),
-                    args.output_dir,
-                    report,
-                    max_workers=args.workers,
-                    min_free_mb=args.min_free,
-                )
+            copy_through_all(
+                select_copies(copies, args.match),
+                args.output_dir,
+                report,
+                max_workers=args.workers,
+                min_free_mb=args.min_free,
+                dry_run=args.dry_run,
+            )
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on
             # a cloud shelf, and a Ctrl-C there produced a raw traceback with

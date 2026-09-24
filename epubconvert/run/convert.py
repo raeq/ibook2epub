@@ -807,7 +807,8 @@ def _clauses(report: Report, *, failures: bool) -> str:
         (report.collisions, "{} name collision(s)"),
         (report.drm, "{} DRM-protected"),
         (report.incomplete, "{} not downloaded"),
-        (report.copied, "{} copied"),
+        # A dry run counts what it would copy there; "copied" said it had.
+        (report.copied, "{} copied" if failures else "{} to copy"),
         (report.ignored, "{} ignored"),
         (report.orphaned, "{} orphaned"),
     ]

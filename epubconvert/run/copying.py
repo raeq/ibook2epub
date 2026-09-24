@@ -266,6 +266,7 @@ def copy_through_all(
     *,
     max_workers: int | None = None,
     min_free_mb: int = 0,
+    dry_run: bool = False,
 ) -> None:
     """
     Put already-valid books on the shelf without converting them.
@@ -297,8 +298,17 @@ def copy_through_all(
     :param min_free_mb: The ``--min-free`` floor in MiB; 0 disables it.
         Measured before the pool starts, as the export measures, and then
         sampled as each file is copied.
+    :param dry_run: Copy nothing; count in ``report.copied`` the files that
+        would be copied, and report the rest as a real run does. A dry run
+        said nothing about copies at all, and the real run then said
+        "3 copied".
     """
     groups = _group_copies(plan, output_dir, report)
+    if dry_run:
+        report.copied += sum(
+            1 for group in groups for _source, target in group if not target.exists()
+        )
+        return
     if not groups:
         return
     progress = progress_for(

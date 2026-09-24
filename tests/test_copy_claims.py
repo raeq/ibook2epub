@@ -406,3 +406,43 @@ class TestMatchNarrowsTheCopies:
         assert identifier_of(output_dir / "Frank Herbert - Dune.epub") == (
             "urn:uuid:1965"
         )
+
+
+class TestADryRunSaysWhatItWouldCopy:
+    """
+    ``-d`` said "would export 1" and nothing about copies, and the real run
+    then said "3 copied": the rehearsal left out the files it would take
+    along, and the ones it would skip.
+    """
+
+    def test_the_copies_are_counted(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        for index in range(3):
+            (library / f"paper{index}.pdf").write_bytes(b"%PDF-1.4 fake")
+        (output_dir / "paper0.pdf").write_bytes(b"%PDF-1.4 fake")
+        argv = ["-s", str(library), "-o", str(output_dir)]
+
+        run.main([*argv, "-d"])
+        rehearsed = capsys.readouterr().out
+        run.main(argv)
+        done = capsys.readouterr().out
+
+        assert "2 to copy" in rehearsed
+        assert "2 copied" in done
+        assert sorted(path.name for path in output_dir.glob("*.pdf")) == [
+            "paper0.pdf",
+            "paper1.pdf",
+            "paper2.pdf",
+        ]
+
+    def test_a_collision_is_rehearsed_too(self, tmp_path, output_dir, capsys):
+        library = _package_and_zip(tmp_path)
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-d"])
+        captured = capsys.readouterr()
+
+        assert "Name collision, skipping: Book.epub" in captured.err
+        assert "1 name collision(s)" in captured.out
+        assert "to copy" not in captured.out
+        assert not output_dir.joinpath("Book.epub").exists()
