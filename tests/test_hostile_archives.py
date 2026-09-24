@@ -20,7 +20,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
+from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 import pytest
 
@@ -30,7 +30,7 @@ from epubconvert.collect.annotations import EMBEDDED_PATH
 from epubconvert.collect.validate import ArchiveInvalidError
 from epubconvert.export import archive
 from epubconvert.run import run
-from tests.conftest import make_metadata_package
+from tests.conftest import corrupt_member, make_metadata_package
 from tests.test_validate import MEMBERS, write_epub
 
 #: How much padding a bomb inflates to. Enough that decompressing it whole
@@ -495,3 +495,43 @@ def test_a_repeated_member_is_named_escaped(tmp_path: Path):
     assert said is not None
     assert "ch1.xhtml" in said
     assert "\x1b" not in said
+
+
+class TestVerifyInflatesNoMoreThanTheBookIsWorth:
+    """
+    Reading in chunks bounds the memory a CRC check costs, not the time: a
+    4 MB book declaring 4 GiB was inflated in full, 5 s of --verify, and a
+    shelf of them costs that each. A book whose members declare far more
+    than the book itself holds is reported, and its members left unread.
+    """
+
+    def test_a_small_book_declaring_a_great_deal_is_not_inflated(
+        self, tmp_path, monkeypatch
+    ):
+        # The floor lowered, so a bomb this test can afford is above it.
+        monkeypatch.setattr(validate, "MAX_CHECKED_BYTES", 1024 * 1024)
+        path = _epub_with_bomb(
+            tmp_path / "Bomb.epub", "OEBPS/images/cover.jpg", ZIP_DEFLATED
+        )
+
+        with _inflations(monkeypatch) as opened:
+            problems = validate.validate_archive(path)
+
+        assert any("too large to check its members" in text for text in problems)
+        assert opened["OEBPS/images/cover.jpg"] == 0
+
+    def test_a_large_book_of_stored_media_is_still_checked(self, tmp_path, monkeypatch):
+        # Pictures and video are stored, so a large real book declares about
+        # what it holds, however much that is.
+        monkeypatch.setattr(validate, "MAX_CHECKED_BYTES", 64 * 1024)
+        path = tmp_path / "Illustrated.epub"
+        with ZipFile(path, "w") as opened:
+            opened.writestr(ZipInfo("mimetype"), "application/epub+zip")
+            for name, body in MEMBERS.items():
+                opened.writestr(name, body, compress_type=ZIP_DEFLATED)
+            opened.writestr("OEBPS/images/plate.jpg", bytes(range(256)) * 4096)
+        corrupt_member(path, "OEBPS/images/plate.jpg", BadZipFile)
+
+        problems = validate.validate_archive(path)
+
+        assert "corrupt member: OEBPS/images/plate.jpg" in problems

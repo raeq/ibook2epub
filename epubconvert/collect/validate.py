@@ -17,6 +17,7 @@ identifiers in :mod:`.identifiers`.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -43,6 +44,21 @@ from .package import (
 )
 
 EPUBCHECK = "epubcheck"
+
+#: How much a CRC check inflates before the ratio below is asked about.
+#: Reading in chunks bounds the memory a check costs, not the time: a 4 MB
+#: book declaring 4 GiB was inflated in full, 5 s of --verify apiece. Under
+#: this, a check costs at most about 1.3 s here, whatever the book declares.
+MAX_CHECKED_BYTES = 1024**3
+
+#: Past :data:`MAX_CHECKED_BYTES`, how many times its own size a book may
+#: declare and still have its members checked. A large real book is large
+#: because of its pictures, sound and video, which are stored rather than
+#: deflated, so it declares about what it holds: even a 2 GB illustrated or
+#: video book is checked. Text deflates three- or fourfold, and nothing a
+#: book is made of deflates thirty-twofold over a gigabyte; deflate itself
+#: reaches a thousandfold, which is what a bomb uses.
+MAX_CHECKED_RATIO = 32
 
 
 class ArchiveInvalidError(Exception):
@@ -93,6 +109,7 @@ def validate_archive(path: Path) -> list[str]:
         # Judged on the descriptor, not a stat of the name: a FIFO swapped in
         # between the two was opened for reading, and waited for ever.
         with open_regular(path) as handle, ZipFile(handle) as archive:
+            size = os.fstat(handle.fileno()).st_size
             names = archive.namelist()
             members = set(names)
             problems.extend(_check_mimetype(archive, names))
@@ -106,7 +123,7 @@ def validate_archive(path: Path) -> list[str]:
             methods = _check_methods(archive)
             problems.extend(methods)
             if not methods and repeated is None:
-                problems.extend(_check_contents(archive, members))
+                problems.extend(_check_contents(archive, members, size))
     except ValidationError as exc:
         return [str(exc)]
     except BadZipFile as exc:
@@ -123,19 +140,33 @@ def validate_archive(path: Path) -> list[str]:
     return problems
 
 
-def _check_contents(archive: ZipFile, members: set[str]) -> list[str]:
+def _check_contents(archive: ZipFile, members: set[str], size: int) -> list[str]:
     """
     Inflate every member, then check what the package document promises.
 
+    Every member is inflated only if together they declare no more than the
+    book is worth checking: see :data:`MAX_CHECKED_BYTES`. The declaration
+    bounds the inflating, since zipfile reads a member no further than the
+    size it declares. Past that, the book is reported rather than spending
+    minutes on it, and what the package document promises is still checked.
+
     :param archive: The open archive, every member stored or deflated.
     :param members: Its member names, built once by the caller.
+    :param size: The size of the archive itself, in bytes.
 
     :return: A list of problems.
     """
     problems: list[str] = []
-    broken = _first_corrupt(archive)
-    if broken is not None:
-        problems.append(f"corrupt member: {printable(broken)}")
+    declared = sum(info.file_size for info in archive.infolist())
+    if declared > max(MAX_CHECKED_BYTES, MAX_CHECKED_RATIO * size):
+        problems.append(
+            f"too large to check its members: they declare {declared} bytes, "
+            f"more than {MAX_CHECKED_RATIO} times the {size} the book holds"
+        )
+    else:
+        broken = _first_corrupt(archive)
+        if broken is not None:
+            problems.append(f"corrupt member: {printable(broken)}")
 
     try:
         package = read_package(archive)
