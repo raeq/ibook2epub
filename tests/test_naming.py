@@ -14,7 +14,7 @@ import pytest
 
 from epubconvert.export import naming
 from epubconvert.export.archive import collect_package_dirs
-from epubconvert.run import cli, convert, run
+from epubconvert.run import cli, convert, run, summary
 from epubconvert.utils import exits
 from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_package
@@ -170,7 +170,7 @@ class TestPortableExport:
         )
 
         assert report.collisions == 1
-        assert "collision" in convert.format_summary(report, output_dir, dry_run=False)
+        assert "collision" in summary.format_summary(report, output_dir, dry_run=False)
 
 
 class TestPortableCli:

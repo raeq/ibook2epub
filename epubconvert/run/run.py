@@ -57,7 +57,6 @@ from .convert import (
     count_pending_decisions,
     export_planned,
     filter_packages,
-    format_summary,
     output_lock,
     sweep_partials,
 )
@@ -82,6 +81,7 @@ from .planning import (
 )
 from .preflight import ShelfUnwritableError, check_environment, check_writable
 from .repair import run_verify
+from .summary import format_summary
 
 
 def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:

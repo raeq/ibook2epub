@@ -115,7 +115,7 @@
     },
     {
       "title": "The summary line",
-      "file": "epubconvert/run/convert.py",
+      "file": "epubconvert/run/summary.py",
       "pattern": "def format_summary\\(",
       "description": "Assembled from the `Report` dataclass. Each optional clause appears only when its count is non-zero, so a clean run prints one short sentence and a messy one prints why."
     },
