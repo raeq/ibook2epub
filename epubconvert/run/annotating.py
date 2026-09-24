@@ -515,7 +515,9 @@ def _before_writing(args: argparse.Namespace) -> int | None:
     # returns, for the same reason as the read: it returned first, and "-d"
     # exited 0 over the typo the real run exited 5 for.
     if args.annotations_embedded and not args.output_dir.is_dir():
-        logger.critical("Output directory does not exist: %s", args.output_dir)
+        logger.critical(
+            "Output directory does not exist: %s", printable(str(args.output_dir))
+        )
         return exits.NO_OUTPUT
 
     # Guarded here rather than at the call sites. It was checked on the route

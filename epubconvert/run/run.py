@@ -268,7 +268,9 @@ def _run_verify(args: argparse.Namespace) -> int:
     # bill of health: the one command whose purpose is finding damage reported
     # success having checked not a single file.
     if not args.output_dir.is_dir():
-        logger.critical("Output directory does not exist: %s", args.output_dir)
+        logger.critical(
+            "Output directory does not exist: %s", printable(str(args.output_dir))
+        )
         return exits.NO_OUTPUT
 
     checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
@@ -475,7 +477,10 @@ def _survey(
     # and then "Copied Paper.pdf" read as having found nothing and then done
     # something.
     if not packages and not _to_copy(args, copies).sources:
-        logger.warning("No matching *.epub packages found under %s", args.source_dir)
+        logger.warning(
+            "No matching *.epub packages found under %s",
+            printable(str(args.source_dir)),
+        )
 
     report.ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     shared, copies = _shared_names(args, discovered, policy, copies)
@@ -809,7 +814,9 @@ def _check_environment(args: argparse.Namespace) -> int | None:
                 probed,
             )
         else:
-            logger.critical("Source directory does not exist: %s", args.source_dir)
+            logger.critical(
+                "Source directory does not exist: %s", printable(str(args.source_dir))
+            )
         return exits.NO_SOURCE
 
     # A file where the shelf should be. The real run failed at mkdir with 5,

@@ -13,6 +13,8 @@ import logging
 from pathlib import Path
 from typing import Any, cast
 
+from .display import printable
+
 TRACE = 5  # Below DEBUG (10), for very chatty per-file messages.
 logging.addLevelName(TRACE, "TRACE")
 
@@ -122,7 +124,9 @@ def configure(verbosity: int = 1, log_file: Path | None = None) -> TraceLogger:
                 log_path, encoding="utf-8", errors="backslashreplace"
             )
         except OSError as exc:
-            logger.warning("Not logging to %s: %s", log_path, exc)
+            logger.warning(
+                "Not logging to %s: %s", printable(str(log_path)), printable(str(exc))
+            )
         else:
             file_handler.setLevel(level)
             file_handler.setFormatter(

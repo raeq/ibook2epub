@@ -549,14 +549,15 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
             if exc.errno not in _CONTENDED:
                 logger.warning(
                     "Locking is not supported on %s (%s); continuing unlocked.",
-                    output_dir,
-                    exc,
+                    printable(str(output_dir)),
+                    printable(str(exc)),
                 )
                 handle.close()
                 yield False
                 return
             raise OutputLockedError(
-                f"another ibook2epub run is already using {output_dir} "
+                f"another ibook2epub run is already using "
+                f"{printable(str(output_dir))} "
                 f"({_read_lock_holder(handle)})",
                 contended=True,
             ) from exc
@@ -649,7 +650,11 @@ def _record_holder(handle: BinaryIO, path: Path) -> None:
         os.lseek(descriptor, 0, os.SEEK_SET)
         os.write(descriptor, line)
     except OSError as exc:
-        logger.debug("Could not record the lock holder in %s: %s", path, exc)
+        logger.debug(
+            "Could not record the lock holder in %s: %s",
+            printable(str(path)),
+            printable(str(exc)),
+        )
 
 
 def _read_lock_holder(handle: BinaryIO) -> str:
