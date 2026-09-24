@@ -544,3 +544,43 @@ class TestARefreshReadsOnlyTheBooksItRewrites:
         assert code == 0
         assert sources == ["Book 0.epub"]
         assert set(opened) == {"Book 0.epub"}
+
+    @pytest.mark.parametrize("detached", ["notes.json", "notes.csv", "-"])
+    def test_a_document_beside_it_opens_no_zipped_book(
+        self, tmp_path, output_dir, monkeypatch, detached
+    ):
+        # -ad FILE.json named every zipped book in the library for a document
+        # that never uses the names, opening each to read its identifier:
+        # and --skip-incomplete is refused there, so an evicted iCloud book
+        # was downloaded to be named. Only a vault names its notes.
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Pkg.epub", title="Pkg", identifier="urn:p")
+        for index in range(3):
+            zipped_book(tmp_path, library / f"Zipped {index}.epub", f"urn:{index}")
+        # Named from the books' metadata, which is read from inside each.
+        naming = ["--name-by", "author-title"]
+        run.main(["-s", str(library), "-o", str(output_dir), *naming, "-m", "0", "-q"])
+        make_databases(
+            tmp_path / "container",
+            rows=[highlight()],
+            books=[library_row(path="/x/Pkg.epub", title="Pkg")],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+        opened: list[str] = []
+        original = ZipFile.__init__
+
+        def counting(self, file, *args, **kwargs):
+            if Path(str(file)).parent == library:
+                opened.append(Path(str(file)).name)
+            original(self, file, *args, **kwargs)
+
+        monkeypatch.setattr(ZipFile, "__init__", counting)
+        argv = ["-s", str(library), "-o", str(output_dir), *naming, "-ae", "-ar"]
+
+        code = run.main([*argv, "-q", "-ad", str(tmp_path / detached)])
+
+        assert code == 0
+        assert opened == []

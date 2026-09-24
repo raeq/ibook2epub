@@ -449,11 +449,18 @@ def apply_annotations(
         # Each note named after the file the book is placed at, as the
         # conversion route names it: named from the assignment, an edition
         # moved on to its marked name wrote into the other edition's note.
+        # Only a vault uses the names, as for -ao: a JSON or CSV file named
+        # and opened every zipped book for nothing, and --skip-incomplete is
+        # refused beside it, so an evicted one was downloaded to be named.
         written = write_export(
             args,
             found,
             args.annotations_detached,
-            _with_copies(args, policy, assignments, copyable, shelf=True),
+            (
+                _with_copies(args, policy, assignments, copyable, shelf=True)
+                if vault_of(args) is not None
+                else []
+            ),
             copyable=copyable,
         )
         # A failed book outranks the destination's own error, the order a
