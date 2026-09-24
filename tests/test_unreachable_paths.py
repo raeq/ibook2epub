@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ import pytest
 from epubconvert.run import run
 from epubconvert.utils import exits
 from tests.conftest import make_package, needs_permissions
+from tests.test_copy_through import _evict
 
 #: Every route that reads the shelf, as extra arguments after -s and -o.
 SHELF_READERS = [
@@ -322,3 +324,64 @@ class TestAShelfItMayListButNotSearch:
 
         assert code == exits.NO_OUTPUT
         assert "Cannot read output directory" in capsys.readouterr().err
+
+
+def _dropping_in_the_main_thread(monkeypatch: pytest.MonkeyPatch, lost: Path) -> None:
+    """
+    Make ``Path.exists`` raise EIO for *lost*, on the main thread only.
+
+    What 3.10 and 3.11 do when a share or a USB volume drops mid-run; later
+    Pythons answer False. Raised here on every Python.
+    """
+    exists = Path.exists
+
+    def dropping(path: Path, *args: Any, **kwargs: Any) -> bool:
+        if path == lost and threading.current_thread() is threading.main_thread():
+            raise OSError(errno.EIO, os.strerror(errno.EIO), str(path))
+        return exists(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", dropping)
+
+
+class TestACopyTargetItCannotLookAt:
+    """
+    The run's own look at a copy's name on the shelf let EIO out of main: a
+    traceback, exit 1 and no summary. A target that cannot be looked at is
+    taken as not there, as the copy worker takes it, and the copy says why.
+    """
+
+    @pytest.mark.parametrize(
+        ("mode", "said"),
+        [
+            pytest.param(["-m", "0"], "1 copied", id="convert"),
+            pytest.param(["-m", "0", "-d"], "1 to copy", id="dry-run"),
+            pytest.param(["--list"], "Lost.pdf", id="list"),
+        ],
+    )
+    def test_is_taken_as_not_there(self, tmp_path, monkeypatch, capsys, mode, said):
+        output_dir = tmp_path / "out"
+        output_dir.mkdir()
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Lost.pdf").write_bytes(b"%PDF-1.4\n")
+        _dropping_in_the_main_thread(monkeypatch, output_dir / "Lost.pdf")
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), *mode])
+
+        assert code == exits.SUCCESS
+        assert said in capsys.readouterr().out
+        assert (output_dir / "Lost.pdf").is_file() == (mode == ["-m", "0"])
+
+    def test_of_a_file_not_downloaded(self, tmp_path, output_dir, monkeypatch, capsys):
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Lost.pdf").write_bytes(b"%PDF-1.4\n")
+        _evict(monkeypatch, library / "Lost.pdf")
+        _dropping_in_the_main_thread(monkeypatch, output_dir / "Lost.pdf")
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--skip-incomplete"]
+        )
+
+        assert code == exits.SUCCESS
+        assert "1 not downloaded" in capsys.readouterr().out

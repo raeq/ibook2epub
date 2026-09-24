@@ -111,14 +111,17 @@ def _count_failed(report: Report, source: Path, exc: OSError) -> None:
     logger.error("Could not copy %s: %s", printable(source.name), exc)
 
 
-def _on_shelf(target: Path) -> bool:
+def on_shelf(target: Path) -> bool:
     """
     Whether a copy's name already holds a file, never raising.
 
     :param target: Where the copy goes.
 
     :return: True when something is there. One that cannot be told is taken
-        as not there: its copy is attempted, and fails as a copy.
+        as not there: its copy is attempted, and fails as a copy. Asked by
+        every look at a copy's name, in the workers and on the main thread:
+        ``Path.exists`` raises EIO there on 3.10 and 3.11, and one look that
+        did not catch it ended the run in a traceback with no summary.
     """
     try:
         return target.exists()
@@ -312,7 +315,7 @@ def copy_decisions(plan: CopyPlan, output_dir: Path) -> list[Decision]:
         reason = _not_downloaded(plan, output_dir, source, name)
         if reason is not None or name is None:
             decisions.append(Decision(source, INCOMPLETE, reason=reason))
-        elif (output_dir / name).exists():
+        elif on_shelf(output_dir / name):
             decisions.append(Decision(source, COPIED, output_dir / name))
         else:
             decisions.append(Decision(source, COPY, output_dir / name))
@@ -340,7 +343,7 @@ def _not_downloaded(
     """
     if source not in plan.evicted and name is not None:
         return None
-    if name is None or not (output_dir / name).exists():
+    if name is None or not on_shelf(output_dir / name):
         return "not downloaded from iCloud"
     if source in plan.unverified:
         return f"not downloaded from iCloud; cannot tell whether {name} is its copy"
@@ -438,7 +441,7 @@ def copy_through_all(
     """
     groups = _group_copies(plan, output_dir, report)
     waiting = sum(
-        1 for group in groups for _source, target in group if not _on_shelf(target)
+        1 for group in groups for _source, target in group if not on_shelf(target)
     )
     # Measured only when there is a copy to make, as the shelf is judged
     # (preflight.check_writable): a rerun with every file already copied was
