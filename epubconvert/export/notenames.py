@@ -155,8 +155,8 @@ class Vault:
         self._listed: dict[str, str] | None = None
         self._held: dict[str, Held] = {}
 
-    def spelling(self, name: str) -> str | None:
-        """The name a file the filesystem takes for *name* is listed under."""
+    def _listing(self) -> dict[str, str]:
+        """Every file there, by its filesystem key, listed once."""
         if self._listed is None:
             try:
                 with os.scandir(self.directory) as entries:
@@ -165,7 +165,15 @@ class Vault:
                 # Nothing is known to be there, so nothing is passed over for
                 # it; writing each note still reads what is there first.
                 self._listed = {}
-        return self._listed.get(filesystem_key(name))
+        return self._listed
+
+    def spelling(self, name: str) -> str | None:
+        """The name a file the filesystem takes for *name* is listed under."""
+        return self._listing().get(filesystem_key(name))
+
+    def notes(self) -> list[str]:
+        """Every ``.md`` file there, as it is listed."""
+        return sorted(name for name in self._listing().values() if name.endswith(".md"))
 
     def held(self, name: str) -> Held:
         """What the file at *name* is, read once."""
@@ -282,6 +290,9 @@ class Naming:
     #: The packages given a name whose note is another book's all the same:
     #: without suffix a book keeps its name, and writing it reports the note.
     refused: set[Path] = field(default_factory=set)
+    #: Each package's notes tagged for it under a name it is no longer
+    #: given, as the vault lists them, when the one it is given is not.
+    strays: dict[Path, list[str]] = field(default_factory=dict)
 
 
 class _Names:
@@ -468,6 +479,7 @@ def note_names(
             names.naming.refused.add(item.package)
     if suffix:
         _number(named, claimants, names)
+    _strays(named, claimants, names)
     return names.naming
 
 
@@ -494,6 +506,47 @@ def _number(
             if listed is None or (book and names.adopts(listed, item, book)):
                 names.give(item, listed or candidate)
                 break
+
+
+def _strays(
+    named: Sequence[Assignment], claimants: Mapping[Path, Claimant], names: _Names
+) -> None:
+    """
+    Find each book's note left under a name the book no longer has.
+
+    A book's name can change under it -- ``--name-by author-title``
+    adopted, or its metadata corrected -- and its tagged note was looked
+    for only under the names it has now: a fresh note was started beside
+    it, and the reader's writing stayed behind in the old one without a
+    word. Looked for only when the note the book is given is not tagged for
+    it, among the ``.md`` files already listed; every one of them is read
+    then, once.
+
+    :param named: Every book of the run with a name, in the run's order.
+    :param claimants: Each book with highlights.
+    :param names: The names given, whose strays are added in place.
+    """
+    tagged: dict[str, list[str]] | None = None
+    for item in named:
+        book = claimants.get(item.package)
+        given = names.given.get(item.package)
+        if book is None or given is None or names.vault.held(given).tag in book.tags:
+            continue
+        if tagged is None:
+            tagged = {}
+            for listed in names.vault.notes():
+                tag = names.vault.held(listed).tag
+                if tag is not None:
+                    tagged.setdefault(tag, []).append(listed)
+        key = filesystem_key(given)
+        mine = sorted(
+            listed
+            for tag in book.tags
+            for listed in tagged.get(tag, ())
+            if filesystem_key(listed) != key
+        )
+        if mine:
+            names.naming.strays[item.package] = mine
 
 
 def _reserve(

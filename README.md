@@ -795,6 +795,13 @@ gets a numbered note of its own. A book you remove from Books and add again
 gets a new id from Apple; its note, which names its file, is still its own,
 and is re-tagged the next time it changes.
 
+A book whose name changes — you adopt `--name-by author-title`, say, or its
+metadata is corrected — takes its note with it: the note is renamed to the
+new name, with everything of yours in it. If it cannot be, because something
+is already at the new name or the note's `.md.new` is still beside it, the
+run names it and exits `1` until you move it yourself; no second note is
+started beside it.
+
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
 One consequence worth knowing: the frontmatter is written once and never
