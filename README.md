@@ -861,6 +861,15 @@ into. So a locked library wants `-ae -ad ~/highlights.json`, or `-ao` on its
 own. The warning stays quiet when `-ad` is already in force, because then the
 highlights are in a file and there is nothing to report.
 
+A zipped book or a PDF copied through is on the shelf, but copied byte for
+byte, so `-ae` and `-ae -ar` embed nothing in it either. They say so in a
+warning of their own, which is quiet under `-ad` too:
+
+```text
+2 annotation(s) from 1 book(s) copied through unchanged were not embedded
+(copies are byte-for-byte): Beta.epub. Use -ad FILE or -ao FILE.
+```
+
 **This is ahead of the specification, not conformant to it.** That draft still
 has sections marked T.B.D., and its dependency on text fragments has not yet
 landed in HTML. The shape here is meant to become conformant without the data

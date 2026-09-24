@@ -296,3 +296,118 @@ class TestTwoZippedBooksOfOneSize:
         assert identifier_of(output_dir / "Book (2).epub") == "urn:uuid:C"
         assert " copied" not in again.out
         assert "collision" not in again.out
+
+
+class TestHighlightsOfABookCopiedThrough:
+    """
+    ``-ae`` embeds as each book is converted, and a book copied through is
+    copied byte for byte, so its highlights went in nowhere; the warning about
+    highlights that reached no file left the copies out, and ``-ae -ar``
+    walked the packages alone. Both said nothing.
+    """
+
+    WARNING = "copied through unchanged were not embedded"
+
+    @staticmethod
+    def _library(tmp_path: Path, monkeypatch) -> Path:
+        library, container = tmp_path / "lib", tmp_path / "container"
+        alpha = make_metadata_package(
+            library / "pkg", "Alpha.epub", title="Alpha", identifier="urn:uuid:A"
+        )
+        beta = zipped_book(tmp_path, library / "zipped" / "Beta.epub", "urn:uuid:B")
+        make_databases(
+            container,
+            rows=[
+                highlight(asset="A", uuid="UA", text="ALPHA TEXT"),
+                highlight(asset="B", uuid="UB1", text="BETA ONE"),
+                highlight(asset="B", uuid="UB2", text="BETA TWO"),
+            ],
+            books=[
+                library_row(asset="A", path=str(alpha), title="Alpha"),
+                library_row(asset="B", path=str(beta), title="Beta"),
+            ],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(container, policy),
+        )
+        return library
+
+    def test_a_conversion_says_so(self, tmp_path, output_dir, monkeypatch, capsys):
+        library = self._library(tmp_path, monkeypatch)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-ae"])
+        err = capsys.readouterr().err
+
+        assert code == 0
+        assert (
+            f"2 annotation(s) from 1 book(s) {self.WARNING} "
+            "(copies are byte-for-byte): Beta.epub. Use -ad FILE or -ao FILE."
+        ) in err
+        assert "reached no file" not in err
+
+    def test_a_refresh_says_so(self, tmp_path, output_dir, monkeypatch, capsys):
+        library = self._library(tmp_path, monkeypatch)
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        capsys.readouterr()
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar"])
+
+        assert code == 0
+        assert f"2 annotation(s) from 1 book(s) {self.WARNING}" in (
+            capsys.readouterr().err
+        )
+
+    def test_a_book_not_copied_says_why(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = self._library(tmp_path, monkeypatch)
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-ae"]
+            + ["--no-copy-through"]
+        )
+
+        assert (
+            "2 annotation(s) from 1 book(s) not copied (--no-copy-through) were "
+            "not embedded: Beta.epub."
+        ) in capsys.readouterr().err
+
+    def test_a_detached_file_is_where_they_went(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = self._library(tmp_path, monkeypatch)
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-ae"]
+            + ["-ad", str(tmp_path / "highlights.json")]
+        )
+
+        assert self.WARNING not in capsys.readouterr().err
+
+    def test_a_copy_that_lost_its_name_is_counted(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library, container = tmp_path / "lib", tmp_path / "container"
+        for folder, identifier in (("a", "urn:uuid:1965"), ("b", "urn:uuid:ACE")):
+            zipped_book(
+                tmp_path, library / folder / f"Dune {folder}.epub", identifier, "Dune"
+            )
+        make_databases(
+            container,
+            rows=[highlight(asset="B", uuid="UB", text="ACE TEXT")],
+            books=[library_row(asset="B", path=str(library / "b" / "Dune b.epub"))],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(container, policy),
+        )
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-ae"]
+            + ["--name-by", "author-title"]
+        )
+
+        assert f"1 annotation(s) from 1 book(s) {self.WARNING}" in (
+            capsys.readouterr().err
+        )

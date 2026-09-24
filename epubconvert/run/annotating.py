@@ -118,7 +118,55 @@ def annotations_after_export(
         kept = set(copyable)
         packages = [item for item in named if item.package not in kept]
         _warn_about_stranded(args, policy, found, packages, copyable)
+        _warn_about_copies(
+            index_by_package(
+                found, [item.package for item in named], copyable=copyable, quiet=True
+            ),
+            [item.package for item in named if item.package in kept],
+            copied=not args.no_copy_through,
+        )
     return None if code == exits.SUCCESS else code
+
+
+def _warn_about_copies(
+    index: dict[str, list[dict[str, Any]]], copies: Sequence[Path], *, copied: bool
+) -> None:
+    """
+    Say so when highlights belong to books taken along rather than converted.
+
+    ``-ae`` puts highlights in as a book is converted, and a zipped book or a
+    PDF is copied byte for byte, so there is nothing to put them in. The
+    warning about highlights that reached no file left the copies out, and
+    ``-ae -ar`` walked the packages alone, so both said nothing. Like that
+    warning, this one is not given under ``-ad``, where the highlights are
+    in a file already, and changes no exit code.
+
+    :param index: The annotations, by book.
+    :param copies: The books copied through, those that lost their name too.
+    :param copied: Whether the run copies them; under ``--no-copy-through``
+        it does not.
+    """
+    books = sorted(
+        {copy.name for copy in copies if annotations_for_book(copy.name, index)}
+    )
+    if not books:
+        return
+    count = sum(len(annotations_for_book(name, index)) for name in books)
+    shown = ", ".join(printable(name) for name in books[:3])
+    if len(books) > 3:
+        shown += f", and {len(books) - 3} more"
+    how = (
+        "copied through unchanged were not embedded (copies are byte-for-byte)"
+        if copied
+        else "not copied (--no-copy-through) were not embedded"
+    )
+    logger.warning(
+        "%d annotation(s) from %d book(s) %s: %s. Use -ad FILE or -ao FILE.",
+        count,
+        len(books),
+        how,
+        shown,
+    )
 
 
 def _warn_about_stranded(
@@ -501,6 +549,9 @@ def _embed_in_shelf(
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
+    if not args.annotations_detached:
+        # Rewritten are the packages' archives; a copy is not rebuilt.
+        _warn_about_copies(index, copyable, copied=True)
 
     # Every book it could not refresh is a failure, and so is a refresh the
     # floor stopped, as for a conversion. Both were logged and the run exited
