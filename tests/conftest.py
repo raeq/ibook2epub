@@ -43,6 +43,8 @@ module, so this map saves a search:
                              what survives obeys the shipped schema
 ``test_escaped_names.py``    a book's names in --verify and --validate, and
                              a skipped row's id, reach the terminal escaped
+``test_zip_names.py``        member names not flagged UTF-8, as Info-ZIP
+                             writes them (``package.member_name``)
 ===========================  ==================================================
 
 ``spec`` is exercised through the modules that use it rather than directly.

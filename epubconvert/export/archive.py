@@ -24,6 +24,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
 from ..collect.package import (
     ValidationError,
+    member_name,
     open_member,
     open_regular,
     read_member,
@@ -902,7 +903,7 @@ def _rebuild(
     """
     with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
         for info in members:
-            member = entry(info.filename, info.compress_type)
+            member = entry(member_name(info), info.compress_type)
             _size_ahead(member, info.file_size)
             with (
                 open_member(reading, info) as source,

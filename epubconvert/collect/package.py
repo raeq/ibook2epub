@@ -119,6 +119,38 @@ def disallowed_method(info: ZipInfo) -> str | None:
     )
 
 
+#: General-purpose flag bit 11: the member's name is encoded in UTF-8.
+_UTF8_NAME = 0x800
+
+
+def member_name(info: ZipInfo) -> str:
+    """
+    Name a member of an epub as OCF names it, in UTF-8, flagged or not.
+
+    The zip format reads a name without flag bit 11 as cp437, and zipfile does
+    just that. Info-ZIP -- the ``zip -X0``, ``zip -rX9`` recipe for making an
+    epub by hand -- writes the UTF-8 bytes of ``第1章.xhtml`` without the flag,
+    so zipfile handed back ``τ¼¼1τ½á.xhtml``: --verify called a sound book's
+    chapter missing, and a refresh rewrote it under that name, flagged UTF-8,
+    renaming it for good. OCF requires UTF-8 names, so an unflagged name is
+    read as UTF-8 when its bytes are UTF-8. One that is not was never an epub
+    name, and keeps the cp437 reading. ``ZipFile(metadata_encoding=)`` would
+    say this once per archive, but it arrived in Python 3.11.
+
+    :param info: The member, as the archive's directory describes it.
+
+    :return: Its name.
+    """
+    if info.flag_bits & _UTF8_NAME:
+        return info.filename
+    try:
+        # zipfile decoded the name as cp437, which maps every byte, so this
+        # recovers the bytes the archive holds.
+        return info.filename.encode("cp437").decode("utf-8")
+    except UnicodeError:
+        return info.filename
+
+
 def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
     """
     Open a member of an untrusted archive for streaming, if it can be bounded.
