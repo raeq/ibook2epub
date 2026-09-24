@@ -718,6 +718,7 @@ def replace_annotations(
         return False
 
     partial: Path | None = None
+    target_archive, mode = _what_to_replace(target_archive)
     try:
         with ZipFile(target_archive) as reading:
             names = reading.namelist()
@@ -738,8 +739,10 @@ def replace_annotations(
             )
             os.close(handle)
             partial = Path(temporary)
-            partial.chmod(file_mode())
             _rebuild(reading, members, partial, embedded_json(list(annotations)))
+            # After the rebuild, as write_atomically does: a book the user
+            # made read-only would otherwise make its own partial unwritable.
+            partial.chmod(mode)
 
         # Replaced once the original is closed rather than while it is still
         # being read, which a platform that locks open files refuses.
@@ -812,15 +815,7 @@ def write_atomically(target: Path, text: str) -> None:
 
     :raises OSError: If it could not be written. The old file survives.
     """
-    # Resolved unconditionally: a plain path resolves to itself, give or take
-    # a linked parent, and a link resolves to the file the user meant.
-    target = Path(os.path.realpath(target))
-    try:
-        # Permission bits only: a setuid or sticky bit on a notes file is not
-        # something to reproduce.
-        mode = stat.S_IMODE(target.stat().st_mode) & 0o777
-    except FileNotFoundError:
-        mode = file_mode()
+    target, mode = _what_to_replace(target)
     handle, temporary = tempfile.mkstemp(
         dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
     )
@@ -836,6 +831,30 @@ def write_atomically(target: Path, text: str) -> None:
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
+
+
+def _what_to_replace(target: Path) -> tuple[Path, int]:
+    """
+    Find the file a replace should land on, and the mode it should keep.
+
+    Resolved unconditionally: a plain path resolves to itself, give or take a
+    linked parent, and a link resolves to the file the user meant, so the
+    replace lands there and the link survives. Shared by every path that
+    replaces a file the user may have set up: the refresh of a book on the
+    shelf once reset its mode and replaced a linked entry, after the notes and
+    exports had been fixed for exactly that.
+
+    :param target: The path about to be replaced.
+
+    :return: The file to replace, and the permission bits to give the new one.
+    """
+    resolved = Path(os.path.realpath(target))
+    try:
+        # Permission bits only: a setuid or sticky bit is not something to
+        # reproduce.
+        return resolved, stat.S_IMODE(resolved.stat().st_mode) & 0o777
+    except FileNotFoundError:
+        return resolved, file_mode()
 
 
 def _sync(path: Path) -> None:

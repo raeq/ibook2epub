@@ -9,6 +9,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Refreshing a book's annotations keeps the permission bits the user set on
+  it, and refreshes through a shelf entry that is a link instead of
+  replacing the link with a plain file.
+
 - `--validate` and `--verify` report an archive holding two members of one
   name, which OCF forbids and readers resolve differently. It passed.
 

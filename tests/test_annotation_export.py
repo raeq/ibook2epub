@@ -21,6 +21,7 @@ because they answer different questions.
 
 import json
 import sqlite3
+import stat
 from pathlib import Path
 from urllib.parse import unquote
 from zipfile import ZIP_STORED, ZipFile
@@ -637,6 +638,59 @@ class TestTheFlagsDoNotOverlap:
             run.main(["-ar", "-ad", str(tmp_path / "x.json")])
 
         assert raised.value.code == 2
+
+
+class TestARefreshKeepsWhatTheUserSetOnTheBook:
+    """
+    A refresh replaces the book's file, so what the user set on the old one
+    -- its mode, the fact that the shelf entry is a link -- is carried across,
+    as ``write_atomically`` already does for the notes and exports.
+    """
+
+    HIGHLIGHT: list[dict[str, object]] = [
+        {
+            "id": "U1",
+            "book": {"title": "Book", "source": "Book.epub"},
+            "text": "a highlight",
+            "created": "2018-12-25T22:44:28Z",
+        }
+    ]
+
+    def _book(self, tmp_path: Path, output_dir: Path) -> Path:
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Book.epub", title="Book")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        return output_dir / "Book.epub"
+
+    def test_a_private_book_stays_private(self, tmp_path, output_dir):
+        # Regression: the rebuilt archive took the umask's mode, so a book the
+        # user had made 0600 became readable by everyone after -ar.
+        target = self._book(tmp_path, output_dir)
+        target.chmod(0o600)
+
+        assert archive.replace_annotations(target, self.HIGHLIGHT)
+
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_a_linked_shelf_entry_is_refreshed_through_the_link(
+        self, tmp_path, output_dir
+    ):
+        # Regression: the replace landed on the link, so a shelf entry linked
+        # into a synced folder became a plain file here and the synced copy
+        # never got the highlights.
+        built = self._book(tmp_path, output_dir)
+        synced = tmp_path / "synced"
+        synced.mkdir()
+        real = synced / "Book.epub"
+        built.rename(real)
+        built.symlink_to(real)
+
+        assert archive.replace_annotations(built, self.HIGHLIGHT)
+
+        assert built.is_symlink()
+        with ZipFile(real) as opened:
+            assert annotations.EMBEDDED_PATH in opened.namelist()
+        assert sorted(path.name for path in synced.iterdir()) == ["Book.epub"]
 
 
 class TestARefreshedArchiveIsStillReproducible:
