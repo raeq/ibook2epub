@@ -16,6 +16,7 @@ from .. import __version__
 from ..collect.annotations import STDOUT
 from ..collect.library import SHELVES
 from ..export.catalogue import LIBRARY_FORMATS
+from ..export.detached import vault_of
 from ..export.naming import NAME_PASSTHROUGH, NAME_SOURCES, PORTABLE_MODES, STRIP
 from ..utils.defaults import (
     DEFAULT_MAX_EXPORT_FILES,
@@ -45,7 +46,8 @@ from .planning import COLLISION_MODES, SKIP, STATUSES
 #: to prevent no confusion about the file's contents. The exports name their
 #: own destination and say where they wrote it. --min-free is accepted by
 #: --annotations-refresh alone, which rebuilds every archive it refreshes on
-#: the shelf's own volume; see REFRESH_WRITES.
+#: the shelf's own volume; see REFRESH_WRITES. --skip-incomplete and --workers
+#: are accepted by any of them that writes a vault; see VAULT_NAMES.
 CONVERSION_ONLY = (
     ("list_only", "--list"),
     ("verify", "--verify"),
@@ -67,6 +69,12 @@ CONVERSION_ONLY = (
 #: output volume, and refusing --min-free there left it rebuilding onto a
 #: volume already below the floor with no way to say otherwise.
 REFRESH_WRITES = frozenset({"min_free"})
+#: The CONVERSION_ONLY flags a vault of notes still has a use for. Its notes
+#: are named as the shelf names its books, the files copied through included,
+#: in a pool of --workers; under a metadata policy that opens each zipped
+#: epub, and opening one iCloud has evicted is the download --skip-incomplete
+#: exists to avoid. Both were consulted there and refused on the command line.
+VAULT_NAMES = frozenset({"skip_incomplete", "workers"})
 #: What neither report consults, since both only read. ``--dry-run`` made
 #: each announce a dry-run mode and changed nothing else; ``--annotations-none``
 #: states the default of a conversion, and neither converts --
@@ -676,8 +684,11 @@ def _check_convert_nothing_flags(
             "existing annotation export is merged into rather than replaced, "
             "and standard output has nothing to replace."
         )
+    vault = vault_of(args) is not None
     for held, spelled in CONVERSION_ONLY:
         if mode == "--annotations-refresh" and held in REFRESH_WRITES:
+            continue
+        if vault and held in VAULT_NAMES:
             continue
         if getattr(args, held) != parser.get_default(held):
             parser.error(
