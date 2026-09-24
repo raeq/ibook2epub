@@ -7,7 +7,42 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- `collect/validate.py` is split into `collect/identifiers.py` (identifier and
+  title canonicalisation), `collect/package.py` (reading a package) and
+  `collect/validate.py` (archive checks and epubcheck).
+
 ### Fixed
+
+- A small epub whose members declare a small size but decompress to
+  gigabytes (a "zip bomb") no longer makes the reader, `--verify` or an
+  annotation refresh allocate gigabytes and crash with an uncaught
+  MemoryError. Members compressed with anything but stored or deflate, which
+  OCF forbids, are refused unread, and every other read is bounded.
+
+- An already-zipped book whose zip directory holds a name flagged UTF-8 that
+  is not, or that needs a zip version newer than Python supports, no longer
+  ends a `--name-by author-title` run with a traceback; it keeps its own
+  filename.
+
+- `--epubcheck` no longer crashes when epubcheck writes output that is not
+  UTF-8, such as a member name in ISO-8859-1.
+
+- Placeholder ISBNs such as 0000000000, any repeated digit, 0123456789 and
+  their ISBN-13 forms are no longer exported as ISBNs to the Goodreads CSV or
+  note frontmatter.
+
+- Highlights Apple recorded against no book are no longer embedded in, or
+  written into the note of, a book that happens to be called "Unknown book".
+  They still appear in detached exports.
+
+- `--verify` and `--validate` check an archive with many duplicate member
+  names in linear time, and name at most five of them.
+
+- A book whose `META-INF/encryption.xml` or `sinf.xml` is a directory or a
+  FIFO is treated as protected rather than exported, and `encryption.xml` may
+  no longer declare XML entities, like every other document read.
 
 - `--verify`'s repair command names the output directory (`-o`) and, when you
   gave one, the library (`-s`), so it works as printed; it reminds you to add
