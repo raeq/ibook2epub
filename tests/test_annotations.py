@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert.collect import annotations, coredata
+from epubconvert.collect import annotations, coredata, library
 
 #: Core Data counts seconds from 2001-01-01, not from the Unix epoch.
 APPLE_EPOCH_OFFSET = 978307200
@@ -271,6 +271,29 @@ class TestWhatIsSkipped:
         json.dumps(annotations.build_document(found))
         assert [item["id"] for item in found] == ["U1"]
         assert "not text" in caplog.text
+
+    @pytest.mark.parametrize("asset", [None, ""], ids=["null", "empty"])
+    def test_a_highlight_without_an_asset_id_is_kept_under_an_unknown_book(
+        self, tmp_path, asset, caplog
+    ):
+        # Regression: the asset id was held to the same rule as the annotation
+        # id, so a highlight Apple recorded with no book was dropped with a
+        # warning. The schema does not require one, and it used to be exported.
+        make_databases(tmp_path, rows=[highlight(asset=asset)])
+
+        found = annotations.collect(tmp_path)
+
+        assert [item["book"]["title"] for item in found] == [library.UNKNOWN_BOOK]
+        assert annotations.schema_problems(annotations.build_document(found)) == []
+        assert "asset id" not in caplog.text
+
+    def test_an_empty_blob_for_an_asset_id_is_still_not_text(self, tmp_path, caplog):
+        make_databases(tmp_path, rows=[highlight(uuid="BAD", asset=b""), highlight()])
+
+        found = annotations.collect(tmp_path)
+
+        assert [item["id"] for item in found] == ["U1"]
+        assert "asset id is bytes, not text" in caplog.text
 
 
 class TestTheLocator:

@@ -366,7 +366,12 @@ def _annotation_of(
     # guard. Only the text was checked, and a BLOB anywhere else reached
     # json.dumps, which raised outside every guard and cost the whole export.
     _required_text(row["ZANNOTATIONUUID"], "annotation id")
-    asset_id = _required_text(row["ZANNOTATIONASSETID"] or "", "asset id")
+    # The book may be missing, though: the schema does not require one, and
+    # such a highlight is exported under an unknown book rather than dropped.
+    asset = row["ZANNOTATIONASSETID"]
+    if asset is not None and not isinstance(asset, str):
+        raise TypeError(f"asset id is {type(asset).__name__}, not text")
+    asset_id = asset or ""
     known = library.get(asset_id, {})
     package = package_of(known)
     book = read_package_once(package, parsed) if package else None
