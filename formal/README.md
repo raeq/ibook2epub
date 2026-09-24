@@ -142,8 +142,8 @@ file of its name), or the file of its marked name once its crowd has left it; wi
 usable identifier, the one numbered file when no other package wants the name
 and nothing holds the plain name, and with `AskNumbered` only when that file
 declares no usable identifier either. `KeepShared` asks the same where two
-packages want one name and no file of it is numbered: the one whose
-identifier the plain file declares keeps it. A copy that keeps that file sends the
+packages want one name and a file of it is on the shelf, numbered or not:
+the one whose identifier the plain file declares keeps it. A copy that keeps that file sends the
 package back to claim a name (`_Claiming.reclaim`). `ReclaimOwn` widens that
 to any package given the name of a file the claim pass kept as a copy's own
 bytes: in suffix mode it claims its marked or numbered name, and in skip mode

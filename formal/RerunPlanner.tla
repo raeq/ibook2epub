@@ -60,7 +60,8 @@
  * suffix mode, its own name numbered, as a copy has. KeepNumbered is
  * claims.kept_numbers: in suffix mode a package keeps the numbered file of
  * its name that declares its identifier (with KeepShared, the plain one too
- * where another package wants its name and no file is numbered), which is read for this whatever
+ * where another package wants its name and a file of it is on the shelf,
+ * numbered or not), which is read for this whatever
  * the policy (unless --skip-incomplete leaves the book unopened, which is
  * not modelled: then no numbered or marked file of its name is an orphan),
  * or the file of its marked name once its crowd has left it;
