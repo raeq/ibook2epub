@@ -9,6 +9,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A run without `-s` no longer crashes with a traceback when macOS refuses
+  to let it look into the second place Apple has kept the library; that
+  place is passed over and the first is used.
+
+- A package member swapped for a hard link after it was checked is refused
+  when opened, as a swapped symlink already was.
+
+- The test suite shipped in the source distribution passes: its check of
+  the CI configuration skips where `.github` is not included.
+
 - Refreshing a book's annotations keeps the permission bits the user set on
   it, and refreshes through a shelf entry that is a link instead of
   replacing the link with a plain file.

@@ -213,11 +213,17 @@ class TestTheReadmeQuotesTheRealHelp:
         assert missing == []
 
 
+WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+
+
+# MANIFEST.in prunes .github, and the sdist ships the tests: a packager running
+# them there got a FileNotFoundError from a check that is about CI, not the code.
+@pytest.mark.skipif(not WORKFLOW.is_file(), reason="no .github in this tree")
 class TestEveryCiJobHasATimeout:
     """A hung job otherwise holds a runner for GitHub's six-hour default."""
 
     def test_every_job_declares_timeout_minutes(self):
-        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text("utf-8")
+        workflow = WORKFLOW.read_text("utf-8")
         jobs = workflow.split("\njobs:\n", 1)[1]
         # Each job is a two-space-indented key; its body runs to the next one.
         blocks = re.split(r"^  (?=[a-z][a-z0-9_-]*:\s*$)", jobs, flags=re.MULTILINE)

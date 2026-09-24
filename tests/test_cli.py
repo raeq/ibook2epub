@@ -7,6 +7,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 import pytest
 
@@ -267,6 +268,28 @@ class TestSourceDiscovery:
         monkeypatch.setattr(defaults, "SOURCE_CANDIDATES", (empty, missing))
 
         assert defaults.discover_source() == empty
+
+    def test_a_candidate_macos_refuses_to_examine_is_passed_over(
+        self, tmp_path, monkeypatch
+    ):
+        # The second home is inside another app's container, which macOS
+        # answers with EPERM without Full Disk Access. is_dir() swallows only
+        # "absent" errors, so discovery raised a traceback out of parse_args
+        # even when the library was in the first home.
+        stocked = tmp_path / "stocked"
+        make_package(stocked, "Dune.epub")
+        refused = tmp_path / "refused"
+        monkeypatch.setattr(defaults, "SOURCE_CANDIDATES", (stocked, refused))
+        original = Path.is_dir
+
+        def is_dir(self):
+            if self == refused:
+                raise PermissionError(1, "Operation not permitted", str(self))
+            return original(self)
+
+        monkeypatch.setattr(Path, "is_dir", is_dir)
+
+        assert defaults.discover_source() == stocked
 
     def test_falls_back_to_the_default_when_nothing_exists(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
