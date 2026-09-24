@@ -18,6 +18,7 @@ import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from xml.parsers import expat
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -812,3 +813,34 @@ class TestEntityDeclarationsAreRefused:
 
         with pytest.raises(package_reader.ValidationError, match="entities"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
+
+    def test_the_check_stops_at_the_first_declaration(self, monkeypatch):
+        # The check parsed the whole document, so every reference it went on
+        # to meet was expanded before the declaration was refused.
+        expanded: list[str] = []
+        create = expat.ParserCreate
+
+        def watched(*args, **kwargs):
+            parser = create(*args, **kwargs)
+            parser.CharacterDataHandler = expanded.append
+            return parser
+
+        monkeypatch.setattr(expat, "ParserCreate", watched)
+        document = b'<!DOCTYPE d [<!ENTITY a "x"><!ENTITY b "y">]><d>&a;&b;&a;</d>'
+
+        with pytest.raises(package_reader.EntityDeclarationError):
+            package_reader.parse_xml(document)
+
+        assert expanded == []
+
+    def test_billion_laughs_is_refused_as_a_declaration(self):
+        # Before, expat's own amplification limit refused it, silently and
+        # only on an expat new enough to have one, as "not valid XML".
+        entities = '<!ENTITY a "aaaaaaaaaa">' + "".join(
+            f'<!ENTITY {chr(98 + level)} "{f"&{chr(97 + level)};" * 10}">'
+            for level in range(8)
+        )
+        document = f"<!DOCTYPE d [{entities}]><d>&i;</d>".encode("ascii")
+
+        with pytest.raises(package_reader.EntityDeclarationError):
+            package_reader.parse_xml(document)

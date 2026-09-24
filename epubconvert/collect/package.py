@@ -361,6 +361,11 @@ def _declares_entities(data: bytes) -> bool:
     a decoy ``<!DOCTYPE`` -- because each had to re-derive where the declaration
     starts and ends. expat already knows, so it is asked.
 
+    The parse stops at the first declaration. Parsed to the end, it expanded
+    every reference it met before the answer was given, so the one check
+    meant to spare the tool an expansion performed it, and a billion-laughs
+    document was stopped only by expat's own limit where it has one.
+
     A malformed document is left alone here and refused by the parse that
     follows, which reports it better.
 
@@ -369,15 +374,30 @@ def _declares_entities(data: bytes) -> bool:
     :return: True if the document declares any entity.
     """
     parser = expat.ParserCreate()
-    declared: list[int] = []
-    parser.EntityDeclHandler = lambda *_args: declared.append(1)
+    parser.EntityDeclHandler = _stop_at_declaration
     try:
         parser.Parse(data, True)
+    except _EntityDeclaredError:
+        return True
     except (expat.ExpatError, ValueError, LookupError):
         # An encoding expat refuses is malformed for this purpose too, and
         # raised LookupError from here, ahead of the parse that reports it.
         return False
-    return bool(declared)
+    return False
+
+
+class _EntityDeclaredError(Exception):
+    """Raised out of expat to stop a parse at an entity declaration."""
+
+
+def _stop_at_declaration(*_args: object) -> None:
+    """
+    Stop the parse: an entity has been declared, and nothing more is needed.
+
+    :raises _EntityDeclaredError: Always. expat abandons the parse and ``Parse``
+        raises it, before any content, and so any reference, is reached.
+    """
+    raise _EntityDeclaredError
 
 
 def _opf_path(members: _Members) -> str:
