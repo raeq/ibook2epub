@@ -36,7 +36,7 @@ from ..utils.policy import Assignment, NamingPolicy
 from .claims import shelf_names
 from .convert import OutputLockedError, output_lock, progress_for
 from .copying import plan_copies
-from .copynames import claim_copies
+from .copynames import Names, claim_copies
 from .placing import placed, settled
 from .planning import assign_names
 
@@ -379,19 +379,12 @@ def _with_copies(
 
     :return: The packages' names, then the other books'.
     """
-    copies = plan_copies(
-        copyable,
+    names = _claimed(
+        args,
         policy,
-        max_workers=args.workers,
-        skip_incomplete=args.skip_incomplete,
-    )
-    names = claim_copies(
         assignments,
-        copies.named,
-        policy,
-        args.on_collision,
+        copyable,
         output_dir=args.output_dir if shelf else None,
-        unopened=copies.evicted,
     )
     everything = [*names.packages, *names.copies]
     if not shelf:
@@ -402,6 +395,72 @@ def _with_copies(
             for item in everything
         ]
     return settled(everything, args.output_dir, policy)
+
+
+def _claimed(
+    args: argparse.Namespace,
+    policy: NamingPolicy,
+    assignments: Sequence[Assignment],
+    copyable: Sequence[Path],
+    *,
+    output_dir: Path | None,
+) -> Names:
+    """
+    Name the library's copies in the claim pass the packages were named in.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+    :param assignments: Every package's name.
+    :param copyable: The library's already-zipped books and PDFs.
+    :param output_dir: The shelf to weigh, or None to name without one.
+
+    :return: The packages' names, some with an identifier read, and the
+        copies', as :func:`~epubconvert.run.copynames.claim_copies` gives them.
+    """
+    copies = plan_copies(
+        copyable,
+        policy,
+        max_workers=args.workers,
+        skip_incomplete=args.skip_incomplete,
+    )
+    return claim_copies(
+        assignments,
+        copies.named,
+        policy,
+        args.on_collision,
+        output_dir=output_dir,
+        unopened=copies.evicted,
+    )
+
+
+def _shelved(
+    args: argparse.Namespace,
+    policy: NamingPolicy,
+    assignments: Sequence[Assignment],
+    copyable: Sequence[Path],
+) -> list[Assignment]:
+    """
+    Name every book as the run names it, to place the packages as it does.
+
+    The packages, with the identifier read of each a copy wanted the name of,
+    then the copies, placed on the shelf (run._shared_names). ``-ar`` placed
+    the packages alone and read no identifier, so a package named from the
+    folder that the run had moved on past a copy's file took that file for
+    its own; compared before the write, it then had no archive at all, and
+    its highlights were never refreshed.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+    :param assignments: Every package's name.
+    :param copyable: The library's already-zipped books and PDFs.
+
+    :return: The packages' names, then the copies'.
+    """
+    names = _claimed(args, policy, assignments, copyable, output_dir=args.output_dir)
+    if not names.copies:
+        return names.packages
+    copies = settled([*names.packages, *names.copies], args.output_dir, policy)
+    return [*names.packages, *copies[len(names.packages) :]]
 
 
 def apply_annotations(
@@ -599,7 +658,7 @@ def _embed_in_shelf(
             # from the folder reads the book's own identifier to compare --
             # only for the books with highlights, the ones rewritten.
             places = placed(
-                assignments,
+                _shelved(args, policy, assignments, copyable),
                 args.output_dir,
                 policy,
                 writing=True,

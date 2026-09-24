@@ -26,6 +26,7 @@ from epubconvert.collect import annotations
 from epubconvert.run.run import main
 from tests.conftest import make_metadata_package, remove_tree
 from tests.test_annotations import highlight, library_row, make_databases
+from tests.test_copy_claims import zipped_book
 
 PLAIN = "Frank Herbert - Dune.epub"
 
@@ -160,3 +161,36 @@ class TestAHighlightWithNoArchiveOfItsOwnIsReported:
         assert "Name collision, skipping: Dune.epub" in warned
         assert "reached no file: Dune.epub" in warned
         assert _embedded(output / "Dune.epub") is None
+
+
+class TestARefreshFindsABookMovedOnPastACopy:
+    def test_the_package_moved_on_past_a_copys_file_gets_its_highlights(
+        self, tmp_path, monkeypatch
+    ):
+        # A zipped book copied as "Dune A.epub"; a package that -p strip names
+        # the same is placed past it at "Dune A (2).epub". -ar placed the
+        # packages without the copies, read no identifier, took the copy's
+        # file for the package's own, and then, comparing before the write,
+        # found no archive at all: nothing was refreshed.
+        library, output = tmp_path / "lib", tmp_path / "out"
+        zipped_book(tmp_path, library / "z" / "Dune A.epub", "urn:uuid:Z", "Z")
+        flags = ["-p", "strip", "--on-collision", "suffix"]
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-q", *flags])
+        package = make_metadata_package(
+            library / "p", "Dune: A.epub", title="Dune", identifier="urn:uuid:P"
+        )
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-q", *flags])
+        make_databases(
+            tmp_path / "container",
+            rows=[highlight()],
+            books=[library_row(path=str(package), title="Dune")],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+
+        main(["-s", str(library), "-o", str(output), "-ae", "-ar", "-q", *flags])
+
+        assert _embedded(output / "Dune A (2).epub") == ["U1"]
+        assert _embedded(output / "Dune A.epub") is None
