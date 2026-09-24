@@ -156,7 +156,8 @@ def annotations_refusal(target: Path, *, pending: Sequence[Path] = ()) -> str | 
     :param target: The file the run would write.
     :param pending: Directories the run makes before it writes this, so a
         file inside a shelf the run is about to create is not refused for
-        being judged before the shelf exists.
+        being judged before the shelf exists, and one that is that shelf,
+        or a directory above it, is.
 
     :return: The reason, or None when the write can go ahead.
     """
@@ -165,19 +166,37 @@ def annotations_refusal(target: Path, *, pending: Sequence[Path] = ()) -> str | 
     except ContainerUnavailableError as exc:
         return str(exc)
     # Where the write lands: through a link, beside the file it resolves to.
-    folder = Path(os.path.realpath(target)).parent
-    if str(folder) in {os.path.realpath(path) for path in pending}:
-        return None
+    landing = os.path.realpath(target)
+    coming = {os.path.realpath(path) for path in pending}
+    if landing in coming:
+        # The shelf, or a directory the run makes above it: not there yet, so
+        # judged only by its parent it passed, and the write found a directory
+        # once every book had been converted into it.
+        return _cannot_write(target, os.strerror(errno.EISDIR))
+    folder = Path(landing).parent
+    reason = None if str(folder) in coming else _directory_refusal(folder)
+    return None if reason is None else _cannot_write(target, reason)
+
+
+def _directory_refusal(folder: Path) -> str | None:
+    """
+    Say why this run cannot write into a directory that is there, if it cannot.
+
+    :param folder: The directory.
+
+    :return: The reason, as the operating system puts it, or None when it is
+        a directory this run may write into.
+    """
     try:
         # os.stat, as the shelf is judged: Path.stat is its own binding on
         # 3.10 and 3.14.
         mode = os.stat(folder).st_mode  # noqa: PTH116
     except OSError as exc:
-        return _cannot_write(target, exc.strerror or str(exc))
+        return exc.strerror or str(exc)
     if not stat.S_ISDIR(mode):
-        return _cannot_write(target, os.strerror(errno.ENOTDIR))
+        return os.strerror(errno.ENOTDIR)
     if not os.access(folder, os.W_OK | os.X_OK):
-        return _cannot_write(target, os.strerror(errno.EACCES))
+        return os.strerror(errno.EACCES)
     return None
 
 

@@ -118,6 +118,33 @@ class TestAFileItCannotWrite:
             capsys.readouterr().err
         )
 
+    @pytest.mark.parametrize("mode", EITHER_RUN)
+    @pytest.mark.parametrize(
+        ("shelf", "named"),
+        [
+            pytest.param("Books", "Books", id="the-shelf"),
+            pytest.param("Books/", "Books/", id="the-shelf-spelt-as-a-directory"),
+            pytest.param("Library/epub", "Library", id="a-directory-above-it"),
+        ],
+    )
+    def test_that_the_run_makes_as_a_directory(
+        self, library, capsys, shelf, named, mode
+    ):
+        # Only the file's parent was judged, so the shelf the run was about
+        # to make passed: the dry run exited 0, and the real run converted
+        # the library and then refused a file that was now a directory.
+        here = f"{library.parent}{os.sep}"
+
+        code = run.main(
+            ["-s", str(library), "-o", here + shelf, "-m", "0", "-ae", "-ad"]
+            + [here + named, *mode]
+        )
+
+        err = capsys.readouterr().err
+        assert code == exits.NO_OUTPUT
+        assert f"Could not write {Path(here + named)}: Is a directory" in err
+        assert not Path(here + shelf).exists()
+
     @needs_permissions
     def test_for_real(self, library, tmp_path, capsys):
         closed = tmp_path / "closed"
