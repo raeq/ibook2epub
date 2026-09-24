@@ -24,6 +24,7 @@ from ..utils.defaults import (
     DEFAULT_OUTPUT,
     discover_source,
 )
+from ..utils.display import printable
 from .planning import COLLISION_MODES, SKIP, STATUSES
 
 #: Flags that only mean something when books are converted or the shelf is
@@ -806,7 +807,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if output == source or output.is_relative_to(source):
         parser.error(
             f"output directory must not be inside the source directory: "
-            f"{args.output_dir}"
+            f"{printable(str(args.output_dir))}"
         )
 
     return args

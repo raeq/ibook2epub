@@ -72,7 +72,7 @@ def gather_annotations(
     except ContainerUnavailableError as exc:
         if required:
             raise
-        logger.error("Could not read annotations: %s", exc)
+        logger.error("Could not read annotations: %s", printable(str(exc)))
         return None
 
 
@@ -338,7 +338,7 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     try:
         found = collect_annotations(policy=policy)
     except ContainerUnavailableError as exc:
-        logger.critical("Could not read annotations: %s", exc)
+        logger.critical("Could not read annotations: %s", printable(str(exc)))
         return exc.exit_code
     if args.dry_run:
         # Guarded here, where the write is decided, rather than at the call
@@ -575,7 +575,7 @@ def apply_annotations(
         # Nothing was converted, so the highlights were the whole run and why
         # they could not be read is its outcome: 4 for a missing library, 8
         # for a refusal (#19). This route only ever saw None before.
-        logger.error("Could not read annotations: %s", exc)
+        logger.error("Could not read annotations: %s", printable(str(exc)))
         return exc.exit_code
     if found is None:
         # The books are the point and they are already on the shelf. Reporting

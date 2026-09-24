@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from epubconvert.collect.coredata import ContainerUnavailableError
 from epubconvert.run import run
 from epubconvert.run.convert import LOCK_NAME
 from tests.conftest import make_package
@@ -177,3 +178,71 @@ def test_the_lock_is_refused_the_same_way_by_a_dry_run(tmp_path, library, capsys
 
     assert code == 5
     assert "not a plain file" in said
+
+
+#: Rewrites the line, and reverses what follows it.
+HOSTILE = "\x1b[31m\u202e"
+
+
+def _clean(said: str) -> bool:
+    """Whether neither control reached the terminal."""
+    return "\x1b" not in said and "\u202e" not in said
+
+
+class TestEveryPathAMessageCarriesIsEscaped:
+    """
+    Four messages still printed a path as it was: argparse refusing an
+    output directory inside the library, the homes probed for a library,
+    and the three routes that say why Apple's container could not be read,
+    whose error names a path under $HOME.
+    """
+
+    def test_a_shelf_inside_the_library(self, library, capsys):
+        with pytest.raises(SystemExit) as refused:
+            run.main(["-s", str(library), "-o", str(library / f"out{HOSTILE}")])
+
+        err = capsys.readouterr().err
+        assert refused.value.code == 2
+        assert "must not be inside the source directory" in err
+        assert _clean(err)
+
+    def test_the_homes_probed_for_a_library(self, tmp_path, monkeypatch, capsys):
+        candidates = (tmp_path / f"one{HOSTILE}", tmp_path / f"two{HOSTILE}")
+        monkeypatch.setattr("epubconvert.run.preflight.SOURCE_CANDIDATES", candidates)
+        monkeypatch.setattr(
+            "epubconvert.run.cli.discover_source", lambda: candidates[0]
+        )
+
+        code, said = _run(capsys, "-o", str(tmp_path / "out"))
+
+        assert code == 4
+        assert "Looked in" in said
+        assert _clean(said)
+
+    @pytest.mark.parametrize(
+        ("mode", "expected"),
+        [
+            pytest.param(["-m", "0", "-ae"], 0, id="convert"),
+            pytest.param(["-ao", "h.json"], 4, id="annotations-only"),
+            pytest.param(["-ae", "-ar"], 4, id="refresh"),
+        ],
+    )
+    def test_why_the_container_could_not_be_read(
+        self, library, monkeypatch, capsys, mode, expected
+    ):
+        def unavailable(**_kwargs):
+            raise ContainerUnavailableError(f"/Users/x{HOSTILE}/Library is not there")
+
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", unavailable
+        )
+        monkeypatch.chdir(library.parent)
+        output = library.parent / "out"
+        run.main(["-s", str(library), "-o", str(output), "-m", "0", "-q"])
+        capsys.readouterr()
+
+        code, said = _run(capsys, "-s", str(library), "-o", str(output), *mode)
+
+        assert code == expected
+        assert "is not there" in said
+        assert _clean(said)
