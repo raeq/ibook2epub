@@ -159,6 +159,19 @@ class TestAnHrefUrlsplitRefusesIsStillAPath:
         with ZipFile(path) as opened, pytest.raises(validate.ValidationError):
             validate.read_package(opened)
 
+    def test_its_message_reaches_the_terminal_escaped(self, tmp_path, monkeypatch):
+        # A ValueError's text can quote the href it choked on.
+        def refuse(base, href):
+            raise ValueError(f"bad href {href}\x1b[2K\r")
+
+        monkeypatch.setattr(validate, "_resolve", refuse)
+        path = write_epub(tmp_path / "Book.epub")
+
+        with ZipFile(path) as opened, pytest.raises(validate.ValidationError) as err:
+            validate.read_package(opened)
+
+        assert "\x1b" not in str(err.value) and "\r" not in str(err.value)
+
 
 def _hostile_library(tmp_path: Path, zipped: bool) -> Path:
     library = tmp_path / "library"

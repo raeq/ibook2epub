@@ -631,7 +631,7 @@ def _package(members: _Members) -> Package:
     try:
         return _package_from_root(_element(members, opf_path), opf_path)
     except ValueError as exc:  # Every reader catches ValidationError, not this.
-        raise ValidationError(f"unreadable package document: {exc}") from exc
+        raise ValidationError(f"unreadable package: {printable(str(exc))}") from exc
 
 
 def _canonical_identifier(root: ElementTree.Element) -> str | None:
