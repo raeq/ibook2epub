@@ -6,12 +6,14 @@
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile
 
 import pytest
 
+from epubconvert.collect.annotations import EMBEDDED_PATH
 from epubconvert.collect.validate import ValidationError, read_package_dir
 from epubconvert.export import inspect_output
 from epubconvert.export.archive import ARCHIVE_TIMESTAMP, zip_package
@@ -88,6 +90,48 @@ class TestDeterministicArchives:
         with ZipFile(target) as archive:
             for info in archive.infolist():
                 assert (info.external_attr >> 16) & 0o044
+
+
+class TestAPackageCarryingItsOwnAnnotations:
+    """
+    A sideloaded package can arrive with ``META-INF/annotations.json`` already
+    in it. The zip format allows two members with one name; the OCF does not,
+    and readers disagree about which of the two they see.
+    """
+
+    MINE = ({"id": "MINE"},)
+
+    @staticmethod
+    def _package(library: Path) -> Path:
+        package = make_package(library, "Book.epub")
+        (package / EMBEDDED_PATH).write_text('{"annotations": [{"id": "THEIRS"}]}')
+        return package
+
+    def test_embedding_annotations_leaves_one_member_of_that_name(
+        self, tmp_path, output_dir
+    ):
+        # Regression: the package's own copy was stored as a member and then
+        # _embed_annotations wrote the name again, so the archive held two.
+        target = output_dir / "Book.epub"
+
+        count = zip_package(
+            self._package(tmp_path / "lib"), target, annotations=list(self.MINE)
+        )
+
+        with ZipFile(target) as archive:
+            names = archive.namelist()
+            held = json.loads(archive.read(EMBEDDED_PATH))
+        assert names.count(EMBEDDED_PATH) == 1
+        assert held["annotations"] == list(self.MINE)
+        assert count == len(names) - 1
+
+    def test_without_annotations_the_package_keeps_its_own(self, tmp_path, output_dir):
+        target = output_dir / "Book.epub"
+
+        zip_package(self._package(tmp_path / "lib"), target)
+
+        with ZipFile(target) as archive:
+            assert b"THEIRS" in archive.read(EMBEDDED_PATH)
 
 
 class TestInterrupt:

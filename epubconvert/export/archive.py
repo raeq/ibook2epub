@@ -430,6 +430,16 @@ def zip_package(
                     logger.trace("Excluded from archive: %s", path.name)
                     continue
                 arcname = path.relative_to(source_dir).as_posix()
+                if annotations and arcname == EMBEDDED_PATH:
+                    # Replaced, not stored twice. A sideloaded package can
+                    # arrive carrying its own set, and copying it before
+                    # _embed_annotations wrote the name again left two members
+                    # called that: zip allows it, the OCF does not, and readers
+                    # disagree about which one they see. Replacing is what
+                    # replace_annotations does to an archive already on the
+                    # shelf, so a fresh export and a refresh agree.
+                    logger.trace("Replaced by this run's annotations: %s", arcname)
+                    continue
                 with (
                     open_contained(path) as source,
                     archive.open(
