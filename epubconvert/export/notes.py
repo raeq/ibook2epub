@@ -43,6 +43,7 @@ from .naming import (
     encode_name,
     truncate_bytes,
 )
+from .notenames import note_names
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
 #: copied through untouched. Written from the first run even when there is
@@ -587,6 +588,7 @@ def write_vault(
     named: Sequence[Assignment],
     *,
     copyable: Sequence[Path],
+    suffix: bool = False,
 ) -> int:
     """
     Write one Markdown note per annotated book, into a vault.
@@ -607,6 +609,10 @@ def write_vault(
         answer to a name a package may carry too. Left out, a zipped book's
         highlights were written into the note of the package that shares its
         name.
+    :param suffix: Whether the run settles a collision with ``" (n)"``, as
+        ``--on-collision suffix`` asks. Two books can hold distinct names and
+        still want one note -- ``Dune.epub`` and ``Dune.pdf`` -- and under it
+        the second is numbered rather than left without one.
 
     :return: A process exit code.
     """
@@ -625,20 +631,15 @@ def write_vault(
         return exits.NO_OUTPUT
 
     index = index_by_package(found, [item.package for item in named], copyable=copyable)
-    tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
-    collided: list[str] = []
-    for item in named:
-        mine = for_book(item.package.name, index)
-        if not mine:
-            continue
-        if not item.filename:
-            # Lost a name collision, so it has no stem to share. Under -ao no
-            # planner runs to report the collision, and these highlights were
-            # dropped without a word.
-            collided.append(item.package.name)
-            continue
-        target = directory / (Path(item.filename).stem + ".md")
-        tally[_write_one(target, mine)].append(target.name)
+    tally, collided = _write_notes(
+        directory,
+        [
+            (item, mine)
+            for item in named
+            if (mine := for_book(item.package.name, index))
+        ],
+        suffix=suffix,
+    )
 
     logger.info(
         "Wrote %d note(s) to %s.", len(tally["written"]), printable(str(directory))
@@ -680,6 +681,37 @@ def write_vault(
             logger.warning(sentence, len(tally[outcome]), _naming(tally[outcome]))
     unsaved = any(tally[outcome] for outcome in UNSAVED)
     return exits.FAILED if unsaved else exits.SUCCESS
+
+
+def _write_notes(
+    directory: Path,
+    wanted: list[tuple[Assignment, list[dict[str, Any]]]],
+    *,
+    suffix: bool,
+) -> tuple[dict[str, list[str]], list[str]]:
+    """
+    Write each book's note, and name the books that have none to write.
+
+    :param directory: The vault.
+    :param wanted: Each book with highlights, and its highlights.
+    :param suffix: Whether a book that loses its note's name is numbered.
+
+    :return: The notes by outcome, and the books that lost a name collision.
+    """
+    tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
+    names = note_names([item for item, _ in wanted if item.filename], suffix=suffix)
+    collided: list[str] = []
+    for item, mine in wanted:
+        name = names[item.package] if item.filename else None
+        if name is None:
+            # Lost a name collision: the book's own, which leaves it no stem to
+            # share -- under -ao no planner runs to report that, and these
+            # highlights were dropped without a word -- or its note's, when
+            # another book's file has the same stem.
+            collided.append(item.package.name)
+            continue
+        tally[_write_one(directory / name, mine)].append(name)
+    return tally, collided
 
 
 #: Everything :func:`_write_one` can report, so the tally cannot be typo'd into

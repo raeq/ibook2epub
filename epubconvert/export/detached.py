@@ -66,7 +66,13 @@ def write_export(
     :return: A process exit code.
     """
     if args.annotations_format == "markdown":
-        return notes.write_vault(found, destination, named, copyable=copyable)
+        return notes.write_vault(
+            found,
+            destination,
+            named,
+            copyable=copyable,
+            suffix=args.on_collision == "suffix",
+        )
     return _write_detached(found, destination)
 
 
