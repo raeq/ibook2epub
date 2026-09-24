@@ -130,6 +130,12 @@ BLOCK_OPENERS = re.compile(
     re.VERBOSE,
 )
 
+#: What would end the emphasis an author's name is wrapped in: a star, and
+#: a backslash, which would escape the closing one. An underscore is left
+#: alone: inside the stars it can only nest emphasis, never end it, and a
+#: backslash before it shows in Obsidian's source view.
+EMPHASIS = re.compile(r"[\\*]")
+
 #: What stands in for a column of indentation. CommonMark counts only spaces
 #: and tabs as indentation, so a no-break space keeps an indented line where
 #: the reader put it without opening a code block.
@@ -265,8 +271,12 @@ def body(found: list[dict[str, Any]]) -> str:
     """
     book = found[0].get("book", {}) if found else {}
     lines = [f"# {collapse(book.get('title', 'Unknown book'))}"]
-    if book.get("author"):
-        lines.append(f"*{collapse(book['author'])}*")
+    author = collapse(book.get("author") or "")
+    if author:
+        # Wrapped in stars for emphasis, so the author's own are escaped: an
+        # author of "*" made "***", a thematic break, and a star or a final
+        # backslash of theirs ended the emphasis early.
+        lines.append("*" + EMPHASIS.sub(r"\\\g<0>", author) + "*")
 
     chapter: object = object()  # Never equal to a real chapter, so the first
     for item in found:  # one always prints.

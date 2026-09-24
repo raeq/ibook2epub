@@ -490,6 +490,36 @@ class TestEscaping:
         assert "## Ch One" in body
 
 
+class TestTheAuthorLine:
+    """The author is wrapped in stars for emphasis, and is the book's text."""
+
+    @pytest.mark.parametrize(
+        ("author", "line"),
+        [
+            pytest.param("*", "*\\**", id="a star, once a thematic break"),
+            pytest.param("***", "*\\*\\*\\**", id="three stars"),
+            pytest.param("*Anon", "*\\*Anon*", id="a leading star"),
+            pytest.param("Anon*", "*Anon\\**", id="a trailing star"),
+            # An underscore inside the stars nests emphasis at worst, and
+            # never ends it, so it is left as the author wrote it.
+            pytest.param("A_non_", "*A_non_*", id="underscores"),
+            pytest.param("Anon\\", "*Anon\\\\*", id="a backslash before the closer"),
+            pytest.param("James S.A. Corey", "*James S.A. Corey*", id="plain"),
+        ],
+    )
+    def test_an_authors_own_emphasis_marks_are_escaped(self, author, line):
+        # Wrapped in stars for emphasis: "*" alone made "***", a thematic
+        # break, and a star or backslash of the author's ended it early.
+        body = notes.body([_annotation(book={"title": "T", "author": author})])
+
+        assert body.split("\n")[1] == line
+
+    def test_an_author_of_only_white_space_gives_no_line(self):
+        body = notes.body([_annotation(book={"title": "T", "author": " \n "})])
+
+        assert body.split("\n")[1] == ""
+
+
 class TestATableDelimiterRow:
     """
     GFM opens a table on a header line followed by a delimiter row, and a
