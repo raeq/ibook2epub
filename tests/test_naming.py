@@ -289,6 +289,49 @@ class TestStripUnsafe:
         assert naming.strip_unsafe("LPT1.epub").startswith("_")
         assert naming.strip_unsafe("NUL").startswith("_")
 
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "NUL.tar.epub",
+            "con.backup.epub",
+            "AUX .notes.epub",
+            "COM1.v2.epub",
+            "COM¹.epub",
+            "LPT².epub",
+            "lpt³.part.epub",
+            "CONIN$.epub",
+        ],
+    )
+    def test_a_device_name_before_any_dot_is_escaped(self, name):
+        # Regression: only the stem before the *last* dot was checked, but
+        # Windows reserves a device name followed by any extension -- and
+        # the superscript COM and LPT digits, and trailing spaces before the
+        # dot -- so NUL.tar.epub could not be copied to Windows at all.
+        result = naming.strip_unsafe(name)
+
+        assert result.startswith("_"), result
+        assert naming.strip_unsafe(result) == result
+
+    @pytest.mark.parametrize("name", ["CONSOLE.epub", "Con Air.epub", "NULL.epub"])
+    def test_a_name_that_only_starts_like_a_device_is_untouched(self, name):
+        assert naming.strip_unsafe(name) == name
+
+    def test_an_undecodable_byte_does_not_reach_the_name(self):
+        # Regression: os.walk hands back an undecodable byte as a lone
+        # surrogate, and strip carried it through, so the name written was
+        # not valid UTF-8 -- which exFAT and NTFS, the filesystems strip
+        # exists for, refuse to store.
+        result = naming.strip_unsafe("Bo\udcffk\udc80.epub")
+
+        assert result == "Bo k.epub"
+        result.encode("utf-8")  # would raise on a surrogate
+
+    @pytest.mark.parametrize("name", ["Book.\udcff", "Book.\x01", "Book.:"])
+    def test_an_extension_that_cleans_away_leaves_no_trailing_dot(self, name):
+        # An extension made only of replaced characters cleaned to a bare
+        # dot, which Windows drops, so the name did not round-trip.
+        assert naming.strip_unsafe(name) == "Book"
+
     def test_trailing_dot_and_space_are_dropped(self):
         assert naming.strip_unsafe("Trailing .") == "Trailing"
 

@@ -68,11 +68,14 @@ PORTABLE_HINT = (
 #: Characters that are illegal on Windows and exFAT but legal on APFS and ext4.
 WINDOWS_ILLEGAL = '<>:"/\\|?*'
 
-#: Names Windows reserves as devices, whatever the extension.
+#: Names Windows reserves as devices, whatever follows the first dot. The
+#: superscript digits are reserved too -- Windows reads ``COM¹`` as ``COM1``
+#: -- and so are the console's own two names: the set ``ntpath.isreserved``
+#: checks from Python 3.13.
 RESERVED_STEMS = frozenset(
-    {"CON", "PRN", "AUX", "NUL"}
-    | {f"COM{digit}" for digit in range(1, 10)}
-    | {f"LPT{digit}" for digit in range(1, 10)}
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{digit}" for digit in "123456789¹²³"}
+    | {f"LPT{digit}" for digit in "123456789¹²³"}
 )
 
 #: The per-component limit on ext4, exFAT and APFS.
@@ -203,10 +206,28 @@ def _replace_illegal(text: str, separator: str) -> str:
     :return: The cleaned text.
     """
     replaced = "".join(
-        separator if char in WINDOWS_ILLEGAL or ord(char) < 32 else char
+        separator if char in WINDOWS_ILLEGAL or _is_unstorable(char) else char
         for char in text
     )
     return " ".join(replaced.split())
+
+
+def _is_unstorable(char: str) -> bool:
+    """
+    Report whether a character cannot be written into a portable filename.
+
+    Control characters, and lone surrogates. ``os.walk`` hands back an
+    undecodable byte in a directory name as a surrogate in U+DC80-U+DCFF, and
+    strip carried it through, so the name written was not valid UTF-8 --
+    which exFAT and NTFS, the filesystems this policy exists for, refuse to
+    store.
+
+    :param char: One character.
+
+    :return: True if it has to be replaced.
+    """
+    code = ord(char)
+    return code < 32 or 0xD800 <= code <= 0xDFFF
 
 
 def strip_unsafe(
@@ -237,10 +258,16 @@ def strip_unsafe(
     # would not round-trip. Only the stem is stripped: stripping the assembled
     # name would take the separating dot with it.
     stem = stem.strip(" .")
-    if extension:
-        extension = f".{extension.strip(' .')}"
+    # An extension made only of replaced characters cleans to nothing, and
+    # keeping its dot would end the name in the very character just stripped.
+    cleaned = extension.strip(" .")
+    extension = f".{cleaned}" if cleaned else ""
 
-    if stem.upper() in RESERVED_STEMS:
+    # Windows reserves a device name followed by *any* extension, and ignores
+    # spaces before the dot, so the test is on what precedes the first dot.
+    # Checking the stem before the last one let NUL.tar.epub and AUX .x.epub
+    # through, and neither can be copied to Windows.
+    if stem.partition(".")[0].rstrip(" ").upper() in RESERVED_STEMS:
         stem = f"_{stem}"
 
     if not stem:
