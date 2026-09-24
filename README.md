@@ -691,7 +691,7 @@ category: book
 tags: [books]
 source: ibook2epub
 ---
-<!-- ibook2epub sha256=351e6dffa048ee4a -->
+<!-- ibook2epub sha256=351e6dffa048ee4a book=3a90a3e2 -->
 # Leviathan Wakes
 *James S.A. Corey*
 
@@ -726,6 +726,13 @@ to choose between keeping your edits and getting your highlights.
 A file at a note's path that the tool did not write, or one it cannot read,
 is never touched either. That book's highlights then reach no file at all, so
 the run names the file and exits `1`; move it aside and rerun.
+
+The marker line also names the book the note is of, as a digest of Apple's id
+for it, so a note is never rewritten with another book's highlights, whatever
+a later run names it. Two editions of a book that want one note are a name
+collision: the note stays the first one's, the run names it and exits `1`, and
+`--on-collision suffix` gives each its own. Notes written before the marker
+named its book are still recognised, and are tagged the next time they change.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
