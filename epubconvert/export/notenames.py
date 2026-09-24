@@ -328,6 +328,28 @@ class _Names:
             return Holding.ANOTHER
         return verdict
 
+    def adopts(self, listed: str, item: Assignment, book: Claimant) -> bool:
+        """
+        Whether a book takes a numbered note already there as its own.
+
+        One its own by the evidence, or one nothing claims that no other
+        book wants (:meth:`contested`). Every numbered note already there
+        was passed over, so a book removed from Books and added again, its
+        note numbered, started a fresh note under the next number and left
+        the reader's writing in the old one.
+
+        :param listed: The note's name, as the vault lists it.
+        :param item: The book that wants it.
+        :param book: The book, which has highlights to write.
+
+        :return: True when *item* is to write that note.
+        """
+        verdict = self.judge(listed, item, book)
+        source = self.vault.held(listed).source
+        return verdict is Holding.MINE or (
+            verdict is Holding.UNCLAIMED and not self.contested(listed, item, source)
+        )
+
     def contested(self, listed: str, item: Assignment, source: str | None) -> bool:
         """
         Whether a note nothing claims is wanted by a book besides *item*.
@@ -393,7 +415,8 @@ def note_names(
     the order given, which is the run's own order, so the same book wins
     each run. Then, under suffix, a number for each book left without one,
     never onto a name another book's file gives it and never onto a file
-    already there: a leftover note is never taken over.
+    already there but a note the book adopts (:meth:`_Names.adopts`): a
+    leftover note is never taken over.
 
     A note nothing claims goes with its name only when one book alone
     wants it (:meth:`_Names.contested`); to two, it is another book's.
@@ -444,25 +467,32 @@ def note_names(
         if verdict is Holding.ANOTHER:
             names.naming.refused.add(item.package)
     if suffix:
-        _number(named, names)
+        _number(named, claimants, names)
     return names.naming
 
 
-def _number(named: Sequence[Assignment], names: _Names) -> None:
+def _number(
+    named: Sequence[Assignment], claimants: Mapping[Path, Claimant], names: _Names
+) -> None:
     """
     Number each book left without a name, as ``--on-collision suffix`` asks.
 
     :param named: Every book of the run with a name, in the run's order.
+    :param claimants: Each book with highlights.
     :param names: The names given so far, added to in place.
     """
     for item in named:
         if names.given[item.package] is not None:
             continue
         stem = Path(item.filename).stem
+        book = claimants.get(item.package)
         for position in range(2, MAX_NOTE_SUFFIX + 1):
             candidate = _numbered(stem, position)
-            if names.free(candidate) and names.vault.spelling(candidate) is None:
-                names.give(item, candidate)
+            if not names.free(candidate):
+                continue
+            listed = names.vault.spelling(candidate)
+            if listed is None or (book and names.adopts(listed, item, book)):
+                names.give(item, listed or candidate)
                 break
 
 

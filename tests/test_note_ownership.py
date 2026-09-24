@@ -447,6 +447,79 @@ class TestANoteNothingClaimsThatTwoBooksWant:
             assert list(_notes(vault)) == ["Dune.md"]
 
 
+class TestANumberedNoteOfABookAddedAgain:
+    """
+    The PDF, numbered past the EPUB's note, removed from Books and added
+    again: its numbered note was passed over as a file already there, and a
+    fresh ``Dune (3).md`` stranded the reader's writing in ``Dune (2).md``.
+    """
+
+    ASSETS: dict[str, str | None] = {"EPUBASSET": EPUB, "NEWPDF": PDF}
+
+    @staticmethod
+    def _readded(text: str) -> dict[str, Any]:
+        found = _highlight(PDF, text)
+        found["book"] = {**found["book"], "assetId": "NEWPDF"}
+        return found
+
+    def test_it_is_taken_back(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        _write(vault, BOTH, suffix=True)
+        _add_mine(vault / "Dune (2).md")
+        found = [*BOTH[:1], self._readded("pdf again")]
+
+        for _ in range(2):
+            assert _write(vault, found, suffix=True, assets=self.ASSETS) == 0
+
+        assert sorted(_notes(vault)) == ["Dune (2).md", "Dune.md"]
+        pdfs = _notes(vault)["Dune (2).md"]
+        assert "> pdf again" in pdfs
+        assert MINE in pdfs
+
+    def test_one_naming_no_file_is_taken_back_by_the_one_book_wanting_it(
+        self, tmp_path: Path
+    ):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "Dune.md").write_text("# my own page about Dune\n")
+        (vault / "Dune (2).md").write_text(_legacy(PDF_ONLY) + MINE)
+        found = [self._readded("pdf again")]
+
+        for _ in range(2):
+            code = _write(vault, found, suffix=True, library=(PDF,))
+            assert code == exits.SUCCESS
+
+        assert sorted(_notes(vault)) == ["Dune (2).md", "Dune.md"]
+        pdfs = _notes(vault)["Dune (2).md"]
+        assert "> pdf again" in pdfs
+        assert MINE in pdfs
+
+    @pytest.mark.parametrize("epub_has_a_note", [False, True])
+    def test_not_while_another_book_may_want_it(
+        self, tmp_path: Path, epub_has_a_note: bool
+    ):
+        # A note that names neither book could be either's, whichever of
+        # them has a note of its own already: both are numbered past it.
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        if epub_has_a_note:
+            (vault / "Dune.md").write_text(notes.compose(BOTH[:1]))
+        else:
+            (vault / "Dune.md").write_text("# my own page about Dune\n")
+        (vault / "Dune (2).md").write_text(_legacy(PDF_ONLY) + MINE)
+        before = (vault / "Dune (2).md").read_bytes()
+        found = [*BOTH[:1], self._readded("pdf again")]
+
+        for _ in range(2):
+            assert _write(vault, found, suffix=True, assets=self.ASSETS) == 0
+
+        assert (vault / "Dune (2).md").read_bytes() == before
+        expected = ["Dune (2).md", "Dune (3).md", "Dune.md"]
+        if not epub_has_a_note:
+            expected.insert(2, "Dune (4).md")
+        assert sorted(_notes(vault)) == expected
+
+
 class TestUnderSuffixAFileThatIsNotANoteIsPassedOver:
     def test_a_file_of_the_readers_own_is_numbered_past(self, tmp_path: Path):
         vault = tmp_path / "vault"
@@ -467,8 +540,13 @@ class TestUnderSuffixAFileThatIsNotANoteIsPassedOver:
         other = [{"id": "x", "text": "x", "book": {"title": "X", "assetId": "X"}}]
         (vault / "Dune (2).md").write_text(notes.compose(other))
         before = (vault / "Dune (2).md").read_bytes()
+        # X is a book of the library, so the note is another book's. Tagged
+        # for no book the run knows, it would be a note nothing claims, and
+        # the one book left wanting its name takes it back (see
+        # TestANumberedNoteOfABookAddedAgain).
+        assets: dict[str, str | None] = {"X": "X.epub"}
 
-        assert _write(vault, BOTH, suffix=True) == exits.SUCCESS
+        assert _write(vault, BOTH, suffix=True, assets=assets) == exits.SUCCESS
 
         assert (vault / "Dune (2).md").read_bytes() == before
         assert "pdf highlight" in (vault / "Dune (3).md").read_text()
