@@ -143,7 +143,10 @@ def annotations_after_export(
 
 
 def _warn_about_copies(
-    index: dict[str, list[dict[str, Any]]], copies: Sequence[Path], *, copied: bool
+    index: dict[str, list[dict[str, Any]]],
+    copies: Sequence[Path],
+    *,
+    copied: bool | None,
 ) -> None:
     """
     Say so when highlights belong to books taken along rather than converted.
@@ -158,7 +161,9 @@ def _warn_about_copies(
     :param index: The annotations, by book.
     :param copies: The books copied through, those that lost their name too.
     :param copied: Whether the run copies them; under ``--no-copy-through``
-        it does not.
+        it does not. None when the run cannot know: ``-ae -ar`` converts
+        nothing, and said "copied through unchanged" of a shelf built under
+        ``--no-copy-through``, which holds no copy.
     """
     books = sorted(
         {copy.name for copy in copies if annotations_for_book(copy.name, index)}
@@ -169,11 +174,15 @@ def _warn_about_copies(
     shown = ", ".join(printable(name) for name in books[:3])
     if len(books) > 3:
         shown += f", and {len(books) - 3} more"
-    how = (
-        "copied through unchanged were not embedded (copies are byte-for-byte)"
-        if copied
-        else "not copied (--no-copy-through) were not embedded"
-    )
+    if copied is None:
+        how = (
+            "not converted by ibook2epub were not embedded (zipped books and PDFs "
+            "are taken as they are)"
+        )
+    elif copied:
+        how = "copied through unchanged were not embedded (copies are byte-for-byte)"
+    else:
+        how = "not copied (--no-copy-through) were not embedded"
     logger.warning(
         "%d annotation(s) from %d book(s) %s: %s. Use -ad FILE or -ao FILE.",
         count,
@@ -608,8 +617,9 @@ def _embed_in_shelf(
         # count is exact and a rerun carries on.
         tally.interrupted = True
     if not args.annotations_detached and not tally.interrupted:
-        # Rewritten are the packages' archives; a copy is not rebuilt.
-        _warn_about_copies(index, copyable, copied=True)
+        # Rewritten are the packages' archives; a copy is not rebuilt. Whether
+        # there is one on the shelf is the conversion's business, not known here.
+        _warn_about_copies(index, copyable, copied=None)
     return _refresh_outcome(tally, converted=converted)
 
 

@@ -871,6 +871,9 @@ warning of their own, which is quiet under `-ad` too:
 (copies are byte-for-byte): Beta.epub. Use -ad FILE or -ao FILE.
 ```
 
+`-ae -ar` converts nothing and cannot tell whether a copy is on the shelf, so
+it says those books were "not converted by ibook2epub" instead.
+
 **This is ahead of the specification, not conformant to it.** That draft still
 has sections marked T.B.D., and its dependency on text fragments has not yet
 landed in HTML. The shape here is meant to become conformant without the data

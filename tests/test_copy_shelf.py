@@ -345,6 +345,7 @@ class TestHighlightsOfABookCopiedThrough:
     """
 
     WARNING = "copied through unchanged were not embedded"
+    NEUTRAL = "not converted by ibook2epub were not embedded"
 
     @staticmethod
     def _library(tmp_path: Path, monkeypatch) -> Path:
@@ -392,9 +393,31 @@ class TestHighlightsOfABookCopiedThrough:
         code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar"])
 
         assert code == 0
-        assert f"2 annotation(s) from 1 book(s) {self.WARNING}" in (
+        assert f"2 annotation(s) from 1 book(s) {self.NEUTRAL}" in (
             capsys.readouterr().err
         )
+
+    def test_a_refresh_does_not_claim_a_copy_it_never_made(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # A refresh does not know how the shelf was built. Over one built
+        # with --no-copy-through it said the zipped book was "copied through
+        # unchanged" and its copy "byte-for-byte", and there was no copy.
+        library = self._library(tmp_path, monkeypatch)
+        argv = ["-s", str(library), "-o", str(output_dir)]
+        run.main([*argv, "-m", "0", "--no-copy-through", "-q"])
+        capsys.readouterr()
+
+        code = run.main([*argv, "-ae", "-ar"])
+
+        err = capsys.readouterr().err
+        assert code == 0
+        assert "copied through" not in err
+        assert "byte-for-byte" not in err
+        assert (
+            f"2 annotation(s) from 1 book(s) {self.NEUTRAL} (zipped books and "
+            "PDFs are taken as they are): Beta.epub. Use -ad FILE or -ao FILE."
+        ) in err
 
     def test_a_long_list_is_cut_short(self, tmp_path, output_dir, monkeypatch, capsys):
         library, container = tmp_path / "lib", tmp_path / "container"
