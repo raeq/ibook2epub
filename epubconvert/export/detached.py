@@ -36,7 +36,7 @@ from ..utils.display import printable, printable_json
 from ..utils.policy import Assignment, NamingPolicy
 from . import catalogue, notes
 from .archive import write_atomically
-from .naming import encode_name
+from .naming import encode_name, filesystem_key
 from .notes import SIDECAR_SUFFIX
 
 
@@ -396,7 +396,12 @@ def _note_name(name: str) -> bool:
 
     :return: True when writing it would take a note's place.
     """
-    return name.endswith(".md") or name.endswith(SIDECAR_SUFFIX)
+    # Folded as the filesystem folds it: on a case-insensitive volume, the
+    # macOS default, "Dune.MD" is the note "Dune.md", and --force wrote the
+    # catalogue over it.
+    return filesystem_key(name).endswith(
+        (filesystem_key(".md"), filesystem_key(SIDECAR_SUFFIX))
+    )
 
 
 def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:

@@ -279,7 +279,17 @@ class TestWhenTheDestinationIsWrong:
     so a refusal costs no work and leaves nothing behind.
     """
 
-    @pytest.mark.parametrize("name", ["Leviathan Wakes.md", "Leviathan Wakes.md.new"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Leviathan Wakes.md",
+            "Leviathan Wakes.md.new",
+            # One file with the note on a case-insensitive volume, the macOS
+            # default, and passed by a case-sensitive guard.
+            "Leviathan Wakes.MD",
+            "Leviathan Wakes.Md.NEW",
+        ],
+    )
     def test_the_catalogue_will_not_take_a_note_s_name(
         self, tmp_path, monkeypatch, name
     ):
