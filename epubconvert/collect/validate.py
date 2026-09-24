@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import re
 import shutil
-import stat
 import subprocess
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,13 +29,17 @@ from zipfile import ZIP_STORED, BadZipFile, ZipFile
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.opf import Package
-from ..utils.spec import MIMETYPE_CONTENT, MIMETYPE_NAME
+from ..utils.spec import MIMETYPE_CONTENT, MIMETYPE_NAME, fold_name
 from .package import (
+    SHARED_HEADER,
     UNREADABLE_MEMBER,
     ValidationError,
     disallowed_method,
+    open_member,
+    open_regular,
     read_member,
     read_package,
+    repeated_entries,
 )
 
 EPUBCHECK = "epubcheck"
@@ -86,19 +90,25 @@ def validate_archive(path: Path) -> list[str]:
     problems: list[str] = []
 
     try:
-        if not stat.S_ISREG(path.stat().st_mode):  # Opening a FIFO waits for ever.
-            return ["not a regular file"]
-        with ZipFile(path) as archive:
+        # Judged on the descriptor, not a stat of the name: a FIFO swapped in
+        # between the two was opened for reading, and waited for ever.
+        with open_regular(path) as handle, ZipFile(handle) as archive:
             names = archive.namelist()
             members = set(names)
             problems.extend(_check_mimetype(archive, names))
             problems.extend(_check_unique(names))
+            repeated = repeated_entries(archive)
+            if repeated == SHARED_HEADER:
+                problems.append(repeated)
 
             # Before anything is inflated: the contents are checked only when
-            # every member can be decompressed in bounded memory.
-            problems.extend(
-                _check_methods(archive) or _check_contents(archive, members)
-            )
+            # every member can be decompressed in bounded memory, and once.
+            methods = _check_methods(archive)
+            problems.extend(methods)
+            if not methods and repeated is None:
+                problems.extend(_check_contents(archive, members))
+    except ValidationError as exc:
+        return [str(exc)]
     except BadZipFile as exc:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
@@ -123,7 +133,7 @@ def _check_contents(archive: ZipFile, members: set[str]) -> list[str]:
     :return: A list of problems.
     """
     problems: list[str] = []
-    broken = archive.testzip()
+    broken = _first_corrupt(archive)
     if broken is not None:
         problems.append(f"corrupt member: {printable(broken)}")
 
@@ -135,9 +145,38 @@ def _check_contents(archive: ZipFile, members: set[str]) -> list[str]:
     return problems + _check_manifest(members, package)
 
 
+def _first_corrupt(archive: ZipFile) -> str | None:
+    """
+    Inflate every member once and check it against its recorded CRC.
+
+    What ``testzip()`` did, but by entry rather than by name: it opened each
+    entry by name, so every entry repeating a name inflated the last of them
+    again. Read in chunks, so no member is ever held whole.
+
+    :param archive: The open archive, every member stored or deflated, and
+        none listed twice.
+
+    :return: The first member whose contents do not match its CRC, or None.
+    """
+    for info in archive.infolist():
+        try:
+            with open_member(archive, info) as handle:
+                # zipfile checks the CRC itself once a stream is read to its
+                # end, and raises BadZipFile if it differs, as testzip() did.
+                while handle.read(_CHUNK_BYTES):
+                    pass
+        except BadZipFile:
+            return info.filename
+    return None
+
+
+#: How much of a member :func:`_first_corrupt` inflates at a time.
+_CHUNK_BYTES = 1024 * 1024
+
+
 def _check_unique(names: list[str]) -> list[str]:
     """
-    Report every member name the archive holds more than once.
+    Report every member name the archive holds more than once, or as good as.
 
     OCF requires unique names, and readers disagree about a duplicate: some
     take the first local header, some the last directory entry, so one book
@@ -149,9 +188,11 @@ def _check_unique(names: list[str]) -> list[str]:
 
     :param names: The archive's member names, in its own order.
 
-    :return: Up to five duplicated names, and a count of the rest.
+    :return: Up to five duplicated names, and a count of the rest; then the
+        same for names that differ only by case or normalization.
     """
-    repeated = [name for name, count in Counter(names).items() if count > 1]
+    counted = Counter(names)
+    repeated = [name for name, count in counted.items() if count > 1]
     problems = [
         f"member name appears more than once: {printable(name)}"
         for name in repeated[:5]
@@ -159,7 +200,55 @@ def _check_unique(names: list[str]) -> list[str]:
     if len(repeated) > 5:
         more = len(repeated) - 5
         problems.append(f"...and {more} more member name(s) appearing more than once")
+    return problems + _check_folded(counted)
+
+
+def _check_folded(counted: Counter[str]) -> list[str]:
+    """
+    Report distinct member names that differ only by case or normalization.
+
+    OCF requires names to stay unique after full case folding and NFC, since
+    a reader unpacking the book onto APFS, HFS+ or NTFS writes both to one
+    file, and which one survives is up to the order it writes them in.
+
+    :param counted: Each distinct member name, so an exact duplicate, which
+        :func:`_check_unique` reports, is not reported again here.
+
+    :return: Up to five colliding groups named, and a count of the rest.
+    """
+    groups: dict[str, list[str]] = {}
+    for name in counted:
+        groups.setdefault(fold_name(name), []).append(name)
+    colliding = [sorted(group) for group in groups.values() if len(group) > 1]
+    problems = [
+        "member names differ only by case or Unicode normalization: "
+        + ", ".join(_distinguished(group))
+        for group in colliding[:5]
+    ]
+    if len(colliding) > 5:
+        problems.append(
+            f"...and {len(colliding) - 5} more member name(s) "
+            "differing only by case or normalization"
+        )
     return problems
+
+
+def _distinguished(names: list[str]) -> list[str]:
+    """
+    Render names safe to print, and told apart even where they look alike.
+
+    A composed ``é`` and an ``e`` with a combining accent print the same, and
+    a report naming one file twice explains nothing, so names that would are
+    spelled with every character past ASCII escaped.
+
+    :param names: Distinct names.
+
+    :return: Their renderings, in the same order.
+    """
+    shown = [printable(name) for name in names]
+    if len({unicodedata.normalize("NFC", name) for name in shown}) == len(shown):
+        return shown
+    return [ascii(name)[1:-1] for name in names]
 
 
 def _check_methods(archive: ZipFile) -> list[str]:

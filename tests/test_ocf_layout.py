@@ -19,6 +19,8 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 from epubconvert.collect import validate
 from epubconvert.export.archive import zip_package
+from epubconvert.export.naming import filesystem_key
+from epubconvert.utils.spec import fold_name
 from tests.conftest import make_metadata_package
 from tests.test_validate import MEMBERS, write_epub
 
@@ -138,3 +140,78 @@ class TestEveryMemberNameIsUnique:
         validate._check_unique(names)
 
         assert compared[0] < 5 * len(names)
+
+
+class TestNamesAFilesystemCannotTellApartAreReported:
+    """
+    OCF requires member names to stay unique after full case folding and
+    NFC normalization, because a reader unpacking the book onto APFS, HFS+ or
+    NTFS writes both names to one file. Only exact duplicates were reported,
+    so ``chapter1.xhtml`` beside ``Chapter1.xhtml`` passed --verify.
+    """
+
+    @staticmethod
+    def _with(path: Path, *extra: str) -> Path:
+        write_epub(path)
+        with ZipFile(path, "a") as archive:
+            for name in extra:
+                archive.writestr(name, "<html/>")
+        return path
+
+    def test_names_differing_only_by_case_are_reported(self, tmp_path: Path):
+        path = self._with(tmp_path / "Case.epub", "OEBPS/text/Chapter1.xhtml")
+
+        assert validate.validate_archive(path) == [
+            "member names differ only by case or Unicode normalization: "
+            "OEBPS/text/Chapter1.xhtml, OEBPS/text/chapter1.xhtml"
+        ]
+
+    def test_names_differing_only_by_normalization_are_reported(self, tmp_path: Path):
+        composed, decomposed = "OEBPS/café.xhtml", "OEBPS/café.xhtml"
+        path = self._with(tmp_path / "Nfd.epub", composed, decomposed)
+
+        problems = validate.validate_archive(path)
+
+        # Escaped, since both print as "café" and one name twice says nothing.
+        assert problems == [
+            "member names differ only by case or Unicode normalization: "
+            "OEBPS/cafe\\u0301.xhtml, OEBPS/caf\\xe9.xhtml"
+        ]
+
+    def test_an_exact_duplicate_is_reported_once_and_as_such(self):
+        names = ["a/x.xhtml", "a/x.xhtml"]
+
+        assert validate._check_unique(names) == [
+            "member name appears more than once: a/x.xhtml"
+        ]
+
+    def test_every_collision_is_counted_but_five_are_named(self):
+        names = [f"n{index}" for index in range(7)]
+        names += [name.upper() for name in names]
+
+        problems = validate._check_unique(names)
+
+        assert len(problems) == 6
+        assert problems[0] == (
+            "member names differ only by case or Unicode normalization: N0, n0"
+        )
+        assert problems[5] == (
+            "...and 2 more member name(s) differing only by case or normalization"
+        )
+
+    def test_the_names_are_escaped(self):
+        problems = validate._check_unique(["a\x1b[2K.xhtml", "A\x1b[2K.xhtml"])
+
+        assert "\x1b" not in problems[0]
+
+    def test_the_folding_is_the_one_naming_uses(self):
+        # One rule, in utils/spec, for the writer and the validator alike.
+        # keeps the two statements one rule.
+        for name in ("Straße", "café", "İstanbul", "DUNE"):
+            assert fold_name(name) == filesystem_key(name)
+
+    def test_a_book_this_tool_writes_passes(self, tmp_path: Path):
+        package = make_metadata_package(tmp_path / "src", "Book.epub", title="Book")
+        zip_package(package, tmp_path / "Book.epub")
+
+        assert validate.validate_archive(tmp_path / "Book.epub") == []

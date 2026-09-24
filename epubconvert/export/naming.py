@@ -28,12 +28,11 @@ recomputed by reading its filename back off disk, with no state file.
 from __future__ import annotations
 
 import hashlib
-import unicodedata
 from typing import TYPE_CHECKING, Literal
 
 from ..collect.identifiers import usable_title
 from ..utils.policy import NamingPolicy
-from ..utils.spec import PACKAGE_SUFFIX
+from ..utils.spec import PACKAGE_SUFFIX, fold_name
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..utils.opf import Package
@@ -135,7 +134,7 @@ def filesystem_key(filename: str) -> str:
 
     :return: A key equal for any two names the filesystem cannot tell apart.
     """
-    return unicodedata.normalize("NFC", filename).casefold()
+    return fold_name(filename)
 
 
 def encode_name(text: str) -> bytes:

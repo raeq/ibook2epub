@@ -18,6 +18,7 @@ import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from xml.parsers import expat
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -188,6 +189,26 @@ class TestAMemberThatIsNotAFileIsNotOpened:
     metadata naming and cover extraction all froze on it.
     """
 
+    def test_a_fifo_swapped_in_after_the_check_is_not_waited_on(
+        self, tmp_path, monkeypatch
+    ):
+        # validate_archive stat'ed the path, then opened it by name: a FIFO
+        # put there in between was opened for reading, and --verify waited
+        # for ever. Judged on the descriptor it opens, the swap is refused.
+        fifo = tmp_path / "Swapped.epub"
+        os.mkfifo(fifo)
+        regular = (tmp_path / "regular").touch() or (tmp_path / "regular").stat()
+        real_stat = Path.stat
+        monkeypatch.setattr(
+            Path,
+            "stat",
+            lambda self, **kw: regular if self == fifo else real_stat(self, **kw),
+        )
+
+        problems = _within(5, fifo, lambda: validate.validate_archive(fifo))
+
+        assert problems == ["not a regular file"]
+
     def test_a_fifo_for_a_container_is_refused_not_waited_on(self, tmp_path):
         package = make_package(tmp_path / "lib", "Piped.epub")
         container = package / "META-INF" / "container.xml"
@@ -282,6 +303,53 @@ def _sound_epub(path: Path) -> Path:
     package = make_metadata_package(path.parent / "src", path.name, title="Good")
     archive.zip_package(package, path)
     return path
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="this platform has no FIFOs")
+class TestALibraryFileThatIsNotAFileIsNotOpened:
+    """
+    A FIFO named ``*.epub`` in the library was kept as a book to copy, and
+    reading its metadata opened it for reading: ``--name-by author-title``
+    waited for a writer for ever, ``--list`` and ``-d`` included.
+    """
+
+    def test_its_package_is_refused_not_waited_on(self, tmp_path):
+        fifo = tmp_path / "Piped.epub"
+        os.mkfifo(fifo)
+
+        raised = _within(5, fifo, lambda: package_reader.read_archive_package(fifo))
+
+        assert isinstance(raised, package_reader.ValidationError)
+        assert "not a regular file" in str(raised)
+
+    def test_it_is_not_a_book_to_copy(self, tmp_path):
+        library = tmp_path / "lib"
+        library.mkdir()
+        _sound_epub(library / "Good.epub")
+        os.mkfifo(library / "Piped.epub")
+
+        assert archive.collect_copyable(library) == [library / "Good.epub"]
+
+    def test_a_file_gone_before_it_is_judged_is_not_a_book_to_copy(self, tmp_path):
+        # Listed by the walk, deleted before the check: skipped, not raised.
+        judge = archive._is_regular  # pylint: disable=protected-access
+
+        assert judge(tmp_path / "Gone.epub") is False
+
+    def test_a_listing_named_by_author_finishes(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        library.mkdir()
+        fifo = library / "Piped.epub"
+        os.mkfifo(fifo)
+        arguments = ["-s", str(library), "-o", str(output_dir), "-q"]
+
+        code = _within(
+            5,
+            fifo,
+            lambda: run.main([*arguments, "--name-by", "author-title", "--list"]),
+        )
+
+        assert code == 0
 
 
 class TestAMemberThatGrowsWhileReadIsStillBounded:
@@ -765,3 +833,34 @@ class TestEntityDeclarationsAreRefused:
 
         with pytest.raises(package_reader.ValidationError, match="entities"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
+
+    def test_the_check_stops_at_the_first_declaration(self, monkeypatch):
+        # The check parsed the whole document, so every reference it went on
+        # to meet was expanded before the declaration was refused.
+        expanded: list[str] = []
+        create = expat.ParserCreate
+
+        def watched(*args, **kwargs):
+            parser = create(*args, **kwargs)
+            parser.CharacterDataHandler = expanded.append
+            return parser
+
+        monkeypatch.setattr(expat, "ParserCreate", watched)
+        document = b'<!DOCTYPE d [<!ENTITY a "x"><!ENTITY b "y">]><d>&a;&b;&a;</d>'
+
+        with pytest.raises(package_reader.EntityDeclarationError):
+            package_reader.parse_xml(document)
+
+        assert expanded == []
+
+    def test_billion_laughs_is_refused_as_a_declaration(self):
+        # Before, expat's own amplification limit refused it, silently and
+        # only on an expat new enough to have one, as "not valid XML".
+        entities = '<!ENTITY a "aaaaaaaaaa">' + "".join(
+            f'<!ENTITY {chr(98 + level)} "{f"&{chr(97 + level)};" * 10}">'
+            for level in range(8)
+        )
+        document = f"<!DOCTYPE d [{entities}]><d>&i;</d>".encode("ascii")
+
+        with pytest.raises(package_reader.EntityDeclarationError):
+            package_reader.parse_xml(document)

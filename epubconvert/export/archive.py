@@ -22,7 +22,7 @@ from typing import Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
-from ..collect.package import open_member, read_member
+from ..collect.package import open_member, read_member, repeated_entries
 from ..collect.validate import ArchiveInvalidError, ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
@@ -175,10 +175,22 @@ def collect_copyable(source_dir: Path) -> list[Path]:
                     printable(source_dir.name),
                 )
                 continue
+            # A FIFO named *.epub was kept, and reading it waited for ever.
+            if not _is_regular(path):
+                logger.warning("Skipped %s: not a regular file", printable(name))
+                continue
             found.append(path)
 
     found.sort()
     return found
+
+
+def _is_regular(path: Path) -> bool:
+    """Report whether *path* is a regular file, without following a link."""
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except OSError:
+        return False
 
 
 def copy_through(source: Path, target: Path) -> None:
@@ -685,18 +697,29 @@ def index_by_package(
 
 
 def _same_annotations(
-    held: bytes | None, annotations: Sequence[dict[str, object]]
+    held: bytes | None, annotations: Sequence[dict[str, object]], expected: bytes
 ) -> bool:
     """
     Whether an archive already carries exactly these annotations.
 
+    Only the annotations are compared, not the envelope or the spacing, so a
+    set an older release wrote is not rewritten for its generator's version.
+    Parsing is the last resort: ``json.loads`` builds an object per ``{}``, so
+    a 64 MiB set, within :data:`MAX_EMBEDDED_BYTES`, cost 1.6 GiB to compare.
+    One far larger than what would be written cannot hold the same set.
+
     :param held: The embedded document as it stands, or None if there is none.
     :param annotations: What it should carry.
+    :param expected: What a rewrite would store, serialised.
 
     :return: True if a rewrite would change nothing.
     """
     if held is None:
         return not annotations
+    if held == expected:
+        return True
+    if len(held) > 2 * len(expected) + _SPACING_ALLOWANCE:
+        return False
     try:
         loaded = json.loads(held)
     except (ValueError, RecursionError):
@@ -708,6 +731,10 @@ def _same_annotations(
     stored = loaded.get("annotations") if isinstance(loaded, dict) else None
     return bool(stored == list(annotations))
 
+
+#: How much larger than a fresh serialisation an equal set may be, in bytes.
+#: Beyond twice as large plus this, a held set is replaced without parsing.
+_SPACING_ALLOWANCE = 64 * 1024
 
 #: The most of an embedded annotation set a refresh reads to compare it. The
 #: archive may not be one this tool wrote, and its declared size is no bound.
@@ -752,6 +779,7 @@ def replace_annotations(
     :return: True if the archive was rewritten, False if it already said this.
 
     :raises NoRoomError: If *room* said there is no room for the copy.
+    :raises ArchiveInvalidError: If the archive lists a member more than once.
     """
     # An empty set is not an instruction to delete. A package that arrived
     # carrying its own annotations lost them silently when this run happened
@@ -763,6 +791,10 @@ def replace_annotations(
     target_archive, mode = _what_to_replace(target_archive)
     try:
         with ZipFile(target_archive) as reading:
+            # Each listing of a member would be inflated and written again.
+            repeated = repeated_entries(reading)
+            if repeated is not None:
+                raise ArchiveInvalidError(target_archive.name, [repeated])
             names = reading.namelist()
             held = (
                 read_member(reading, reading.getinfo(EMBEDDED_PATH), MAX_EMBEDDED_BYTES)
@@ -774,7 +806,11 @@ def replace_annotations(
             # being decompressed into memory to reach a comparison that only
             # looks at this one small blob: 7.86 MB of peak allocation on a
             # 6.4 MB book, to decide against rewriting it.
-            if _same_annotations(held, annotations):
+            embedded = embedded_json(list(annotations))
+            # As zipfile will store it. A document, not a name, so not through
+            # the name encoder; surrogates pass, so comparing never raises.
+            expected = bytes(embedded, "utf-8", "surrogatepass")
+            if _same_annotations(held, annotations, expected):
                 return False
             if room is not None and not room():
                 raise NoRoomError(target_archive.name)
@@ -787,7 +823,7 @@ def replace_annotations(
             )
             os.close(handle)
             partial = Path(temporary)
-            _rebuild(reading, members, partial, embedded_json(list(annotations)))
+            _rebuild(reading, members, partial, embedded)
             # After the rebuild, as write_atomically does: a book the user
             # made read-only would otherwise make its own partial unwritable.
             partial.chmod(mode)

@@ -9,6 +9,7 @@ book, so every read is bounded and every name is checked before it is used.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 import stat
@@ -127,6 +128,34 @@ def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
             "which an epub may not use"
         )
     return archive.open(info)
+
+
+#: What :func:`repeated_entries` says of directory entries sharing a header.
+SHARED_HEADER = "members share a local header (possible zip bomb)"
+
+
+def repeated_entries(archive: ZipFile) -> str | None:
+    """
+    Report whether the central directory lists any member more than once.
+
+    A directory may list one local header any number of times, and a name
+    more than once. zipfile 3.13 and later merely warn about a shared header,
+    and every reader that opens entries in turn -- by name or by entry --
+    inflates the same member once per listing: a 4 MiB book listing one
+    member 200 times was refreshed into 800 MiB. So an archive that repeats
+    either is read no further, whichever zipfile is reading it.
+
+    :param archive: The open archive.
+
+    :return: :data:`SHARED_HEADER` if two entries share a local header, a
+        description if two share a name, or None if neither does.
+    """
+    entries = archive.infolist()
+    if len({info.header_offset for info in entries}) < len(entries):
+        return SHARED_HEADER
+    if len({info.filename for info in entries}) < len(entries):
+        return "member names appear more than once"
+    return None
 
 
 def read_member(archive: ZipFile, info: ZipInfo, limit: int) -> bytes | None:
@@ -332,6 +361,11 @@ def _declares_entities(data: bytes) -> bool:
     a decoy ``<!DOCTYPE`` -- because each had to re-derive where the declaration
     starts and ends. expat already knows, so it is asked.
 
+    The parse stops at the first declaration. Parsed to the end, it expanded
+    every reference it met before the answer was given, so the one check
+    meant to spare the tool an expansion performed it, and a billion-laughs
+    document was stopped only by expat's own limit where it has one.
+
     A malformed document is left alone here and refused by the parse that
     follows, which reports it better.
 
@@ -340,15 +374,30 @@ def _declares_entities(data: bytes) -> bool:
     :return: True if the document declares any entity.
     """
     parser = expat.ParserCreate()
-    declared: list[int] = []
-    parser.EntityDeclHandler = lambda *_args: declared.append(1)
+    parser.EntityDeclHandler = _stop_at_declaration
     try:
         parser.Parse(data, True)
+    except _EntityDeclaredError:
+        return True
     except (expat.ExpatError, ValueError, LookupError):
         # An encoding expat refuses is malformed for this purpose too, and
         # raised LookupError from here, ahead of the parse that reports it.
         return False
-    return bool(declared)
+    return False
+
+
+class _EntityDeclaredError(Exception):
+    """Raised out of expat to stop a parse at an entity declaration."""
+
+
+def _stop_at_declaration(*_args: object) -> None:
+    """
+    Stop the parse: an entity has been declared, and nothing more is needed.
+
+    :raises _EntityDeclaredError: Always. expat abandons the parse and ``Parse``
+        raises it, before any content, and so any reference, is reached.
+    """
+    raise _EntityDeclaredError
 
 
 def _opf_path(members: _Members) -> str:
@@ -468,13 +517,42 @@ def read_archive_package(path: Path) -> Package:
     :raises ValidationError: If the archive cannot be opened or read, or its
         package document is missing or unparsable -- an OSError included, as
         every caller treats a file it cannot open as one that cannot describe
-        itself.
+        itself. So is anything but a regular file.
     """
     try:
-        with ZipFile(path) as archive:
+        # zipfile leaves a stream it was handed open, so it is closed here.
+        with open_regular(path) as handle, ZipFile(handle) as archive:
             return read_package(archive)
     except UNREADABLE_MEMBER as exc:
         raise ValidationError(printable(str(exc))) from exc
+
+
+def open_regular(path: Path) -> IO[bytes]:
+    """
+    Open a file for reading, refusing anything that is not a regular file.
+
+    A FIFO named ``*.epub`` in the library was opened for reading, which waits
+    for a writer, so a ``--name-by author-title`` run -- ``--list`` included --
+    hung for ever. Opened without blocking and judged on the descriptor, so a
+    name swapped after a check cannot slip one in. Not ``open_contained``: that
+    refuses a hard link too, and a book on the shelf may legitimately be one.
+
+    :param path: The file to open.
+
+    :return: A binary stream, positioned at the start.
+
+    :raises ValidationError: If it is not a regular file.
+    :raises OSError: If it cannot be opened.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValidationError("not a regular file")
+        os.set_blocking(descriptor, True)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return os.fdopen(descriptor, "rb")
 
 
 def _package(members: _Members) -> Package:

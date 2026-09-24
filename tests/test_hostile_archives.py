@@ -12,7 +12,11 @@ believing either cost.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 
 import io
+import json
+import struct
 import tracemalloc
+import warnings
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -23,6 +27,7 @@ import pytest
 from epubconvert.collect import package as package_reader
 from epubconvert.collect import validate
 from epubconvert.collect.annotations import EMBEDDED_PATH
+from epubconvert.collect.validate import ArchiveInvalidError
 from epubconvert.export import archive
 from epubconvert.run import run
 from tests.conftest import make_metadata_package
@@ -207,6 +212,43 @@ class TestARefreshInflatesNothingWhole:
         with ZipFile(target) as reading:
             assert reading.read(EMBEDDED_PATH).startswith(b"{")
 
+    def test_a_set_too_large_to_be_equal_is_replaced_unparsed(self, tmp_path):
+        # Within the cap, but json.loads built a dict per "{}": the 64 MiB
+        # the cap allows cost 1.6 GiB to compare against one annotation.
+        held = '{"annotations": [' + "{}, " * (128 * 1024) + "{}]}"
+        target = write_epub(tmp_path / "Book.epub", {**MEMBERS, EMBEDDED_PATH: held})
+
+        with _allocations() as peak:
+            rewritten = archive.replace_annotations(target, [{"id": "mine"}])
+
+        assert peak() < PEAK
+        assert rewritten is True
+        with ZipFile(target) as reading:
+            assert json.loads(reading.read(EMBEDDED_PATH))["annotations"] == [
+                {"id": "mine"}
+            ]
+
+    def test_a_set_this_tool_wrote_is_current_without_being_parsed(
+        self, tmp_path, monkeypatch
+    ):
+        target = write_epub(tmp_path / "Book.epub")
+        archive.replace_annotations(target, [{"id": "a"}])
+        before = target.read_bytes()
+        monkeypatch.setattr(json, "loads", pytest.fail)
+
+        assert archive.replace_annotations(target, [{"id": "a"}]) is False
+        assert target.read_bytes() == before
+
+    def test_an_equal_set_written_another_way_is_still_current(self, tmp_path):
+        # Only the annotations are compared: an older release's generator, or
+        # other spacing, is no reason to rewrite every book on the shelf.
+        held = json.dumps({"generator": {"version": "0"}, "annotations": [{"id": "a"}]})
+        target = write_epub(tmp_path / "Book.epub", {**MEMBERS, EMBEDDED_PATH: held})
+        before = target.read_bytes()
+
+        assert archive.replace_annotations(target, [{"id": "a"}]) is False
+        assert target.read_bytes() == before
+
     @pytest.mark.parametrize(
         "member", [EMBEDDED_PATH, "OEBPS/text/chapter1.xhtml"], ids=["held", "other"]
     )
@@ -312,3 +354,125 @@ class TestAnArchiveThatCannotBeOpenedCostsOneBook:
 
         assert code == 0
         assert held.read_bytes() == before
+
+
+#: The member :func:`_repeating_last` repeats, and what it inflates to.
+PADDING = "OEBPS/padding.bin"
+PADDING_BYTES = 1024 * 1024
+
+
+def _repeating_last(path: Path, copies: int, *, method: int = ZIP_DEFLATED) -> Path:
+    """
+    Write a sound epub whose central directory lists its last member *copies* times.
+
+    Every copy points at the one local header, so the archive grows by a
+    directory record per copy while each copy inflates the whole member.
+    """
+    write_epub(path)
+    with ZipFile(path, "a") as opened:
+        opened.writestr(PADDING, b"\0" * PADDING_BYTES, compress_type=method)
+    data = path.read_bytes()
+    end = data.rfind(b"PK\x05\x06")
+    count, size, offset = struct.unpack("<HII", data[end + 10 : end + 20])
+    directory = data[offset : offset + size]
+    directory += directory[directory.rfind(b"PK\x01\x02") :] * (copies - 1)
+    total = count + copies - 1
+    tail = struct.pack(
+        "<4sHHHHIIH", b"PK\x05\x06", 0, 0, total, total, len(directory), offset, 0
+    )
+    path.write_bytes(data[:offset] + directory + tail)
+    return path
+
+
+@contextmanager
+def _inflations(monkeypatch) -> Iterator[Counter[str]]:
+    """Count every member opened for reading, by name, inside the block."""
+    opened: Counter[str] = Counter()
+    original = ZipFile.open
+
+    def counting(self, name, *args, **kwargs):
+        opened[getattr(name, "filename", name)] += 1
+        return original(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(ZipFile, "open", counting)
+    with warnings.catch_warnings():
+        # 3.13 and later warn about an entry sharing a header, not refuse it.
+        warnings.simplefilter("ignore")
+        yield opened
+
+
+class TestARepeatedDirectoryEntryIsNotInflatedAgain:
+    """
+    A central directory may list one local header any number of times. 3.13
+    and later only warn about it, and ``testzip()`` opens every entry by name,
+    so each copy inflated the member again: a 258 KiB archive took 13 s to
+    verify. A refresh rebuilt a 4 MiB book with 200 copies into 800 MiB and
+    moved it over the original. 3.10 to 3.12 refuse the second copy instead,
+    so what is pinned here is that the archive is refused before any of it is
+    inflated, whichever zipfile reads it.
+    """
+
+    def test_verify_reports_it_and_inflates_none_of_it(self, tmp_path, monkeypatch):
+        path = _repeating_last(tmp_path / "Repeated.epub", 40)
+
+        with _inflations(monkeypatch) as opened:
+            problems = validate.validate_archive(path)
+
+        assert "members share a local header (possible zip bomb)" in problems
+        assert f"member name appears more than once: {PADDING}" in problems
+        assert opened[PADDING] == 0
+
+    def test_verify_inflates_no_member_named_twice(self, tmp_path, monkeypatch):
+        # Two local headers under one name: testzip() opened both by name,
+        # which is the last of them twice.
+        path = write_epub(tmp_path / "Doubled.epub")
+        with warnings.catch_warnings(), ZipFile(path, "a") as opened:
+            warnings.simplefilter("ignore")  # "Duplicate name"
+            for _ in range(2):
+                opened.writestr(PADDING, b"\0" * PADDING_BYTES, ZIP_DEFLATED)
+
+        with _inflations(monkeypatch) as inflated:
+            problems = validate.validate_archive(path)
+
+        assert problems == [f"member name appears more than once: {PADDING}"]
+        assert inflated[PADDING] == 0
+
+    def test_verify_still_inflates_every_member_of_a_sound_archive_once(
+        self, tmp_path, monkeypatch
+    ):
+        path = write_epub(tmp_path / "Sound.epub")
+        with ZipFile(path, "a") as opened:
+            opened.writestr(PADDING, b"\0" * PADDING_BYTES, ZIP_DEFLATED)
+
+        with _inflations(monkeypatch) as inflated:
+            problems = validate.validate_archive(path)
+
+        assert not problems
+        assert inflated[PADDING] == 1
+
+    @pytest.mark.parametrize("method", [ZIP_STORED, ZIP_DEFLATED])
+    def test_a_refresh_refuses_to_rebuild_it(self, tmp_path, monkeypatch, method):
+        target = _repeating_last(tmp_path / "Repeated.epub", 40, method=method)
+        before = target.read_bytes()
+
+        with (
+            _inflations(monkeypatch) as opened,
+            pytest.raises(ArchiveInvalidError, match="share a local header"),
+        ):
+            archive.replace_annotations(target, [{"id": "mine"}])
+
+        assert opened[PADDING] == 0
+        assert target.read_bytes() == before
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["Repeated.epub"]
+
+    def test_a_refresh_refuses_a_member_named_twice(self, tmp_path):
+        target = write_epub(tmp_path / "Doubled.epub")
+        with warnings.catch_warnings(), ZipFile(target, "a") as opened:
+            warnings.simplefilter("ignore")  # "Duplicate name"
+            opened.writestr("OEBPS/text/chapter1.xhtml", "<html/>")
+        before = target.read_bytes()
+
+        with pytest.raises(ArchiveInvalidError, match="more than once"):
+            archive.replace_annotations(target, [{"id": "mine"}])
+
+        assert target.read_bytes() == before

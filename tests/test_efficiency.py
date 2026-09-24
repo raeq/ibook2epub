@@ -304,6 +304,22 @@ class TestThePackageDocumentIsReadOnce:
         assert "orphan" not in capsys.readouterr().out
 
 
+def _named(file: object, directory: Path) -> Path:
+    """
+    Name what ZipFile was handed: a path, or an open file in *directory*.
+
+    A book's metadata is read through a descriptor opened without blocking,
+    so a FIFO cannot hang the open, and zipfile then knows it by no name.
+    """
+    if isinstance(file, (str, os.PathLike)):
+        return Path(file)
+    held = os.fstat(file.fileno())  # type: ignore[attr-defined]
+    for path in directory.iterdir():
+        if os.path.samestat(held, path.stat()):
+            return path
+    return Path(str(file))
+
+
 class TestEachShelfArchiveIsReadOnce:
     """
     The orphan check and the plan each placed every book against the shelf,
@@ -321,8 +337,9 @@ class TestEachShelfArchiveIsReadOnce:
         original = ZipFile.__init__
 
         def counting(self, file, *args, **kwargs):
-            if Path(str(file)).parent == output_dir:
-                opened[Path(str(file))] += 1
+            path = _named(file, output_dir)
+            if path.parent == output_dir:
+                opened[path] += 1
             original(self, file, *args, **kwargs)
 
         monkeypatch.setattr(ZipFile, "__init__", counting)
@@ -514,8 +531,9 @@ class TestARefreshReadsOnlyTheBooksItRewrites:
 
         def counting(self, file, *args, **kwargs):
             # The rebuild's own temporary is not an archive on the shelf.
-            if Path(str(file)).parent == output_dir and str(file).endswith(".epub"):
-                opened[Path(str(file)).name] += 1
+            path = _named(file, output_dir)
+            if path.parent == output_dir and path.suffix == ".epub":
+                opened[path.name] += 1
             original(self, file, *args, **kwargs)
 
         monkeypatch.setattr(ZipFile, "__init__", counting)
