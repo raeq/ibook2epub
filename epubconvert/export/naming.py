@@ -439,10 +439,11 @@ class MetadataNaming:
     Name a book after what the book says about itself.
 
     Every other policy derives the name from the package directory, which is
-    already a valid filename and already unique on disk. This one derives it
-    from ``dc:title`` and ``dc:creator``, which are neither, so the composed
-    name is always sanitized and clamped even when the wrapped policy would
-    not bother.
+    already a valid filename and unique within its folder -- though not across
+    the library: packages in two subfolders can share a name, and a portable
+    policy can fold two names into one. This one derives it from ``dc:title``
+    and ``dc:creator``, which are not valid filenames, so the composed name is
+    always sanitized and clamped even when the wrapped policy would not bother.
 
     The author is ``creator_sort`` when the book supplies a sort name in either
     EPUB dialect, and ``creator`` **verbatim** otherwise. It is never

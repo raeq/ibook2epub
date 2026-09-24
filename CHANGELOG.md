@@ -9,6 +9,28 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--refresh` and `--force` no longer write one book over another's archive
+  when their package folders share a name: same-named packages in different
+  subfolders, or names `--portable-names` folds together such as `Café` and
+  `Cafe`. The run reads that one source's identifier before replacing an
+  archive, and reports a collision when it is another book's.
+
+- A book whose archive reads back with a decomposed name, as HFS+ stores
+  names, is recognised as exported rather than colliding with itself for
+  ever, so it can be refreshed and forced again.
+
+- `--list` and the run log escape control characters in the reason shown
+  beside a book, and `--list` and `--list --json` no longer crash on a file
+  name that cannot be decoded.
+
+- An archive holding a different book from the one its name belongs to --
+  an edition deleted from the library, say -- is reported as an orphan
+  rather than hidden.
+
+- Under `--on-collision suffix`, a book whose plain name is held by another
+  book's archive is exported under its digest-marked name, where it used to
+  be a collision on every run.
+
 - `--min-free` stops every book not yet started once any check finds the
   volume below the floor; only the sampled book used to stop while the rest
   kept writing. Those books are reported as not attempted, not failed, and
