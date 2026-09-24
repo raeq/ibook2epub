@@ -13,6 +13,7 @@ edited note and put every later highlight in a sidecar.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -137,6 +138,25 @@ class TestANoteAnOlderVersionWrote:
         older = _as_an_older_version_wrote_it(OURS_ONLY)
 
         assert older != _trimmed(older)
+        assert noteformat.is_ours(_trimmed(older)) is True
+
+    @pytest.mark.parametrize(
+        ("title", "chapter"), [(" ", "Chapter One"), ("Dune", " "), (" ", " ")]
+    )
+    def test_is_still_ours_once_an_editor_trims_an_empty_heading(
+        self, title: str, chapter: str
+    ):
+        # A title or chapter of white space alone was written "# " or "## ",
+        # and an editor trims that to a bare "#" or "##".
+        found = [{"id": "1", "text": "a", "chapter": chapter, "book": {"title": title}}]
+        held = noteformat.split(notes.compose(found))
+        assert held is not None
+        region = re.sub(r"^(##?)$", r"\1 ", held.generated, flags=re.MULTILINE)
+        assert region != held.generated
+        digest = hashlib.sha256(region.encode()).hexdigest()[:16]
+        older = f"<!-- ibook2epub sha256={digest} -->\n{region}{held.tail}"
+
+        assert noteformat.is_ours(older) is True
         assert noteformat.is_ours(_trimmed(older)) is True
 
     def test_an_edit_inside_it_is_still_an_edit(self, older: str):

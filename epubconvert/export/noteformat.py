@@ -6,15 +6,17 @@ so that :mod:`epubconvert.export.notenames` can read a note already in the
 vault -- whose it is -- without importing the module that writes one.
 
 A note is four regions: the reader's frontmatter, a start marker carrying a
-digest of the generated region and the book the note is of, the generated
-region, and the end marker with the reader's writing beneath it. Everything
-here reads or renders that shape and nothing else.
+digest of the generated region, the book the note is of and the file that
+book is read from, the generated region, and the end marker with the
+reader's writing beneath it. Everything here reads or renders that shape and
+nothing else.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import sys
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -31,20 +33,23 @@ END_MARKER = "<!-- ibook2epub end — your notes below this line are never modif
 #: without orphaning every note already in a vault.
 END_PATTERN = re.compile(r"^<!-- ibook2epub end")
 
-#: Carries the digest of the generated region.
-START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
-#: Carries the digest and the book the note is of: a digest of its asset id
-#: (:func:`book_tags`). Notes written before the tag existed carry none and
-#: are still read; each gains one the next time its region is rewritten.
-TAGGED_TEMPLATE = "<!-- ibook2epub sha256={digest} book={book} -->"
+#: Carries the digest of the generated region, then the book the note is
+#: of -- a digest of its asset id (:func:`book_tags`) -- and the file that
+#: book is read from (:func:`book_source`), each when known. Notes written
+#: before either existed carry neither and are still read; each gains them
+#: the next time its region is rewritten.
+START_TEMPLATE = "<!-- ibook2epub sha256={digest}{book}{source} -->"
 #: Trailing white space is part of the pattern, not stripped by each caller:
 #: an editor may leave some after the marker, and the one caller that did not
 #: strip it -- the escaper -- let a forged marker with a trailing space through.
 START_PATTERN = re.compile(
-    r"^<!-- ibook2epub sha256=([0-9a-f]{16,64})(?: book=([0-9a-f]{8,64}))? -->\s*$"
+    r"^<!-- ibook2epub sha256=([0-9a-f]{16,64})(?: book=([0-9a-f]{8,64}))?"
+    r"(?: src=([0-9a-f]{8,64}))? -->\s*$"
 )
+#: The file named within a start marker.
+SOURCE_TAG = re.compile(r" src=[0-9a-f]{8,64}(?= -->)")
 #: The book tag within a start marker.
-BOOK_TAG = re.compile(r" book=[0-9a-f]{8,64}(?= -->)")
+BOOK_TAG = re.compile(r" book=[0-9a-f]{8,64}(?=(?: src=[0-9a-f]{8,64})? -->)")
 
 #: Largest note this will read back. A note of a few hundred highlights is
 #: tens of kilobytes; anything past this is a runaway or a planted file, and
@@ -72,6 +77,9 @@ class Split(NamedTuple):
     #: The book the start marker is tagged for, or None for a note written
     #: before notes were tagged.
     book: str | None = None
+    #: The file the start marker names, or None for a note written before
+    #: notes named one.
+    source: str | None = None
 
 
 def split(text: str) -> Split | None:
@@ -133,6 +141,7 @@ def _regions(head: str, found: re.Match[str], rest: list[str]) -> Split | None:
                 "\n".join(rest[:offset]) + "\n" if rest[:offset] else "",
                 "\n".join(rest[offset:]),
                 found.group(2),
+                found.group(3),
             )
     # A missing end marker is treated as an edit. Skipping a note that may be
     # fine is recoverable; overwriting one that is not is not.
@@ -196,11 +205,16 @@ def trimmed(text: str) -> str:
 TRAILING = " \t"
 
 #: The lines an older version ended in a space of its own: a blank line in a
-#: highlight, ``"> "``, and a note's blank first line, ``"**Note:** "``. Put
-#: back to check that version's digest once an editor has trimmed them.
+#: highlight, ``"> "``, a note's blank first line, ``"**Note:** "``, and the
+#: heading of a title or a chapter of white space alone, ``"# "`` or
+#: ``"## "``. Put back to check that version's digest once an editor has
+#: trimmed them. A bare ``#`` or ``##`` line is never anything else in a
+#: region: every line of a note that opens a heading is escaped, and the
+#: first line of one follows its label.
 WIDENED = (
     (re.compile(r"^>$", re.MULTILINE), "> "),
     (re.compile(r"^\*\*Note:\*\*$", re.MULTILINE), "**Note:** "),
+    (re.compile(r"^(##?)$", re.MULTILINE), r"\1 "),
 )
 
 
@@ -307,12 +321,36 @@ def book_tags(found: list[dict[str, Any]]) -> set[str]:
     return tags
 
 
-def start_marker(generated: str, book: str | None) -> str:
-    """Render the start marker for a region, tagged for its book when known."""
-    digest = digest_of(generated)
-    if book is None:
-        return START_TEMPLATE.format(digest=digest)
-    return TAGGED_TEMPLATE.format(digest=digest, book=book)
+def book_source(found: list[dict[str, Any]]) -> str | None:
+    """
+    Name the file a note's book is read from, as its start marker records it.
+
+    The book's package name, digested as its tag is. A book removed from
+    Books and added again answers to a new asset id, so its tag names no
+    book the run knows and says nothing; the file it is read from is still
+    named the same, and tells its note from a namesake's -- ``Dune.pdf``'s
+    note from ``Dune.epub``'s, which want one name.
+
+    :param found: This book's annotations.
+
+    :return: The digest, or None when they name no one file.
+    """
+    sources = set()
+    for item in found:
+        book = item.get("book")
+        source = book.get("source") if isinstance(book, dict) else None
+        sources.add(source if isinstance(source, str) and source else None)
+    only = sources.pop() if len(sources) == 1 else None
+    return None if only is None else disambiguator(only)
+
+
+def start_marker(generated: str, book: str | None, source: str | None = None) -> str:
+    """Render the start marker for a region, naming its book and file if known."""
+    return START_TEMPLATE.format(
+        digest=digest_of(generated),
+        book="" if book is None else f" book={book}",
+        source="" if source is None else f" src={source}",
+    )
 
 
 def is_ours(existing: str) -> bool:
@@ -361,3 +399,65 @@ def _yaml_escape(match: re.Match[str]) -> str:
     """Render one character as a double-quoted YAML escape: ``\\x92``."""
     code = ord(match.group())
     return f"\\x{code:02X}" if code <= 0xFF else f"\\u{code:04X}"
+
+
+#: A double-quoted YAML scalar, and a single-quoted one, each alone on the
+#: rest of its line but for a comment.
+DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"[ \t]*(?:#.*)?')
+SINGLE_QUOTED = re.compile(r"'((?:[^']|'')*)'[ \t]*(?:#.*)?")
+
+#: One escape of a double-quoted scalar: a code point in hex, or one letter.
+ESCAPE = re.compile(
+    r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))", re.DOTALL
+)
+
+#: YAML 1.2's one-letter escapes (5.7) but for the controls no identifier
+#: holds; one not listed is left as written.
+ESCAPED = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    " ": " ",
+    "t": "\t",
+    "n": "\n",
+    "N": "\x85",
+    "_": "\xa0",
+}
+
+#: Where a plain scalar's comment starts: a hash after white space.
+COMMENT = re.compile(r"[ \t]#")
+
+
+def scalar(written: str) -> str:
+    """
+    Read the value of one frontmatter line, as YAML would.
+
+    The inverse of :func:`quoted`, and of whatever else writes the
+    frontmatter back: Obsidian's property editor and YAML linters write a
+    plain scalar unquoted, or single-quote it. Only the three forms a value
+    on one line takes; anything else is returned as it stands, so it
+    compares equal to nothing it does not spell.
+
+    :param written: What follows ``key:`` on the line.
+
+    :return: The value.
+    """
+    written = written.strip()
+    double = DOUBLE_QUOTED.fullmatch(written)
+    if double:
+        return ESCAPE.sub(_unescape, double.group(1))
+    single = SINGLE_QUOTED.fullmatch(written)
+    if single:
+        return single.group(1).replace("''", "'")
+    if written[:1] in ("'", '"'):
+        return written
+    return COMMENT.split(written, maxsplit=1)[0].rstrip()
+
+
+def _unescape(match: re.Match[str]) -> str:
+    """Read one escape of a double-quoted scalar; an unknown one stays."""
+    code = next((group for group in match.groups()[:3] if group), None)
+    if code is None:
+        return ESCAPED.get(match.group(4), match.group())
+    point = int(code, 16)
+    return chr(point) if point <= sys.maxunicode else match.group()

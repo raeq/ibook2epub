@@ -720,7 +720,7 @@ category: book
 tags: [books]
 source: ibook2epub
 ---
-<!-- ibook2epub sha256=351e6dffa048ee4a book=3a90a3e2 -->
+<!-- ibook2epub sha256=351e6dffa048ee4a book=3a90a3e2 src=57ce2d19 -->
 # Leviathan Wakes
 *James S.A. Corey*
 
@@ -768,8 +768,9 @@ the run names the file and exits `1`; move it aside and rerun. Under
 numbered note beside it instead.
 
 The marker line also names the book the note is of, as a digest of Apple's id
-for it, so a note is never rewritten with another book's highlights, whatever
-a later run names it. Which note a book gets depends on your library, never on
+for it, and the file that book is read from, as a digest of its name, so a
+note is never rewritten with another book's highlights, whatever a later run
+names it. Which note a book gets depends on your library, never on
 which books have highlights today. Two books that want one note — `Dune.epub`
 and `Dune.pdf` — are a name collision, settled the same way whether you have
 highlighted one of them or both: the note is the first one's, the other is
@@ -777,16 +778,29 @@ named in the summary and gets none, and `--on-collision suffix` numbers it,
 `Dune (2).md`. A note already written for a book stays that book's, so a book
 gaining its first highlight, or losing its last, never moves another book's
 note. Notes written before the marker named its book are still recognised:
-each stays with the book whose highlights it holds, and is tagged the next
-time it changes.
+each stays with the book holding every highlight in it, and is tagged the next
+time it changes. A note that says nothing of whose it is — one holding
+highlights no book has any more, or only some of one book's — goes with its
+name, or the numbered name `--on-collision suffix` gave it, when only one book
+wants that name. When two do, neither is handed it: without
+`--on-collision suffix` the run names it and exits `1`, and with it each book
+gets a numbered note. So does a note two books each hold every highlight of.
 
-A note is another book's only when the book it names is one Books still
-knows — in your library, highlighted or not — or when its frontmatter names
-another edition's identifier. Such a note is left alone: without
+A note is another book's when the book it names is one Books still knows —
+in your library, highlighted or not — when its frontmatter names another
+edition's identifier, however that line is quoted, or when it names another
+file than the one the book is read from. Such a note is left alone: without
 `--on-collision suffix` the run names it and exits `1`, and with it the book
 gets a numbered note of its own. A book you remove from Books and add again
-gets a new id from Apple; its note is still its own, and is re-tagged the
-next time it changes.
+gets a new id from Apple; its note, which names its file, is still its own,
+and is re-tagged the next time it changes.
+
+A book whose name changes — you adopt `--name-by author-title`, say, or its
+metadata is corrected — takes its note with it: the note is renamed to the
+new name, with everything of yours in it. If it cannot be, because something
+is already at the new name or the note's `.md.new` is still beside it, the
+run names it and exits `1` until you move it yourself; no second note is
+started beside it.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 

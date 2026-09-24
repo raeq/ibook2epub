@@ -24,6 +24,8 @@ otherwise forge the marker that ends the generated region.
 
 from __future__ import annotations
 
+import errno
+import os
 import re
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
@@ -40,12 +42,14 @@ from .naming import (
     MAX_FILENAME_BYTES,
     disambiguator,
     encode_name,
+    filesystem_key,
     truncate_bytes,
 )
 from .noteformat import (
     END_MARKER,
     END_PATTERN,
     START_PATTERN,
+    book_source,
     book_tags,
     is_ours,
     normalise,
@@ -354,7 +358,8 @@ def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
     :return: The file's contents.
     """
     generated = body(found)
-    marker = start_marker(generated, min(book_tags(found), default=None))
+    tag = min(book_tags(found), default=None)
+    marker = start_marker(generated, tag, book_source(found))
     book = found[0].get("book", {}) if found else {}
     below = tail if tail is not None else f"{END_MARKER}\n"
     return f"{frontmatter(book)}{marker}\n{generated}{below}"
@@ -371,7 +376,7 @@ def rewrite(
     stays quiet. A note written before notes were tagged is therefore tagged
     only when its region is rewritten anyway, and so is one tagged for an
     asset id the book no longer answers to -- the old one of a book removed
-    from Books and added again.
+    from Books and added again. So is the file the book is read from named.
 
     :param existing: The note as it stands.
     :param found: This book's annotations, in reading order.
@@ -395,7 +400,8 @@ def rewrite(
     book = held.book
     if book is None or (own and book not in own | set(tags)):
         book = min(own, default=book)
-    return f"{held.head}{start_marker(generated, book)}\n{generated}{held.tail}"
+    marker = start_marker(generated, book, book_source(found) or held.source)
+    return f"{held.head}{marker}\n{generated}{held.tail}"
 
 
 def write_vault(
@@ -560,18 +566,19 @@ def _write_notes(
         for item, mine in wanted
         if mine
     }
-    names = note_names(
+    naming = note_names(
         [item for item, _ in wanted if item.filename],
         suffix=suffix,
         claimants=books,
         vault=Vault(directory),
         known=known.tags,
+        library=known.of_package,
     )
     collided: list[str] = []
     for item, mine in wanted:
         if not mine:
             continue
-        name = names[item.package] if item.filename else None
+        name = naming.given[item.package] if item.filename else None
         if name is None:
             # Lost a name collision: the book's own, which leaves it no stem to
             # share -- under -ao no planner runs to report that, and these
@@ -579,8 +586,16 @@ def _write_notes(
             # another book's file has the same stem.
             collided.append(item.package.name)
             continue
+        strays = naming.strays.get(item.package)
+        if strays and not _gather(directory, strays, name, naming.given.values()):
+            tally["left"].extend(strays)
+            continue
         written = _write_one(
-            directory / name, mine, book=books[item.package], known=known.tags
+            directory / name,
+            mine,
+            book=books[item.package],
+            known=known.tags,
+            theirs=item.package in naming.refused,
         )
         tally[written].append(name)
     return tally, collided
@@ -596,6 +611,7 @@ OUTCOMES = (
     "another",
     "unreadable",
     "blocked",
+    "left",
     "failed",
 )
 
@@ -608,7 +624,7 @@ OUTCOMES = (
 #: exactly as unsaved as when the same file sits at the sidecar's path, and
 #: moving it aside is a fix only the reader can make. ``another`` is the same
 #: case with a note this tool did write, for another book.
-UNSAVED = ("foreign", "another", "unreadable", "blocked", "failed")
+UNSAVED = ("foreign", "another", "unreadable", "blocked", "left", "failed")
 
 #: What the reader is told about each outcome worth mentioning. Every sentence
 #: has to be true of every file it counts: "not written by ibook2epub" was
@@ -625,6 +641,9 @@ REPORTS = {
     "another": "%d note(s) are another book's and were left alone, so these "
     "books' highlights were not written; rerun with --on-collision suffix to "
     "give each book a note of its own, or move the note aside: %s",
+    "left": "%d note(s) are under the name their book had before and could "
+    "not be moved to the one it has now, so their books' highlights were not "
+    "written; see the errors above: %s",
     "failed": "%d note(s) could not be written: %s",
 }
 
@@ -645,6 +664,89 @@ def _naming(names: list[str]) -> str:
     return shown + (f", and {len(names) - 3} more" if len(names) > 3 else "")
 
 
+def _gather(
+    directory: Path, strays: list[str], name: str, given: Collection[str | None]
+) -> bool:
+    """
+    Move a book's note from the name it had before to the one it is given.
+
+    Renamed, not rewritten, so both of the reader's regions go with it, and
+    only onto a name nothing is at. A sidecar beside it (``.md.new``) holds
+    new highlights the reader has yet to merge, and would be left beside
+    nothing: the note is not moved while one is there. Nor is a note
+    another book of the run is given, or one of two tagged for the book.
+
+    :param directory: The vault.
+    :param strays: The notes tagged for the book under other names.
+    :param name: The note name the book is given.
+    :param given: Every note name the run gives.
+
+    :return: True when the note is at *name* now, False when it was left,
+        which is logged.
+    """
+    old, target = directory / strays[0], directory / name
+    others = {filesystem_key(other) for other in given if other and other != name}
+    sidecar = sidecar_for(old)
+    try:
+        if len(strays) > 1:
+            reason = "another note is tagged for the same book"
+        elif filesystem_key(old.name) in others:
+            reason = "another book is given that name"
+        elif _present(target):
+            reason = f"{printable(name)} is already there"
+        elif _present(sidecar):
+            reason = f"{printable(sidecar.name)} beside it is still to be merged"
+        else:
+            _move(old, target)
+            logger.info(
+                "Moved %s to %s, the name its book has now.",
+                printable(old.name),
+                printable(name),
+            )
+            return True
+    except OSError as exc:
+        reason = f"it could not be moved: {printable(str(exc))}"
+    logger.error(
+        "Left %s alone: it is the note of the book now given %s, under the "
+        "name it had before, and %s. Move it to %s yourself and rerun.",
+        ", ".join(printable(stray) for stray in strays),
+        printable(name),
+        reason,
+        printable(name),
+    )
+    return False
+
+
+def _move(old: Path, target: Path) -> None:
+    """
+    Move a note to a name that is free, and never onto one that is not.
+
+    Checking the name and then renaming left a window: ``rename`` replaces
+    whatever is there, so a note saved at that name in between was lost. A
+    hard link claims the name only if it is still free (EEXIST otherwise),
+    and the old name is removed once it has. A volume without hard links,
+    or a rename that only changes case, falls back to ``rename``.
+
+    :param old: The note under the name its book had before.
+    :param target: The name its book has now.
+
+    :raises OSError: If the note could not be moved, the target included.
+    """
+    if filesystem_key(old.name) == filesystem_key(target.name):
+        old.rename(target)
+        return
+    try:
+        os.link(old, target, follow_symlinks=False)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV):
+            raise
+        old.rename(target)
+        return
+    old.unlink()
+
+
 def _write_one(  # pylint: disable=too-many-return-statements
     target: Path,
     mine: list[dict[str, Any]],
@@ -652,6 +754,7 @@ def _write_one(  # pylint: disable=too-many-return-statements
     book: Claimant | None = None,
     known: Collection[str] | None = None,
     beside: Path | None = None,
+    theirs: bool = False,
 ) -> str:
     """
     Put one book's note in place, without touching what the reader wrote.
@@ -668,6 +771,9 @@ def _write_one(  # pylint: disable=too-many-return-statements
         any tag as a known book's (:func:`~.notenames.holding`).
     :param beside: The note *target* is the sidecar of, or None when it is
         a note itself.
+    :param theirs: Whether naming found the note another book's on evidence
+        the note alone does not carry: two books holding it alike, or
+        wanting a note that nothing claims.
 
     Each branch returns rather than threading one variable through, because
     every one of them is a different thing to tell the reader and collapsing
@@ -707,7 +813,7 @@ def _write_one(  # pylint: disable=too-many-return-statements
     if not wrote_it(existing):
         return "foreign"
     book = book if book is not None else claimant(mine)
-    if holding(parse(existing), book, known) is Holding.ANOTHER:
+    if theirs or holding(parse(existing), book, known) is Holding.ANOTHER:
         # A name is worked out afresh each run, and a note tagged for another
         # book is that book's whatever this run named it. Checked before the
         # sidecar, which would carry this book's highlights beside it.

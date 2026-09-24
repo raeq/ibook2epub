@@ -84,6 +84,23 @@ class TestABookReimportedUnderANewAssetId:
 
         assert "> z" in (vault / "Dune.md").read_text(encoding="utf-8")
 
+    def test_it_is_written_under_the_spelling_it_has_on_disk(self, tmp_path: Path):
+        # Written when the book's file was "dune.epub". Adopted, but "Dune.md"
+        # was written beside it, which on a case-sensitive volume is a
+        # second file: the reader's writing stayed behind in the first.
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        note = notes.compose([_highlight("OLDASSET", "a")]) + MINE
+        (vault / "dune.md").write_text(note, encoding="utf-8")
+
+        for _ in range(2):
+            assert _write(vault, [_highlight("NEWASSET", "b")]) == exits.SUCCESS
+
+        assert [path.name for path in vault.iterdir()] == ["dune.md"]
+        text = (vault / "dune.md").read_text(encoding="utf-8")
+        assert "> b" in text
+        assert MINE in text
+
 
 class TestANoteOfAnotherBookThisRunKnows:
     def test_one_in_the_library_without_highlights_is_refused(
@@ -157,6 +174,100 @@ class TestANoteNamingAnotherEdition:
         assert _write(vault, [_highlight("NEWASSET", "b", **same)]) == 0
 
         assert "> b" in (vault / "Dune.md").read_text(encoding="utf-8")
+
+
+ISBN = "urn:isbn:9780441013593"
+
+
+class TestAnIdentifierAsTheReaderLeftIt:
+    """
+    Obsidian's property editor, or a YAML linter, writes a plain scalar back
+    unquoted. The line was compared as written, so the book's own note named
+    "another edition" and was refused on every run.
+    """
+
+    @pytest.mark.parametrize(
+        "written",
+        [
+            ISBN,
+            f"'{ISBN}'",
+            "9780441013593",
+            "URN:ISBN:978-0-441-01359-3",
+            '"urn:isbn:\\x39780441013593"',
+            '"urn:isbn:\\u00397804410135\\u00393"',
+            f"{ISBN} # the Ace edition",
+            f'"{ISBN}"  # the Ace edition',
+        ],
+    )
+    @pytest.mark.parametrize("suffix", [False, True])
+    def test_names_the_same_edition(self, tmp_path: Path, written: str, suffix: bool):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        old = notes.compose([_highlight("OLDASSET", "a", identifier=ISBN)]) + MINE
+        edited = old.replace(f'identifier: "{ISBN}"', f"identifier: {written}")
+        assert edited != old
+        (vault / "Dune.md").write_text(edited, encoding="utf-8")
+        found = [_highlight("NEWASSET", "a", identifier=ISBN)]
+
+        more = _highlight("NEWASSET", "b", identifier=ISBN)
+        code = _write(vault, [*found, more], suffix=suffix)
+
+        assert code == exits.SUCCESS
+        assert [path.name for path in vault.iterdir()] == ["Dune.md"]
+        assert "> b" in (vault / "Dune.md").read_text(encoding="utf-8")
+
+    def test_the_declared_identifier_counts_too(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        old = notes.compose([_highlight("OLDASSET", "a", identifier=ISBN)])
+        (vault / "Dune.md").write_text(old.replace(f'"{ISBN}"', "9780441013593"))
+        found = [
+            _highlight(
+                "NEWASSET", "b", identifier="urn:uuid:x", declaredIdentifier=ISBN
+            )
+        ]
+
+        assert _write(vault, found) == exits.SUCCESS
+
+        assert "> b" in (vault / "Dune.md").read_text(encoding="utf-8")
+
+    def test_another_edition_unquoted_is_still_another(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        old = notes.compose([_highlight("OLDASSET", "a", identifier=ISBN)])
+        (vault / "Dune.md").write_text(old.replace(f'"{ISBN}"', ISBN))
+        before = (vault / "Dune.md").read_bytes()
+        found = [_highlight("NEWASSET", "b", identifier="urn:isbn:9780593099322")]
+
+        assert _write(vault, found) == exits.FAILED
+        assert (vault / "Dune.md").read_bytes() == before
+
+
+class TestReadingAScalar:
+    @pytest.mark.parametrize(
+        ("written", "value"),
+        [
+            ("plain", "plain"),
+            ("plain # comment", "plain"),
+            ("a#b", "a#b"),
+            ("'it''s'", "it's"),
+            ("'a' # comment", "a"),
+            ('"say \\"hi\\""', 'say "hi"'),
+            ('"back\\\\slash"', "back\\slash"),
+            ('"\\x92"', "\x92"),
+            ('"\\u00e9"', "é"),
+            ('"\\U0001F600"', "\U0001f600"),
+            ('"tab\\tnew\\nline"', "tab\tnew\nline"),
+            ('"odd \\q escape"', "odd \\q escape"),
+            ('"\\UFFFFFFFF"', "\\UFFFFFFFF"),
+            ('"unterminated', '"unterminated'),
+            ("'unterminated", "'unterminated"),
+            ('"a" trailing', '"a" trailing'),
+            ("  spaced  ", "spaced"),
+        ],
+    )
+    def test_each_form_yaml_writes(self, written: str, value: str):
+        assert noteformat.scalar(written) == value
 
 
 class TestTheLibraryIsReadForEveryBook:

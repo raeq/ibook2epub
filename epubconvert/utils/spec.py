@@ -28,8 +28,9 @@ def fold_name(name: str) -> str:
     """
     Fold a name the way a case-insensitive filesystem compares it.
 
-    Unicode's canonical caseless match (D145), with full case folding, as
-    case-insensitive APFS compares names. Here because the writer
+    NFD, then full case folding, then NFC: Unicode's canonical caseless match
+    (D145) with the result recomposed, as case-insensitive APFS compares
+    names. Here because the writer
     (:func:`epubconvert.export.naming.filesystem_key`) and the validator's
     duplicate check must fold alike, and were two copies of one rule held
     together only by a test.
