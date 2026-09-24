@@ -46,6 +46,7 @@ from .. import __version__
 from ..utils import schema
 from ..utils.app_logger import logger
 from ..utils.contained import escapes
+from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.policy import NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -302,9 +303,11 @@ def collect(
         try:
             found.append(_annotation_of(row, library, parsed, policy))
         except (TypeError, ValueError, ArithmeticError, OSError) as exc:
+            # Escaped, as library.py escapes the asset id of a row it skips:
+            # the UUID is whatever Apple's column held, ESC and CR included.
             logger.warning(
                 "Skipped an unreadable annotation (%s): %s",
-                row["ZANNOTATIONUUID"] or "no id",
+                printable(str(row["ZANNOTATIONUUID"] or "no id")),
                 exc,
             )
     # By book, then by when it was made. Reading order would be better and is

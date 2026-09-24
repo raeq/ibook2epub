@@ -807,12 +807,12 @@ def validate_archive(path: Path) -> list[str]:
 
             broken = archive.testzip()
             if broken is not None:
-                problems.append(f"corrupt member: {broken}")
+                problems.append(f"corrupt member: {printable(broken)}")
 
             try:
                 package = read_package(archive)
             except ValidationError as exc:
-                problems.append(str(exc))
+                problems.append(printable(str(exc)))  # names the book's members
                 return problems
 
             problems.extend(_check_manifest(members, package))
@@ -906,15 +906,15 @@ def _check_manifest(members: set[str], package: Package) -> list[str]:
     :param members: The archive's member names, built once by the caller.
     :param package: The parsed package document.
 
-    :return: A list of problems.
+    :return: Problems, the book's ids and hrefs escaped: ``%1B`` decodes to ESC.
     """
     problems: list[str] = []
 
     if not package.manifest:
-        problems.append(f"{package.opf_path} declares no manifest items")
+        problems.append(f"{printable(package.opf_path)} declares no manifest items")
 
     missing = sorted(
-        f"{item_id} -> {href}"
+        printable(f"{item_id} -> {href}")
         for item_id, href in package.manifest.items()
         if href not in members
     )
@@ -923,14 +923,14 @@ def _check_manifest(members: set[str], package: Package) -> list[str]:
     if len(missing) > 5:
         problems.append(f"...and {len(missing) - 5} more missing manifest item(s)")
 
-    dangling = sorted(set(package.spine) - set(package.manifest))
+    dangling = sorted(map(printable, set(package.spine) - set(package.manifest)))
     for idref in dangling[:5]:
         problems.append(f"spine references unknown manifest id: {idref}")
     if len(dangling) > 5:
         problems.append(f"...and {len(dangling) - 5} more dangling spine id(s)")
 
     if not package.spine:
-        problems.append(f"{package.opf_path} declares no spine")
+        problems.append(f"{printable(package.opf_path)} declares no spine")
 
     return problems
 
