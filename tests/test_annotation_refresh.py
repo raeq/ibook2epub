@@ -151,3 +151,17 @@ class TestADryRefreshPredictsTheRealOne:
 
         assert dry == real == exits.NO_PERMISSION
         assert len(attempts) == 2
+
+    def test_a_shelf_that_is_not_there_is_reported(self, tmp_path, monkeypatch):
+        # The dry run returned before the check for the shelf, so a typo in
+        # -o exited 0 where the real run exited 5.
+        make_package(tmp_path / "lib", "Old.epub")
+        monkeypatch.setattr(annotating, "collect_annotations", lambda **_kwargs: [])
+        typo = tmp_path / "shelf-typo"
+        argv = ["-s", str(tmp_path / "lib"), "-o", str(typo), "-ae", "-ar", "-q"]
+
+        dry = run.main([*argv, "-d"])
+        real = run.main(argv)
+
+        assert dry == real == exits.NO_OUTPUT
+        assert not typo.exists()
