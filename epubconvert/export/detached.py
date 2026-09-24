@@ -196,8 +196,28 @@ def _directory_refusal(folder: Path) -> str | None:
     if not stat.S_ISDIR(mode):
         return os.strerror(errno.ENOTDIR)
     if not os.access(folder, os.W_OK | os.X_OK):
-        return os.strerror(errno.EACCES)
+        return _unwritable_reason(folder)
     return None
+
+
+def _unwritable_reason(folder: Path) -> str:
+    """
+    Say why a directory ``os.access`` refused cannot be written into.
+
+    A read-only volume refuses root too, and the write says so; called a
+    permission, it sent the reader to chmod a mount that no mode would open.
+
+    :param folder: The directory, already found not writable.
+
+    :return: The reason, as the operating system puts it.
+    """
+    read_only = getattr(os, "ST_RDONLY", 0)
+    try:
+        # Not on every platform: Windows has no statvfs.
+        mounted = os.statvfs(folder).f_flag if read_only else 0
+    except (AttributeError, OSError):
+        mounted = 0
+    return os.strerror(errno.EROFS if mounted & read_only else errno.EACCES)
 
 
 def _cannot_write(target: Path, reason: str) -> str:
@@ -376,7 +396,10 @@ def _read_back(target: Path) -> str | None:
     :raises ValueError: If it is not an ordinary file of a plausible size. A
         FIFO blocks ``read_text`` until a writer appears, which is never.
     """
-    if not target.exists():
+    # os.path.exists, which never raises: Path.exists raises EACCES on 3.10
+    # and 3.11 for a file in a directory the run may not search, and a file
+    # that is not there was refused as "already there and could not be read".
+    if not os.path.exists(target):  # noqa: PTH110
         return None
     if not target.is_file():
         raise ValueError("not a regular file")

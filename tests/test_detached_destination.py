@@ -13,6 +13,7 @@ dry run and the real run alike, as a read-only shelf is.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods,protected-access
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -54,6 +55,37 @@ def _library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     )
     (tmp_path / "shelf").mkdir()
     return library
+
+
+def _deny(monkeypatch: pytest.MonkeyPatch, closed: Path) -> None:
+    """Make *closed* a directory this run may not write into, as for root."""
+    allowed = os.access
+
+    def access(path: Any, how: int, **kwargs: Any) -> bool:
+        if how & os.W_OK and Path(os.fspath(path)) == closed:
+            return False
+        return allowed(path, how, **kwargs)
+
+    monkeypatch.setattr(os, "access", access)
+
+
+class _ReadOnly:
+    """What statvfs says of a volume mounted read-only."""
+
+    f_flag = getattr(os, "ST_RDONLY", 1)
+
+
+def _read_only(monkeypatch: pytest.MonkeyPatch, mounted: Path) -> None:
+    """Make *mounted* a directory on a read-only volume, as root sees it too."""
+    _deny(monkeypatch, mounted)
+    measure = os.statvfs
+
+    def statvfs(path: Any) -> Any:
+        if Path(os.fspath(path)) == mounted:
+            return _ReadOnly()
+        return measure(path)
+
+    monkeypatch.setattr(os, "statvfs", statvfs)
 
 
 def _run(library: Path, route: list[str], destination: Path | str, mode: list[str]):
@@ -102,14 +134,7 @@ class TestAFileItCannotWrite:
     ):
         closed = tmp_path / "closed"
         closed.mkdir()
-        allowed = os.access
-
-        def access(path: Any, how: int, **kwargs: Any) -> bool:
-            if how & os.W_OK and Path(os.fspath(path)) == closed:
-                return False
-            return allowed(path, how, **kwargs)
-
-        monkeypatch.setattr(os, "access", access)
+        _deny(monkeypatch, closed)
 
         code = _run(library, ["-ao"], closed / "h.json", mode)
 
@@ -117,6 +142,53 @@ class TestAFileItCannotWrite:
         assert f"Could not write {closed / 'h.json'}: Permission denied" in (
             capsys.readouterr().err
         )
+
+    @pytest.mark.parametrize("mode", EITHER_RUN)
+    def test_in_a_directory_it_may_not_search(
+        self, library, tmp_path, monkeypatch, capsys, mode
+    ):
+        # Path.exists raises EACCES for a file in a directory the run may not
+        # search on 3.10 and 3.11, and the refusal called a file that is not
+        # there "already there and could not be read". Raised here on every
+        # Python.
+        closed = tmp_path / "closed"
+        closed.mkdir()
+        target = closed / "h.json"
+        _deny(monkeypatch, closed)
+        exists = Path.exists
+
+        def unsearchable(path: Path, *args: Any, **kwargs: Any) -> bool:
+            if path == target:
+                raise PermissionError(errno.EACCES, "Permission denied", str(path))
+            return exists(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "exists", unsearchable)
+
+        code = _run(library, ["-ao"], target, mode)
+
+        err = capsys.readouterr().err
+        assert code == exits.NO_OUTPUT
+        assert f"Could not write {target}: Permission denied" in err
+        assert "already there" not in err
+
+    @pytest.mark.skipif(not hasattr(os, "statvfs"), reason="no statvfs here")
+    @pytest.mark.parametrize("mode", EITHER_RUN)
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_on_a_read_only_volume(self, library, monkeypatch, capsys, route, mode):
+        # Named as the write would name it, not as a permission the reader
+        # could change with chmod.
+        tmp_path = library.parent
+        if "-ar" in route:
+            assert run.main(["-s", str(library), "-o", str(tmp_path / "shelf")]) == 0
+        mounted = tmp_path / "mounted"
+        mounted.mkdir()
+        _read_only(monkeypatch, mounted)
+
+        code = _run(library, route, mounted / "h.json", mode)
+
+        err = capsys.readouterr().err
+        assert code == exits.NO_OUTPUT
+        assert f"Could not write {mounted / 'h.json'}: Read-only file system" in err
 
     @pytest.mark.parametrize("mode", EITHER_RUN)
     @pytest.mark.parametrize(
