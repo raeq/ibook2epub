@@ -9,6 +9,7 @@ import errno
 import hashlib
 import json
 import os
+import shutil
 import stat
 import tracemalloc
 import zipfile
@@ -168,7 +169,7 @@ class TestAPackageCarryingItsOwnAnnotations:
     and readers disagree about which of the two they see.
     """
 
-    MINE = ({"id": "MINE"},)
+    MINE: tuple[dict[str, object], ...] = ({"id": "MINE"},)
 
     @staticmethod
     def _package(library: Path) -> Path:
@@ -210,7 +211,7 @@ class TestARefreshStreamsItsMembers:
     stream, not what the whole book costs to hold.
     """
 
-    MINE = ({"id": "MINE"},)
+    MINE: tuple[dict[str, object], ...] = ({"id": "MINE"},)
 
     @staticmethod
     def _shelved(tmp_path: Path, media: bytes) -> Path:
@@ -573,6 +574,16 @@ class TestCovers:
             read_package_dir(package)
 
 
+#: Where extract_cover looks up its copy, for tests that make it fail.
+COPY = "epubconvert.export.inspect_output.shutil.copyfileobj"
+
+
+def _disk_fills(reading, writing) -> None:
+    """Copy one buffer, then fail the way a full disk does."""
+    writing.write(reading.read(65536))
+    raise OSError(errno.ENOSPC, "No space left on device")
+
+
 class TestACoverIsWrittenWholeOrNotAtAll:
     """
     A cover is written only when its name is free, so a truncated one is never
@@ -595,12 +606,7 @@ class TestACoverIsWrittenWholeOrNotAtAll:
         # place. A full disk partway through left a prefix of the image, and
         # every later run saw the name taken and never wrote it again.
         package, target = self._book(tmp_path)
-
-        def disk_fills(reading, writing):
-            writing.write(reading.read(65536))
-            raise OSError(errno.ENOSPC, "No space left on device")
-
-        monkeypatch.setattr(inspect_output.shutil, "copyfileobj", disk_fills)
+        monkeypatch.setattr(COPY, _disk_fills)
 
         assert inspect_output.extract_cover(package, target) is None
         assert sorted(p.name for p in target.parent.iterdir()) == ["Book.epub"]
@@ -608,11 +614,7 @@ class TestACoverIsWrittenWholeOrNotAtAll:
     def test_the_next_run_writes_the_whole_cover(self, tmp_path, monkeypatch):
         package, target = self._book(tmp_path)
         with monkeypatch.context() as patched:
-            patched.setattr(
-                inspect_output.shutil,
-                "copyfileobj",
-                lambda *_: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full")),
-            )
+            patched.setattr(COPY, _disk_fills)
             inspect_output.extract_cover(package, target)
 
         cover = inspect_output.extract_cover(package, target)
@@ -639,7 +641,7 @@ class TestACoverIsWrittenWholeOrNotAtAll:
         def no_links(*_args):
             raise PermissionError(errno.EPERM, "Operation not permitted")
 
-        monkeypatch.setattr(inspect_output.os, "link", no_links)
+        monkeypatch.setattr("epubconvert.export.inspect_output.os.link", no_links)
 
         cover = inspect_output.extract_cover(package, target)
 
@@ -672,15 +674,13 @@ class TestACoverIsWrittenWholeOrNotAtAll:
     ):
         package, target = self._book(tmp_path)
         cover = target.with_name("Book.jpg")
-        real = inspect_output.shutil.copyfileobj
+        real = shutil.copyfileobj
 
         def someone_else_writes_first(reading, writing):
             real(reading, writing)
             cover.write_bytes(b"THEIRS")
 
-        monkeypatch.setattr(
-            inspect_output.shutil, "copyfileobj", someone_else_writes_first
-        )
+        monkeypatch.setattr(COPY, someone_else_writes_first)
 
         assert inspect_output.extract_cover(package, target) is None
         assert cover.read_bytes() == b"THEIRS"
