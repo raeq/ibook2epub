@@ -406,8 +406,8 @@ ibook2epub -s "$HOME/iBooks/" -o "$HOME/Downloads/epubs/" -d
 ```
 
 A dry run refuses what the real run would refuse, with the same exit code: a
-shelf it cannot write, a volume below `--min-free`, a highlights file it
-cannot write.
+shelf it cannot write, a volume below `--min-free`, a highlights file or vault
+it cannot write, a `--library-export` file it may not write.
 
 Verbose run, also written to a log file:
 
@@ -700,8 +700,10 @@ unparsable.
 
 A file given to `-ad` or `-ao` is judged before anything is read or
 converted, in a dry run too. A directory that is not there or cannot be
-written, or a file already there that is not an annotation export, stops the
-run with exit code 5 and says why, rather than after every book is converted.
+written (a read-only volume is named as one), a file already there that is not
+an annotation export, or a name the run itself makes a directory (`-ad Books
+-o Books`) stops the run with exit code 5 and says why, rather than after
+every book is converted.
 
 **On macOS this needs Full Disk Access.** The databases live inside Apple's
 container. Without it, `-ao` and `-ar`, where the highlights are the whole run,
@@ -714,7 +716,9 @@ conversion, so a script that needs the highlights should watch for that line.
 
 `--annotations-format markdown` turns the detached export into one note per
 book, with YAML frontmatter and the highlights as blockquotes. With it, `-ad`
-and `-ao` name a **directory** rather than a file.
+and `-ao` name a **directory** rather than a file. It is created if it is not
+there; one that is a file, sits under a file, or cannot be written or created
+is refused before anything is converted, in a dry run too, with exit code 5.
 
 ```bash
 ibook2epub -ao ~/vault/Books --annotations-format markdown   # just the notes

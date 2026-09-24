@@ -37,6 +37,38 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `b.xhtml` had a different name on each, and `--verify` and `-ae -ar` read
   the book differently.
 
+- `-ad` naming the shelf or a directory the run makes above it (`-ad Books
+  -o Books` on a first run) is refused before anything is converted, with
+  "Is a directory" and exit code `5`. The dry run exited `0`, and the real run
+  converted every book and then exited `5`.
+
+- A vault of notes (`--annotations-format markdown`) that is a file, sits
+  under a file, or is on a volume the run cannot write is refused before
+  anything is converted, in the dry run and the real run alike, with exit
+  code `5`. The dry run exited `0`, and the real run converted every book and
+  then refused the vault. A vault that is not there yet is still created.
+
+- A dry run of `--library-export` refuses a file the real run would refuse,
+  with exit code `5`, as a dry run of `-ao` does. It only warned ("A real run
+  would refuse to write") and exited `0`. So does `-ao --library-export -d`.
+
+- A highlights file in a directory the run may not search is refused as
+  "Permission denied" on every Python; on 3.10 and 3.11 it was said to be
+  "already there and could not be read" when it was not there at all. A
+  directory on a read-only volume is named as "Read-only file system" rather
+  than "Permission denied".
+
+- A copy whose name on the shelf cannot be looked at (an I/O error from a
+  share or USB volume that dropped, on Python 3.10 and 3.11) no longer ends
+  the run, a dry run or `--list` in a traceback with exit code `1` and no
+  summary: the name is taken as free, as the copy workers already took it,
+  and a copy that then fails is counted and says why.
+
+- A Ctrl-C landing exactly as the `--min-free` sampler released its lock no
+  longer leaves the report's lock held for the rest of the process, which
+  hung a second run started in it; nor can one leave a measurement marked
+  as under way for good.
+
 - Under `--on-collision suffix`, a book declaring no usable identifier no
   longer keeps a numbered-looking file that declares one. A deleted
   `Dune (1965)` left `Dune (1965).epub`, and an unidentified `Dune` added
