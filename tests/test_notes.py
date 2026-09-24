@@ -31,7 +31,7 @@ from typing import Any
 
 import pytest
 
-from epubconvert.export import notes
+from epubconvert.export import noteformat, notes
 from epubconvert.export.archive import write_atomically
 from epubconvert.utils import app_logger
 from epubconvert.utils.policy import Assignment
@@ -277,7 +277,7 @@ class TestEscaping:
         assert "\n\\" in body
 
     def test_a_highlight_cannot_forge_the_end_marker(self):
-        body = notes.body([_annotation(text=f"a\n{notes.END_MARKER}")])
+        body = notes.body([_annotation(text=f"a\n{noteformat.END_MARKER}")])
 
         assert not any(
             line_.startswith("<!-- ibook2epub end") for line_ in body.split("\n")
@@ -435,9 +435,9 @@ class TestEscaping:
         assert f"**Note:** {first}\n" in body
 
     def test_a_notes_first_line_still_cannot_forge_a_marker(self):
-        body = notes.body([_annotation(note=notes.END_MARKER)])
+        body = notes.body([_annotation(note=noteformat.END_MARKER)])
 
-        assert f"**Note:** \\{notes.END_MARKER}" in body
+        assert f"**Note:** \\{noteformat.END_MARKER}" in body
 
     def test_a_note_that_opens_a_fence_leaves_the_next_highlight_quoted(self):
         body = notes.body(
@@ -456,12 +456,12 @@ class TestEscaping:
         note = notes.compose([_annotation()])
         marker = next(line for line in note.split("\n") if "sha256=" in line)
 
-        assert notes.is_ours(note.replace(marker, marker + " \t")) is True
+        assert noteformat.is_ours(note.replace(marker, marker + " \t")) is True
 
     def test_a_note_cannot_forge_the_end_marker(self):
         # The blockquote prefix protects highlights; notes had no rule at all,
         # so their second line sat at column zero in the generated region.
-        body = notes.body([_annotation(note=f"first\n{notes.END_MARKER}")])
+        body = notes.body([_annotation(note=f"first\n{noteformat.END_MARKER}")])
 
         assert not any(
             line_.startswith("<!-- ibook2epub end") for line_ in body.split("\n")
@@ -518,14 +518,14 @@ class TestTheFourRegions:
     def test_a_new_note_carries_an_end_marker_even_with_nothing_below_it(self):
         # Without one the reader has no signposted place to write, and their
         # first paragraph lands inside the generated region.
-        assert notes.END_MARKER in notes.compose([_annotation()])
+        assert noteformat.END_MARKER in notes.compose([_annotation()])
 
     def test_a_freshly_written_note_is_recognised_as_ours(self):
-        assert notes.is_ours(notes.compose([_annotation()])) is True
+        assert noteformat.is_ours(notes.compose([_annotation()])) is True
 
     def test_the_regions_divide_the_whole_file(self):
-        note = notes.compose([_annotation()], tail=f"{notes.END_MARKER}\nmine\n")
-        held = notes.split(note)
+        note = notes.compose([_annotation()], tail=f"{noteformat.END_MARKER}\nmine\n")
+        held = noteformat.split(note)
 
         assert held is not None
         assert (
@@ -544,12 +544,12 @@ class TestTheReadersRegionsSurvive:
         note = notes.compose([_annotation()])
         tagged = note.replace("---\n", "---\ntags:\n  - fantasy\naliases: [LW]\n", 1)
 
-        assert notes.is_ours(tagged) is True
+        assert noteformat.is_ours(tagged) is True
 
     def test_prose_below_the_end_marker_survives_a_new_highlight(self):
         note = notes.compose([_annotation()])
         note += "My own thinking, at length.\n"
-        assert notes.is_ours(note) is True
+        assert noteformat.is_ours(note) is True
 
         updated = notes.rewrite(
             note, [_annotation(), _annotation(id="U2", text="a second")]
@@ -585,22 +585,22 @@ class TestEditsInsideTheGeneratedRegionAreDetected:
             "> Summary roadside justice\n\nmy thought here",
         )
 
-        assert notes.is_ours(edited) is False
+        assert noteformat.is_ours(edited) is False
 
     def test_deleting_the_end_marker_is_treated_as_an_edit(self):
         note = notes.compose([_annotation()])
 
-        assert notes.is_ours(note.replace(notes.END_MARKER, "")) is False
+        assert noteformat.is_ours(note.replace(noteformat.END_MARKER, "")) is False
 
     def test_moving_prose_above_the_end_marker_is_detected(self):
         note = notes.compose([_annotation()])
-        moved = note.replace(notes.END_MARKER, f"mine\n\n{notes.END_MARKER}")
+        moved = note.replace(noteformat.END_MARKER, f"mine\n\n{noteformat.END_MARKER}")
 
-        assert notes.is_ours(moved) is False
+        assert noteformat.is_ours(moved) is False
 
     def test_a_file_this_tool_never_wrote_is_not_ours(self):
-        assert notes.is_ours("---\ntitle: mine\n---\n\n# My own note\n") is False
-        assert notes.split("just some prose\n") is None
+        assert noteformat.is_ours("---\ntitle: mine\n---\n\n# My own note\n") is False
+        assert noteformat.split("just some prose\n") is None
 
 
 class TestARerunThatChangesNothingRendersTheSameBytes:
@@ -629,7 +629,7 @@ class TestEncoding:
         if mangled.startswith("﻿"):
             mangled = mangled.encode("utf-8").decode("utf-8-sig")
 
-        assert notes.is_ours(mangled) is True
+        assert noteformat.is_ours(mangled) is True
 
     def test_what_this_tool_writes_has_no_carriage_returns(self):
         assert "\r" not in notes.compose([_annotation()])
@@ -641,14 +641,14 @@ class TestThingsThatGoWrong:
             notes.rewrite("# just a note\n", [_annotation()])
 
     def test_frontmatter_that_closes_at_end_of_file_is_not_ours(self):
-        assert notes.split('---\ntitle: "T"\n---') is None
+        assert noteformat.split('---\ntitle: "T"\n---') is None
 
     def test_frontmatter_that_never_closes_is_not_ours(self):
-        assert notes.split('---\ntitle: "T"\n') is None
+        assert noteformat.split('---\ntitle: "T"\n') is None
 
     def test_a_note_with_no_end_marker_is_not_ours(self):
         note = notes.compose([_annotation()])
-        assert notes.split(note.replace(notes.END_MARKER, "")) is None
+        assert noteformat.split(note.replace(noteformat.END_MARKER, "")) is None
 
 
 class TestOutcomesTheCallerCanTrust:
@@ -665,14 +665,14 @@ class TestOutcomesTheCallerCanTrust:
         # and the reader was told the file was somebody else's.
         target = tmp_path / "Book.md"
         target.write_text(
-            notes.compose([_annotation()]).replace(notes.END_MARKER, ""),
+            notes.compose([_annotation()]).replace(noteformat.END_MARKER, ""),
             encoding="utf-8",
         )
 
-        assert notes.wrote_it(target.read_text(encoding="utf-8")) is True
+        assert noteformat.wrote_it(target.read_text(encoding="utf-8")) is True
 
     def test_a_file_this_tool_never_wrote_is_not_claimed(self):
-        assert notes.wrote_it("# my own note\n") is False
+        assert noteformat.wrote_it("# my own note\n") is False
 
     def test_a_fifo_is_not_read(self, tmp_path):
         # read_text on a FIFO blocks until a writer appears, which is never.
@@ -686,31 +686,31 @@ class TestOutcomesTheCallerCanTrust:
         signal.signal(signal.SIGALRM, blocked)
         signal.alarm(3)
         try:
-            assert notes.readable(fifo) is False
+            assert noteformat.readable(fifo) is False
         finally:
             signal.alarm(0)
 
     def test_a_directory_named_like_a_note_is_not_read(self, tmp_path):
         (tmp_path / "D.md").mkdir()
-        assert notes.readable(tmp_path / "D.md") is False
+        assert noteformat.readable(tmp_path / "D.md") is False
 
     def test_an_ordinary_note_is_readable(self, tmp_path):
         target = tmp_path / "N.md"
         target.write_text("hello\n", encoding="utf-8")
-        assert notes.readable(target) is True
+        assert noteformat.readable(target) is True
 
     def test_a_note_larger_than_the_cap_is_not_read(self, tmp_path):
         # No cap meant a planted or runaway file was read whole every run.
         target = tmp_path / "Big.md"
-        target.write_text("x" * (notes.MAX_NOTE_BYTES + 1), encoding="utf-8")
+        target.write_text("x" * (noteformat.MAX_NOTE_BYTES + 1), encoding="utf-8")
 
-        assert notes.readable(target) is False
+        assert noteformat.readable(target) is False
 
     def test_a_note_at_the_cap_is_still_read(self, tmp_path):
         target = tmp_path / "AtCap.md"
-        target.write_text("x" * notes.MAX_NOTE_BYTES, encoding="utf-8")
+        target.write_text("x" * noteformat.MAX_NOTE_BYTES, encoding="utf-8")
 
-        assert notes.readable(target) is True
+        assert noteformat.readable(target) is True
 
 
 class TestTheSidecarCannotTakeAnotherBooksName:
@@ -837,7 +837,7 @@ class TestFailuresThatDoNotNeedAPermissionBit:
 
         monkeypatch.setattr(Path, "stat", refuse)
 
-        assert notes.readable(target) is False
+        assert noteformat.readable(target) is False
 
     def test_an_unwritable_sidecar_is_reported_as_blocked_not_kept(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -864,7 +864,7 @@ class TestFailuresThatDoNotNeedAPermissionBit:
     ):
         app_logger.configure(verbosity=1)
         target = tmp_path / "Big.md"
-        target.write_text("x" * (notes.MAX_NOTE_BYTES + 1), encoding="utf-8")
+        target.write_text("x" * (noteformat.MAX_NOTE_BYTES + 1), encoding="utf-8")
 
         assert notes._write_one(target, self._annotations()) == "unreadable"
         assert "not a readable note" in capsys.readouterr().err

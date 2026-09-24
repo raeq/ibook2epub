@@ -24,11 +24,10 @@ otherwise forge the marker that ends the generated region.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any
 
 from ..collect.annotations import for_book
 from ..collect.identifiers import isbn13_of
@@ -43,39 +42,21 @@ from .naming import (
     encode_name,
     truncate_bytes,
 )
-from .notenames import note_names
-
-#: Ends the region this tool owns. Everything after it is the reader's and is
-#: copied through untouched. Written from the first run even when there is
-#: nothing beneath it, so the reader has a signposted place to write rather
-#: than putting their first paragraph inside the generated region.
-END_MARKER = "<!-- ibook2epub end — your notes below this line are never modified -->"
-
-#: Matched on a stable prefix, so the human-readable tail above can be reworded
-#: without orphaning every note already in a vault.
-END_PATTERN = re.compile(r"^<!-- ibook2epub end")
-
-#: Carries the digest of the generated region.
-START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
-#: Carries the digest and the book the note is of: a digest of its asset id
-#: (:func:`book_tags`). Notes written before the tag existed carry none and
-#: are still read; each gains one the next time its region is rewritten.
-TAGGED_TEMPLATE = "<!-- ibook2epub sha256={digest} book={book} -->"
-#: Trailing white space is part of the pattern, not stripped by each caller:
-#: an editor may leave some after the marker, and the one caller that did not
-#: strip it -- the escaper -- let a forged marker with a trailing space through.
-START_PATTERN = re.compile(
-    r"^<!-- ibook2epub sha256=([0-9a-f]{16,64})(?: book=([0-9a-f]{8,64}))? -->\s*$"
+from .noteformat import (
+    END_MARKER,
+    END_PATTERN,
+    START_PATTERN,
+    book_tags,
+    digest_of,
+    is_ours,
+    normalise,
+    readable,
+    split,
+    start_marker,
+    start_marker_of,
+    wrote_it,
 )
-#: The book tag within a start marker.
-BOOK_TAG = re.compile(r" book=[0-9a-f]{8,64}(?= -->)")
-
-#: Largest note this will read back. A note of a few hundred highlights is
-#: tens of kilobytes; anything past this is a runaway or a planted file, and
-#: reading it whole every run costs twice its size in memory. Mirrors
-#: ``detached.MAX_EXPORT_BYTES``, which bounds the JSON export for the same
-#: reason.
-MAX_NOTE_BYTES = 8 * 1024 * 1024
+from .notenames import note_names
 
 #: Suffix for the copy written when a reader has edited the note itself. Not
 #: ``.new.md``: a book titled "Foo.new" is named ``Foo.new.md``, which was
@@ -84,10 +65,6 @@ MAX_NOTE_BYTES = 8 * 1024 * 1024
 #: it is not a name any naming policy can produce and not a file a later run
 #: will adopt as some book's note.
 SIDECAR_SUFFIX = ".md.new"
-
-#: How much of the digest to write. Enough that a collision is not a practical
-#: concern and short enough to read.
-DIGEST_LENGTH = 16
 
 #: What opens a block element at the start of a line. A ``> `` prefix does not
 #: neutralise it: inside a blockquote it still opens a heading, a list or a
@@ -343,123 +320,6 @@ def body(found: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
-class Split(NamedTuple):
-    """One note, divided into the regions that have different owners."""
-
-    #: Everything up to the start marker, frontmatter included. The reader's.
-    head: str
-    #: The digest the start marker carries.
-    digest: str
-    #: Between the markers. This tool's, and the only hashed part.
-    generated: str
-    #: The end marker and everything after it. The reader's.
-    tail: str
-    #: The book the start marker is tagged for, or None for a note written
-    #: before notes were tagged.
-    book: str | None = None
-
-
-def split(text: str) -> Split | None:
-    """
-    Divide an existing note into its four regions.
-
-    Structural rather than semantic: the first start marker, and everything
-    above it is the head. Deliberately not YAML parsing -- answering this from
-    the frontmatter would mean parsing YAML a reader has edited, with nested
-    maps, block scalars and plugin keys, and this project has no YAML reader
-    nor should it acquire one it must then keep correct.
-
-    The head is the reader's whatever it holds. The marker was looked for only
-    straight after the closing ``---``, or on line 1 once the reader deleted
-    the frontmatter, so a blank line or a ``Related: [[X]]`` above it called
-    this tool's own note foreign, failed every run and never updated it
-    again. The first marker is the real one: every line of the generated
-    region that could pass for one is escaped (:func:`_unforged`), and the
-    frontmatter above it quotes every value.
-
-    :param text: The file's contents, already decoded.
-
-    :return: The regions, or None when this file is not one of ours.
-    """
-    lines = normalise(text).split("\n")
-    start = _first_start(lines)
-    if start is None:
-        return None
-    index, found = start
-    head = "\n".join(lines[:index]) + "\n" if index else ""
-    return _regions(head, found, lines[index + 1 :])
-
-
-def _first_start(lines: list[str]) -> tuple[int, re.Match[str]] | None:
-    """Find the first start marker, and the line it is on, if any line is one."""
-    for index, line in enumerate(lines):
-        found = START_PATTERN.match(line)
-        if found:
-            return index, found
-    return None
-
-
-def _regions(head: str, found: re.Match[str], rest: list[str]) -> Split | None:
-    """
-    Divide what follows the start marker at the end marker.
-
-    :param head: Everything above the start marker, or "" when nothing is.
-    :param found: The start marker.
-    :param rest: Every line after it.
-
-    :return: The regions, or None when this file is not one of ours.
-    """
-    for offset, line in enumerate(rest):
-        if END_PATTERN.match(line.rstrip()):
-            return Split(
-                head,
-                found.group(1),
-                "\n".join(rest[:offset]) + "\n" if rest[:offset] else "",
-                "\n".join(rest[offset:]),
-                found.group(2),
-            )
-    # A missing end marker is treated as an edit. Skipping a note that may be
-    # fine is recoverable; overwriting one that is not is not.
-    return None
-
-
-def normalise(text: str) -> str:
-    """
-    Put a file's line endings back the way this tool writes them.
-
-    A note that has round-tripped through iCloud, a Windows editor or a
-    non-Obsidian tool comes back with CRLF endings, and without this it is
-    reported as *not written by ibook2epub* -- about a file ibook2epub wrote.
-    The byte-order mark is handled by reading with ``utf-8-sig``.
-
-    :param text: The file's contents.
-
-    :return: The contents with newlines normalised.
-    """
-    return text.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def digest_of(generated: str) -> str:
-    """
-    Digest the generated region, and only that region.
-
-    Not to end of file: the reader's writing lives below the end marker and must
-    not change whether the note is recognised. Not from byte 0 either: Obsidian
-    rewrites frontmatter whenever anyone adds a tag, and tagging a new note is
-    the first thing a reader does.
-
-    Through ``encode_name`` rather than a bare ``.encode()``: it is the one
-    sanctioned way this package turns a string into bytes, and it tolerates the
-    lone surrogates an undecodable name carries. A second encoder here would
-    grow the rule's exception list, which is what makes such a rule rot.
-
-    :param generated: The region between the markers.
-
-    :return: The digest, truncated.
-    """
-    return hashlib.sha256(encode_name(generated)).hexdigest()[:DIGEST_LENGTH]
-
-
 def sidecar_for(target: Path) -> Path:
     """
     Name the copy written when the reader has edited the note itself.
@@ -503,85 +363,6 @@ def _present(target: Path) -> bool:
     return True
 
 
-def readable(target: Path) -> bool:
-    """
-    Whether this path is a note that can safely be read back.
-
-    Two hazards a plain ``exists()`` misses. A FIFO left in the vault blocks
-    ``read_text`` until a writer appears, which is never, and froze the whole
-    run; ``is_file`` is False for one. And a file far larger than any real note
-    costs twice its size in memory to read, so it is refused rather than read.
-
-    :param target: The path about to be read.
-
-    :return: True when it is an ordinary file of a plausible size.
-    """
-    try:
-        if not target.is_file():
-            return False
-        return target.stat().st_size <= MAX_NOTE_BYTES
-    except OSError:
-        return False
-
-
-def wrote_it(existing: str) -> bool:
-    """
-    Whether this tool wrote a note, however much the reader has since changed.
-
-    Distinct from :func:`is_ours`, which asks the narrower question of whether
-    the generated region is still untouched. Conflating the two told a reader
-    that a note this tool had written "was not written by ibook2epub", and
-    denied it the sidecar its edits had earned.
-
-    :param existing: The note as it stands.
-
-    :return: True when it carries this tool's start marker, wherever the
-        reader's head leaves it.
-    """
-    return _start_marker_of(existing) is not None
-
-
-def _start_marker_of(existing: str) -> re.Match[str] | None:
-    """
-    Find the start marker of a note this tool wrote.
-
-    :param existing: The note as it stands.
-
-    :return: The first start marker, or None.
-    """
-    start = _first_start(normalise(existing).split("\n"))
-    return None if start is None else start[1]
-
-
-def book_tags(found: list[dict[str, Any]]) -> set[str]:
-    """
-    Name the book a note is of, as its start marker records it.
-
-    A note's name is worked out afresh each run, and two routes once worked
-    it out two ways: ``-ao`` wrote one edition's highlights over the note of
-    the other edition, which held its name. The tag lets a note refuse a book
-    that is not its own, whatever named it.
-
-    Apple's asset id, digested as a marked name digests an identifier. It is
-    on every annotation, read from the row itself, so it does not come and go
-    with whether a package document could be read, as a ``dc:identifier``
-    does; and a store book's id is a purchase number, which has no business
-    in a reader's vault undigested.
-
-    :param found: This book's annotations.
-
-    :return: Every tag they carry: usually one, and none when no annotation
-        names its asset.
-    """
-    tags = set()
-    for item in found:
-        book = item.get("book")
-        asset = book.get("assetId") if isinstance(book, dict) else None
-        if isinstance(asset, str) and asset:
-            tags.add(disambiguator(asset))
-    return tags
-
-
 def of_another_book(existing: str, found: list[dict[str, Any]]) -> bool:
     """
     Whether a note is tagged for a book other than the one being written.
@@ -595,18 +376,10 @@ def of_another_book(existing: str, found: list[dict[str, Any]]) -> bool:
 
     :return: True when the note's tag names another book.
     """
-    marker = _start_marker_of(existing)
+    marker = start_marker_of(existing)
     held = marker.group(2) if marker is not None else None
     tags = book_tags(found)
     return held is not None and bool(tags) and held not in tags
-
-
-def _start_marker(generated: str, book: str | None) -> str:
-    """Render the start marker for a region, tagged for its book when known."""
-    digest = digest_of(generated)
-    if book is None:
-        return START_TEMPLATE.format(digest=digest)
-    return TAGGED_TEMPLATE.format(digest=digest, book=book)
 
 
 def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
@@ -619,7 +392,7 @@ def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
     :return: The file's contents.
     """
     generated = body(found)
-    marker = _start_marker(generated, min(book_tags(found), default=None))
+    marker = start_marker(generated, min(book_tags(found), default=None))
     book = found[0].get("book", {}) if found else {}
     below = tail if tail is not None else f"{END_MARKER}\n"
     return f"{frontmatter(book)}{marker}\n{generated}{below}"
@@ -646,19 +419,7 @@ def rewrite(existing: str, found: list[dict[str, Any]]) -> str:
     if generated == held.generated and digest_of(generated) == held.digest:
         return normalise(existing)
     book = held.book if held.book is not None else min(book_tags(found), default=None)
-    return f"{held.head}{_start_marker(generated, book)}\n{generated}{held.tail}"
-
-
-def is_ours(existing: str) -> bool:
-    """
-    Whether this tool wrote a note and the reader has not touched its region.
-
-    :param existing: The note as it stands.
-
-    :return: True when the generated region is exactly as it was written.
-    """
-    held = split(existing)
-    return held is not None and digest_of(held.generated) == held.digest
+    return f"{held.head}{start_marker(generated, book)}\n{generated}{held.tail}"
 
 
 def write_vault(

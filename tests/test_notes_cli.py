@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from epubconvert.collect import annotations
-from epubconvert.export import notes
+from epubconvert.export import noteformat, notes
 from epubconvert.run import cli
 from epubconvert.run.run import main
 from tests.conftest import make_metadata_package, needs_permissions
@@ -299,7 +299,7 @@ class TestWritingNotes:
         note = (vault / "Leviathan Wakes.md").read_text(encoding="utf-8")
 
         assert "> Summary roadside justice" in note
-        assert notes.is_ours(note)
+        assert noteformat.is_ours(note)
 
     def test_the_stem_matches_the_epub_under_a_naming_policy(
         self, tmp_path: Path, output_dir: Path, monkeypatch: pytest.MonkeyPatch

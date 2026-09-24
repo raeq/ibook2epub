@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from epubconvert.export import notes
+from epubconvert.export import noteformat, notes
 from epubconvert.utils import app_logger, exits
 from epubconvert.utils.policy import Assignment
 
@@ -238,15 +238,15 @@ class TestAReaderMayDeleteTheFrontmatter:
     def test_the_note_is_still_recognised_as_ours(self):
         note = _without_frontmatter(notes.compose([_highlight("Alpha.epub", "hl")]))
 
-        assert notes.wrote_it(note) is True
-        assert notes.is_ours(note) is True
+        assert noteformat.wrote_it(note) is True
+        assert noteformat.is_ours(note) is True
 
     def test_an_edit_inside_the_generated_region_is_still_detected(self):
         note = _without_frontmatter(notes.compose([_highlight("Alpha.epub", "hl")]))
         edited = note.replace("> hl", "> edited")
 
-        assert notes.wrote_it(edited) is True
-        assert notes.is_ours(edited) is False
+        assert noteformat.wrote_it(edited) is True
+        assert noteformat.is_ours(edited) is False
 
     def test_a_vault_run_updates_it_and_leaves_the_frontmatter_deleted(
         self, tmp_path: Path
@@ -269,5 +269,5 @@ class TestAReaderMayDeleteTheFrontmatter:
         assert code == exits.SUCCESS
         assert updated.startswith("<!-- ibook2epub sha256=")
         assert "> second" in updated
-        assert updated.endswith(f"{notes.END_MARKER}\nmine\n")
+        assert updated.endswith(f"{noteformat.END_MARKER}\nmine\n")
         assert sorted(path.name for path in vault.iterdir()) == ["Alpha.md"]

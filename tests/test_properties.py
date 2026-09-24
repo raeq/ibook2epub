@@ -23,7 +23,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from epubconvert.collect import annotations, identifiers
-from epubconvert.export import notes
+from epubconvert.export import noteformat, notes
 from epubconvert.export.naming import encode_name, split_extension, truncate_bytes
 from epubconvert.run.claims import marked, suffixed
 from epubconvert.utils.display import printable, printable_json
@@ -114,16 +114,16 @@ def test_an_escaped_line_opens_no_block_and_forges_no_marker(line):
     escaped = notes._escape(line)
 
     assert not notes.BLOCK_OPENERS.match(escaped)
-    assert not notes.START_PATTERN.match(escaped)
-    assert not notes.END_PATTERN.match(escaped)
+    assert not noteformat.START_PATTERN.match(escaped)
+    assert not noteformat.END_PATTERN.match(escaped)
 
 
 @given(ANY_TEXT.map(lambda s: s.replace("\n", "").replace("\r", "")))
 def test_escaping_changes_only_a_line_that_needed_it(line):
     needed = bool(
         notes.BLOCK_OPENERS.match(line)
-        or notes.START_PATTERN.match(line)
-        or notes.END_PATTERN.match(line)
+        or noteformat.START_PATTERN.match(line)
+        or noteformat.END_PATTERN.match(line)
     )
 
     assert (notes._escape(line) != line) == needed

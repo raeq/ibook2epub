@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from epubconvert.export import notes
+from epubconvert.export import noteformat, notes
 from epubconvert.utils import exits
 from epubconvert.utils.policy import Assignment
 
@@ -50,14 +50,14 @@ class TestALineAboveTheMarker:
     def test_the_note_is_still_ours(self, edit: Callable[[str], str]):
         note = edit(notes.compose([_highlight("FIRST")]))
 
-        assert notes.wrote_it(note) is True
-        assert notes.is_ours(note) is True
+        assert noteformat.wrote_it(note) is True
+        assert noteformat.is_ours(note) is True
 
     def test_it_is_part_of_the_readers_head(self, edit: Callable[[str], str]):
         original = notes.compose([_highlight("FIRST")])
         note = edit(original)
 
-        held, written = notes.split(note), notes.split(original)
+        held, written = noteformat.split(note), noteformat.split(original)
 
         assert held is not None
         assert written is not None
@@ -90,32 +90,34 @@ class TestTheMarkerIsStillHardToForge:
     def test_a_highlight_shaped_like_a_marker_does_not_move_the_region(self):
         forged = notes.compose([_highlight("hl")]).split("\n")
         start = next(line for line in forged if line.startswith(MARKER))
-        found = [_highlight(start), _highlight(notes.END_MARKER)]
+        found = [_highlight(start), _highlight(noteformat.END_MARKER)]
 
         note = notes.compose(found)
 
-        held = notes.split(note)
+        held = noteformat.split(note)
         assert held is not None
         assert held.generated == notes.body(found)
         assert notes.rewrite(note, found) == note
 
     def test_a_copy_of_a_note_below_the_end_marker_stays_the_readers(self):
         pasted = notes.compose([_highlight("OTHER")])
-        note = notes.compose([_highlight("hl")], tail=f"{notes.END_MARKER}\n{pasted}")
+        note = notes.compose(
+            [_highlight("hl")], tail=f"{noteformat.END_MARKER}\n{pasted}"
+        )
 
-        held = notes.split(note)
+        held = noteformat.split(note)
 
         assert held is not None
-        assert held.tail == f"{notes.END_MARKER}\n{pasted}"
-        assert notes.is_ours(note) is True
+        assert held.tail == f"{noteformat.END_MARKER}\n{pasted}"
+        assert noteformat.is_ours(note) is True
 
     def test_a_file_with_no_marker_is_still_not_ours(self):
-        assert notes.wrote_it("---\ntitle: x\n---\n\nmy note\n") is False
-        assert notes.split("Related: [[X]]\n\nmy note\n") is None
+        assert noteformat.wrote_it("---\ntitle: x\n---\n\nmy note\n") is False
+        assert noteformat.split("Related: [[X]]\n\nmy note\n") is None
 
     def test_a_marker_with_no_end_marker_below_it_is_an_edit(self):
         note = "Related: [[X]]\n" + notes.compose([_highlight("hl")])
-        edited = note.replace(notes.END_MARKER, "")
+        edited = note.replace(noteformat.END_MARKER, "")
 
-        assert notes.wrote_it(edited) is True
-        assert notes.is_ours(edited) is False
+        assert noteformat.wrote_it(edited) is True
+        assert noteformat.is_ours(edited) is False
