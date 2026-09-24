@@ -136,10 +136,17 @@ identifier, and a file under a name a package was given is that package's
 unless the identifiers say otherwise. `KeepNumbered` switches on
 `claims.kept_numbers`: in suffix mode a package keeps the numbered file of its
 name that declares its identifier, which is read for this whatever the
-policy, or the file of its marked name once its crowd has left it; with no
+policy (unless `--skip-incomplete` leaves an evicted book unopened, which the
+model does not describe; the orphan check then lists no numbered or marked
+file of its name), or the file of its marked name once its crowd has left it; with no
 usable identifier, the one numbered file when no other package wants the name
 and nothing holds the plain name. A copy that keeps that file sends the
-package back to claim a name (`_Claiming.reclaim`).
+package back to claim a name (`_Claiming.reclaim`). `ReclaimOwn` widens that
+to any package given the name of a file the claim pass kept as a copy's own
+bytes: in suffix mode it claims its marked or numbered name, and in skip mode
+it loses the name. With `KeepOwn`, a copy whose claimed name holds a file
+that is not its own is placed at no file on the shelf (`not_own`), since its
+size says so where no identifier can.
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
@@ -164,6 +171,9 @@ package back to claim a name (`_Claiming.reclaim`).
 | `CopiesRemovalsStuck` | the same, without `KeepNumbered` | books added and removed | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 | `CopiesRemovalsRead` | the same, every identifier read | books added and removed | all | on | all four hold |
 | `CopiesRemovalsDeleted` | the same, each book removed with its archive | books added and removed | all | on | all four hold |
+| `CopiesUnidentified` | as `CopiesRemovalsDeleted` | books added and removed | the package and one copy | on | all four hold |
+| `CopiesUnidentifiedSkip` | the same, skip mode | books added and removed | the package and one copy | on | all four hold |
+| `CopiesUnidentifiedLoose` | `CopiesUnidentified` without `ReclaimOwn` | books added and removed | the package and one copy | on | **ExportedMeansTheBooksOwnFile violated** |
 | `NumberedRemovals` | `--match`, `--refresh`, suffix mode, named from the folder, two packages | removed with their archives | none | before a write | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `NumberedRemovalsStuck` | the same, without `KeepNumbered` | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 | `NumberedRemovalsCrowd` | `NumberedRemovals` with three packages | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
@@ -279,6 +289,22 @@ What the configurations that fail show:
   bytes, moved on past it, and left the plain name to another copy, and a
   later run listed its archive as an orphan (`_Claiming.reclaim`).
 
+- **`CopiesUnidentifiedLoose`** is the claim pass before `ReclaimOwn`. A
+  zipped book declaring no usable identifier was copied, and a package of
+  its name added: the claim pass kept the file as the copy's own bytes, by
+  its size and modification time, and only a package that had kept a
+  numbered file was sent on. Placing asked the identifiers, one said
+  nothing, and the name was trusted: the package was reported exported from
+  the copy's file and never exported, `--force` and `--refresh` wrote it
+  over the copy, and `-ae -ar` wrote its highlights into the copy's
+  archive. The same where the package is the one with no identifier. Now
+  the package claims its marked or numbered name, or in skip mode is a
+  collision. `CopiesUnidentified` removes each book with its archive: with
+  the copy's archive left behind once the copy leaves the library, the
+  package takes the name and is reported exported from it, the
+  `Unidentifiable` limit. `tests/test_copy_keeping.py` replays it against
+  the CLI.
+
 - **`NumberedRemovalsCrowd`** is the limit of that rule: with three
   packages and no usable identifier, once the first leaves, two books still
   want the plain name, and nothing says which numbered file is whose. The
@@ -302,7 +328,8 @@ What the model does not describe, and why:
   own bytes are told exactly here; the code tells them by size and
   modification time, which a copy keeps from its source
   (`tests/test_copy_keeping.py`). A copy made before copies kept the time
-  is newer than its source, and is told by its size alone.
+  is newer than its source, and is told by the identifiers where both
+  declare one, and by its size where not.
 - **`claim_order` for packages.** It puts every package whose first name is a
   file on the shelf ahead of the rest -- whatever put the file there: a
   namesake by case, the book's own archive or another's, or a title that

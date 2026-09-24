@@ -9,19 +9,17 @@ output directory, which is why this tool needs no state file.
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package, read_package_dir
 from ..collect.source import inspect_package
-from ..export.naming import disambiguator, filesystem_key
+from ..export.naming import disambiguator
 from ..utils.app_logger import logger
-from ..utils.display import printable, printable_json
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -33,15 +31,11 @@ from .claims import (
     kept_numbers,
     lost_to,
     marked,
-    shelf_files,
     shelf_names,
     suffixed,
 )
-from .holders import Unopened, holds_another_book, identifier_on_shelf, same_identity
-from .placing import Existing, Shelf, place, read_shelf
-
-if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
-    from .convert import Report
+from .holders import Unopened, holds_another_book
+from .placing import Shelf, place, read_shelf
 
 #: What the planner can decide about a package. These strings are a public
 #: contract, not an internal detail: ``--list`` names them all in its help text
@@ -50,9 +44,6 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
 Status = Literal[
     "pending", "exported", "collision", "drm", "incomplete", "orphan", "copy", "copied"
 ]
-
-#: The :class:`~epubconvert.run.convert.Report` fields the outcome table may bump.
-ReportField = Literal["skipped", "collisions", "drm", "incomplete"]
 
 #: Decision statuses. Each constant's value is what a user sees.
 PENDING: Status = "pending"
@@ -69,6 +60,16 @@ ORPHAN: Status = "orphan"
 #: unchanged: to be copied, or already on the shelf.
 COPY: Status = "copy"
 COPIED: Status = "copied"
+
+#: Why a book iCloud has evicted is skipped.
+NOT_DOWNLOADED = "not downloaded from iCloud"
+
+#: What a run says of the books it left unnamed rather than download them.
+NOT_NAMED = (
+    "%d book(s) not downloaded from iCloud could not be named without "
+    "downloading them; a copy of one already on the shelf is counted as an "
+    "orphan."
+)
 
 #: How ``--on-collision`` may be set.
 CollisionMode = Literal["skip", "suffix"]
@@ -209,6 +210,7 @@ def assign_names(
     on_collision: CollisionMode,
     *,
     shelf: Collection[str] = frozenset(),
+    unopened: Container[Path] = frozenset(),
 ) -> list[Assignment]:
     """
     Give every package an output name, resolving collisions deterministically.
@@ -241,6 +243,9 @@ def assign_names(
     for it, which is what keeps a no-op rerun over thousands of books free of
     any source-side open. A package that cannot be parsed yields no metadata
     rather than an error, and the policy falls back to the directory name.
+    Under ``--skip-incomplete`` a package iCloud has evicted is not read: it
+    is left unnamed, and reported not downloaded, as an evicted zipped book
+    is.
 
     :param packages: Packages to name.
     :param policy: Naming policy supplying filenames and identities.
@@ -248,10 +253,41 @@ def assign_names(
     :param shelf: The names of the files on the shelf, from
         :func:`~epubconvert.run.claims.shelf_names`. Every caller that names
         the library for a run passes the same shelf, so every route agrees.
+    :param unopened: The books not to open, because opening them downloads
+        them: under ``--skip-incomplete``, a package iCloud has evicted
+        (:class:`~epubconvert.run.holders.Unopened`).
 
     :return: One :class:`Assignment` per package, in sorted order.
     """
-    setup = _Naming(policy, on_collision, getattr(policy, "max_bytes", 0))
+    setup = _Naming(
+        policy, on_collision, getattr(policy, "max_bytes", 0), unopened=unopened
+    )
+    unnamed = _left_unnamed(packages, policy, unopened)
+    return sorted(
+        [
+            *_assign_all([p for p in packages if p not in unnamed], setup, shelf),
+            *(
+                Assignment(package, "", "", NOT_DOWNLOADED, unnamed=True)
+                for package in sorted(unnamed)
+            ),
+        ],
+        key=lambda item: item.package,
+    )
+
+
+def _assign_all(
+    packages: Sequence[Path], setup: _Naming, shelf: Collection[str]
+) -> list[Assignment]:
+    """
+    Name every package to be named, as :func:`assign_names` describes.
+
+    :param packages: Packages to name.
+    :param setup: The naming configuration.
+    :param shelf: The names of the files on the shelf.
+
+    :return: One :class:`Assignment` per package, in sorted order.
+    """
+    policy = setup.policy
     wanted = _wanted_names(packages, policy)
     crowded = Counter(policy.identity(name) for _, name, _ in wanted)
     claims = Claims()
@@ -263,17 +299,35 @@ def assign_names(
         *kept,
         *(i for i in claim_order([b for b, _ in bases], shelf) if i not in kept),
     ]:
-        package, name, metadata = wanted[index]
         named[index] = _assign_one(
-            package,
-            name,
-            metadata,
+            *wanted[index],
             setup=setup,
             claims=claims,
             crowded=crowded,
             kept=kept.get(index),
         )
     return [named[index] for index in range(len(wanted))]
+
+
+def _left_unnamed(
+    packages: Sequence[Path], policy: NamingPolicy, unopened: Container[Path]
+) -> frozenset[Path]:
+    """
+    Find the packages that naming them would download.
+
+    Under a policy that names a book from its package document, reading it
+    downloads a package iCloud has evicted; ``--skip-incomplete`` exists to
+    leave such a book where it is, and every one was read to be named.
+
+    :param packages: Packages to name.
+    :param policy: The naming policy.
+    :param unopened: The books not to open.
+
+    :return: The packages to leave unnamed, as not downloaded.
+    """
+    if not getattr(policy, "needs_metadata", False):
+        return frozenset()
+    return frozenset(package for package in packages if package in unopened)
 
 
 def _kept_on_shelf(
@@ -317,6 +371,7 @@ def _kept_on_shelf(
         ],
         shelf,
         policy,
+        setup.unopened,
     )
 
 
@@ -328,6 +383,8 @@ class _Naming:
     on_collision: CollisionMode
     #: The policy's byte budget, or 0 for no clamping.
     budget: int
+    #: The books not to open, because opening them downloads them.
+    unopened: Container[Path] = frozenset()
 
 
 def _wanted_names(
@@ -494,121 +551,6 @@ def _claim(
     return None
 
 
-def find_orphans(
-    output_dir: Path,
-    policy: NamingPolicy,
-    packages: Sequence[Path],
-    on_collision: CollisionMode = SKIP,
-    *,
-    assigned: Sequence[Assignment] | None = None,
-    unopened: Container[Path] = frozenset(),
-) -> list[Path]:
-    """
-    Find archives on the shelf that no book in the library claims.
-
-    The library has always been seen richly -- five statuses, reasons, tallies
-    -- and the output directory not at all. An archive left behind by a book
-    deleted from the library, or by adopting a naming policy that renames
-    everything, sits there for ever: ``--verify`` blesses it because it is a
-    sound archive, and ``--list`` only ever looked at sources.
-
-    Asks the planner for the names rather than deriving them, so a book that
-    took a ``" (2)"`` suffix is not reported as abandoning the name it holds.
-    And a file is claimed only when the planner would call it that book's:
-    one holding another book is the plan's collision, and counting it as
-    claimed hid the archive of a book deleted from the library, which can be
-    its last copy. Under ``--name-by author-title`` that reads each claimed
-    archive's identifier, as planning does (:mod:`epubconvert.run.holders`),
-    and a book that moved on to its marked name claims that file
-    (:func:`epubconvert.run.placing.place`).
-
-    Yet a file under a name the plan gave a book, holding another book of the
-    library, is that other book's. In skip mode the Ace edition, exported
-    alone and then outsorted by an added 1965 edition, loses the name and is a
-    collision; its archive, the only copy, was listed here as claimed by
-    nothing -- the list a person reviews before deleting. An archive under a
-    name no book wants, such as one left by adopting a renaming policy, stays
-    an orphan: its book is written under the new name. A book that lost its
-    name claims the file under the name it wanted, when that file is of its
-    identity and may be its book: under a policy that names from the folder
-    there is no identifier to go by, so ``b/dune.epub``, exported alone and
-    then outsorted by an added ``a/Dune.epub`` that a case-insensitive
-    filesystem gives the same file, had its only archive listed here.
-
-    Nothing is deleted, here or anywhere. The never-deletes stance is
-    deliberate; the gap was that nothing would say either.
-
-    :param output_dir: Directory holding exported files.
-    :param policy: Naming policy supplying filenames and identities.
-    :param packages: **Every** package in the library, not the subset this run
-        is looking at -- ``--match`` narrows a run, not the shelf.
-    :param on_collision: The collision mode, so suffixed names are recognised.
-    :param assigned: The names already given, when the caller has them, the
-        files copied through included
-        (:func:`~epubconvert.run.copynames.claim_copies`): a copy claims
-        the file it is placed at, as a package does.
-    :param unopened: The books not to open for their identifier.
-
-    :return: Archives no book accounts for, sorted by path.
-    """
-    if assigned is None:
-        assigned = assign_names(
-            packages, policy, on_collision, shelf=shelf_names(output_dir)
-        )
-    shelf = read_shelf(output_dir, policy, assigned, unopened=unopened)
-    claimed: set[str] = set()
-    for item in assigned:
-        clash = place(item, shelf).clash
-        if clash is None and not item.filename:
-            clash = _held_by_loser(item, shelf)
-        if clash is not None:
-            claimed.add(filesystem_key(clash.identity))
-
-    live = {item.identifier for item in assigned if item.identifier}
-    return sorted(
-        found
-        for found in shelf_files(output_dir)
-        if (key := filesystem_key(policy.identity(found.name))) not in claimed
-        and not (live and key in shelf.spoken and identifier_on_shelf(found) in live)
-    )
-
-
-def _held_by_loser(item: Assignment, shelf: Shelf) -> Existing | None:
-    """
-    Find the archive a book that lost its name may still hold.
-
-    :param item: The book, with no name and the identity of the one it wanted.
-    :param shelf: The archives already present.
-
-    :return: The archive under that name when it can be this book's, as the
-        plan would judge a book of that name: of its identity, not holding
-        another book by identifier, and not a file the claim pass found is
-        not a copy's own.
-    """
-    found = shelf.existing.get(filesystem_key(item.identity))
-    if (
-        found is None
-        or item.not_own
-        or not same_identity(found.identity, item.identity)
-    ):
-        return None
-    return found if holds_another_book(found.path, item.identifier) is None else None
-
-
-def orphan_decisions(orphans: Sequence[Path]) -> list[Decision]:
-    """
-    Render orphans as decisions so one listing can carry both.
-
-    :param orphans: Archives no book accounts for.
-
-    :return: One decision per orphan.
-    """
-    return [
-        Decision(path, ORPHAN, path, reason="no book in the library claims this name")
-        for path in orphans
-    ]
-
-
 def plan_exports(
     packages: Sequence[Path],
     output_dir: Path,
@@ -636,17 +578,17 @@ def plan_exports(
     # one per element -- two workers writing the same target.
     packages = list(dict.fromkeys(packages))
 
+    unopened = Unopened(packages=settings.check_incomplete)
     if assigned is None:
         assigned = assign_names(
-            packages, policy, settings.on_collision, shelf=shelf_names(output_dir)
+            packages,
+            policy,
+            settings.on_collision,
+            shelf=shelf_names(output_dir),
+            unopened=unopened,
         )
     assignments = assigned
-    shelf = read_shelf(
-        output_dir,
-        policy,
-        assignments,
-        unopened=Unopened(packages=settings.check_incomplete),
-    )
+    shelf = read_shelf(output_dir, policy, assignments, unopened=unopened)
     # Neither is a failure, and both change what the shelf looks like. A run
     # that says nothing leaves the only way to notice as looking afterwards
     # and wondering.
@@ -659,6 +601,9 @@ def plan_exports(
             "%d book(s) kept their folder name: no title in the package document.",
             from_folder,
         )
+    unnamed = sum(1 for item in assignments if item.unnamed)
+    if unnamed:
+        logger.warning(NOT_NAMED, unnamed)
     named = {item.package: item for item in assignments}
     # Naming read no package document, so no book carries an identifier to
     # compare against the archive holding its name. See _decide.
@@ -695,6 +640,8 @@ def _decide(
     # Neither "write it", which would replace another book's archive, nor
     # "exported", which would silently drop this one.
     filename, clash, reason = place(assignment, shelf)
+    if assignment.unnamed:
+        return Decision(package, INCOMPLETE, reason=reason)
     if not filename:
         return Decision(package, COLLISION, reason=reason)
     found = clash.path if clash is not None else None
@@ -846,142 +793,3 @@ def _source_is_newer(package: Path, exported: Path) -> bool:
         return package.stat().st_mtime > exported.stat().st_mtime
     except OSError:  # pragma: no cover - racing removal
         return False
-
-
-@dataclass(frozen=True)
-class _Outcome:
-    """How one non-pending status is counted and reported."""
-
-    #: Name of the :class:`~epubconvert.run.convert.Report` field to increment.
-    #: Narrowed to a Literal because the table drives a setattr, which turned a
-    #: type-checked ``report.drm += 1`` into a string the checker cannot see:
-    #: renaming a Report field would have broken this at runtime with mypy,
-    #: ruff and pylint all silent.
-    counter: ReportField
-    #: Whether the per-book line is a warning rather than information.
-    warn: bool
-    #: Format string for the per-book line. Every entry uses the same two
-    #: named fields, ``name`` and ``reason``, so the caller never has to work
-    #: out which arguments a particular message wants.
-    line: str
-    #: Format string for the closing tally; takes the count.
-    tally: str
-
-
-#: Everything the reporter needs to know about a status, in one place. The
-#: alternative -- an if/elif chain over the statuses and a second block of ``if
-#: report.x`` tallies below it -- stated the same mapping twice, so a new status
-#: had to be added in three places and two of the branches drifted into being
-#: byte-identical.
-_OUTCOMES: dict[Status, _Outcome] = {
-    EXPORTED: _Outcome(
-        counter="skipped",
-        warn=False,
-        line="Already exported, skipping: %(name)s",
-        tally="Skipped %d already-exported file(s).",
-    ),
-    COLLISION: _Outcome(
-        counter="collisions",
-        warn=True,
-        line="Name collision, skipping: %(name)s (%(reason)s)",
-        tally="%d package(s) skipped because another book claims the same output name.",
-    ),
-    DRM: _Outcome(
-        counter="drm",
-        warn=True,
-        line="Skipped, %(reason)s: %(name)s",
-        tally="%d package(s) skipped as DRM-protected.",
-    ),
-    INCOMPLETE: _Outcome(
-        counter="incomplete",
-        warn=True,
-        line="Skipped, %(reason)s: %(name)s",
-        tally="%d package(s) skipped as not downloaded.",
-    ),
-}
-
-
-def record_decisions(decisions: Sequence[Decision], report: Report) -> None:
-    """
-    Fold planning decisions into the report and log them.
-
-    Pending decisions are left alone; the exporter counts those as it writes
-    them, so counting here too would double them.
-
-    :param decisions: The planner's output.
-    :param report: Report to accumulate counts into.
-    """
-    for decision in decisions:
-        if decision.status == PENDING:
-            # Counted by the exporter as it writes, so counting here doubles it.
-            continue
-        # Indexed, not .get(): a sixth status should raise here in the tests
-        # rather than disappear silently from the report and the tallies.
-        outcome = _OUTCOMES[decision.status]
-
-        setattr(report, outcome.counter, getattr(report, outcome.counter) + 1)
-        log = logger.warning if outcome.warn else logger.info
-        log(
-            outcome.line,
-            {
-                "name": printable(decision.package.name),
-                "reason": printable(str(decision.reason)),
-            },
-        )
-
-    # Counted from the decisions in hand rather than from the report, which
-    # export_planned documents as something a caller may accumulate across
-    # calls -- so a second call logged the running total as this batch's tally.
-    seen = Counter(decision.status for decision in decisions)
-    for status, outcome in _OUTCOMES.items():
-        if seen[status]:
-            log = logger.warning if outcome.warn else logger.info
-            log(outcome.tally, seen[status])
-
-
-def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:
-    """
-    Render the planner's decisions for human or machine consumption.
-
-    :param decisions: The planner's output.
-    :param as_json: Emit JSON rather than a table.
-
-    :return: The text to print.
-    """
-    if as_json:
-        # Titles stay readable; only what printable() would escape is escaped.
-        return printable_json(
-            json.dumps(
-                [
-                    {
-                        "name": decision.package.name,
-                        # An orphan has no source package; the path in "target" is
-                        # where the file actually is.
-                        "source": (
-                            None if decision.status == ORPHAN else str(decision.package)
-                        ),
-                        "status": decision.status,
-                        "target": str(decision.target) if decision.target else None,
-                        "reason": decision.reason,
-                    }
-                    for decision in decisions
-                ],
-                indent=2,
-                ensure_ascii=False,
-            )
-        )
-
-    if not decisions:
-        return "No books found."
-
-    width = max(len(decision.status) for decision in decisions)
-    lines = [
-        f"{decision.status:<{width}}  {printable(decision.display_name)}"
-        + (f"  ({printable(decision.reason)})" if decision.reason else "")
-        for decision in decisions
-    ]
-    counts = Counter(decision.status for decision in decisions)
-    summary = ", ".join(f"{count} {status}" for status, count in sorted(counts.items()))
-    lines.append("")
-    lines.append(summary)
-    return "\n".join(lines)

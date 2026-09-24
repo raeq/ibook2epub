@@ -25,7 +25,7 @@ from epubconvert.collect import annotations, source
 from epubconvert.collect import package as package_reader
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
-from epubconvert.run import claims, convert, holders, placing, planning, run
+from epubconvert.run import claims, convert, copynames, holders, placing, planning, run
 from tests.conftest import make_metadata_package, make_package
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import zipped_book
@@ -431,6 +431,72 @@ class TestABookRenamedByCaseIsReadOnce:
         run.main(["-s", str(library), "-o", str(output_dir), "-q", *cap, *listing])
 
         assert reads == Counter({renamed: 1})
+
+
+def _source_reads(monkeypatch) -> tuple[Counter[Path], Counter[Path]]:
+    """
+    Count every package document read, and every zipped book opened, by path.
+
+    :return: The package directories read, and the archives opened.
+    """
+    holders._identifier_of.cache_clear()  # pylint: disable=protected-access
+    holders._source_identifier_of.cache_clear()  # pylint: disable=protected-access
+    reads: Counter[Path] = Counter()
+    opened: Counter[Path] = Counter()
+    original_read = package_reader.read_package_dir
+    original_open = package_reader.read_archive_package
+
+    def reading(package: Path):
+        reads[package] += 1
+        return original_read(package)
+
+    def opening(path: Path):
+        opened[path] += 1
+        return original_open(path)
+
+    for module in (holders, placing, planning):
+        monkeypatch.setattr(module, "read_package_dir", reading)
+    for module in (copynames, holders, planning):
+        # Not every one of them reads an archive itself.
+        monkeypatch.setattr(module, "read_archive_package", opening, raising=False)
+    return reads, opened
+
+
+class TestAPackageACopyWantsTheNameOfIsReadOnce:
+    """
+    A package named from its folder has its identifier read where a copy
+    wants its name, and the claim pass read it again at each look -- the
+    package document three times on a no-op rerun -- with no cache of what
+    it had read. A copy that lost its name to the package had its own
+    identifier read for the reason, though the package holding the name
+    says enough.
+    """
+
+    @pytest.mark.parametrize("policy", [[], ["--name-by", "author-title"]])
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_a_no_op_rerun_reads_each_once(
+        self, tmp_path, output_dir, monkeypatch, mode, policy
+    ):
+        library = tmp_path / "lib"
+        package = make_metadata_package(
+            library / "a",
+            "Dune.epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier="urn:uuid:P",
+        )
+        copy = zipped_book(tmp_path, library / "b" / "Dune.epub", "urn:uuid:Z", "Dune")
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        argv += ["--on-collision", mode, *policy]
+        run.main(argv)
+        reads, opened = _source_reads(monkeypatch)
+
+        run.main(argv)
+
+        assert reads == Counter({package: 1})
+        # Named from its own metadata under author-title; and in suffix mode
+        # its identifier is what tells its file from the package's archive.
+        assert opened[copy] == bool(policy) + (mode == "suffix")
 
 
 class TestARerunOverCopiesOpensNothing:

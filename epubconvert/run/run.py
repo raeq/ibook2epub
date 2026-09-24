@@ -69,18 +69,17 @@ from .copying import (
     select_copies,
 )
 from .copynames import Names, claim_copies
+from .orphans import find_orphans, orphan_decisions
 from .placing import settled
 from .planning import (
     Decision,
     PlanOptions,
     assign_names,
-    find_orphans,
-    orphan_decisions,
     plan_exports,
-    render_listing,
 )
 from .preflight import ShelfUnwritableError, check_environment, check_writable
 from .repair import run_verify
+from .reporting import render_listing
 from .summary import format_summary
 
 
@@ -162,6 +161,7 @@ def _shared_names(
             policy,
             args.on_collision,
             shelf=shelf_names(args.output_dir),
+            unopened=copies.unopened,
         ),
         copies.named,
         policy,
@@ -243,7 +243,9 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             args.on_collision,
             assigned=everything,
             unopened=copies.unopened,
-        )
+            copied=not args.no_copy_through,
+        ),
+        everything,
     )
     emit(render_listing(decisions + orphans, args.as_json))
     ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
@@ -311,6 +313,7 @@ def _survey(
             args.on_collision,
             assigned=everything,
             unopened=copies.unopened,
+            copied=not args.no_copy_through,
         )
     )
     return packages, copies, everything

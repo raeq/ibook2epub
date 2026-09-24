@@ -39,13 +39,8 @@ from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import NamingPolicy
-from .planning import (
-    PENDING,
-    Decision,
-    PlanOptions,
-    plan_exports,
-    record_decisions,
-)
+from .planning import PENDING, Decision, PlanOptions, plan_exports
+from .reporting import record_decisions
 from .workers import WritingPool
 
 try:

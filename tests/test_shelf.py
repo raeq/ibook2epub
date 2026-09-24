@@ -22,6 +22,7 @@ from pathlib import Path
 from epubconvert.export import archive
 from epubconvert.export.naming import MetadataNaming, PassthroughNaming, StripNaming
 from epubconvert.run import planning, run
+from epubconvert.run.orphans import find_orphans
 from tests.conftest import make_metadata_package, make_package, remove_tree
 
 
@@ -34,7 +35,7 @@ class TestOrphansAreFound:
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
         packages = archive.collect_package_dirs(library)
 
-        assert planning.find_orphans(output_dir, PassthroughNaming(), packages) == []
+        assert find_orphans(output_dir, PassthroughNaming(), packages) == []
 
     def test_a_book_removed_from_the_library_becomes_an_orphan(
         self, tmp_path, output_dir
@@ -46,7 +47,7 @@ class TestOrphansAreFound:
         remove_tree(library / "Gone.epub")
         packages = archive.collect_package_dirs(library)
 
-        orphans = planning.find_orphans(output_dir, PassthroughNaming(), packages)
+        orphans = find_orphans(output_dir, PassthroughNaming(), packages)
 
         assert [path.name for path in orphans] == ["Gone.epub"]
 
@@ -63,7 +64,7 @@ class TestOrphansAreFound:
         )
         packages = archive.collect_package_dirs(library)
 
-        orphans = planning.find_orphans(output_dir, StripNaming(), packages)
+        orphans = find_orphans(output_dir, StripNaming(), packages)
 
         assert [path.name for path in orphans] == ["Sapiens: A Brief History.epub"]
         assert len(list(output_dir.glob("*.epub"))) == 2
@@ -89,7 +90,7 @@ class TestOrphansAreFound:
         )
         packages = archive.collect_package_dirs(library)
 
-        orphans = planning.find_orphans(
+        orphans = find_orphans(
             output_dir, PassthroughNaming(), packages, on_collision=planning.SUFFIX
         )
 
@@ -380,7 +381,7 @@ class TestAFileHoldingAnotherBookIsNotClaimed:
         )
         remove_tree(library / "Dune (1965).epub")
 
-        orphans = planning.find_orphans(
+        orphans = find_orphans(
             output_dir, MetadataNaming(), archive.collect_package_dirs(library)
         )
 
@@ -397,7 +398,7 @@ class TestAFileHoldingAnotherBookIsNotClaimed:
         make_metadata_package(library, "BOOK.epub", title="B", identifier="urn:2")
         packages = archive.collect_package_dirs(library)
 
-        orphans = planning.find_orphans(output_dir, PassthroughNaming(), packages)
+        orphans = find_orphans(output_dir, PassthroughNaming(), packages)
 
         [decision] = planning.plan_exports(packages, output_dir, PassthroughNaming())
         assert decision.status == planning.COLLISION
@@ -441,7 +442,7 @@ class TestAnArchiveOfABookInTheLibraryIsNotAnOrphan:
         )
         packages = archive.collect_package_dirs(library)
 
-        orphans = planning.find_orphans(output_dir, MetadataNaming(), packages)
+        orphans = find_orphans(output_dir, MetadataNaming(), packages)
 
         assert (output_dir / self.PLAIN).is_file()
         assert orphans == []
@@ -480,7 +481,7 @@ class TestAnArchiveOfABookInTheLibraryIsNotAnOrphan:
         )
         capsys.readouterr()
 
-        orphans = planning.find_orphans(
+        orphans = find_orphans(
             output_dir, PassthroughNaming(), archive.collect_package_dirs(library)
         )
         run.main(["-s", str(library), "-o", str(output_dir), "--list", "--json"])

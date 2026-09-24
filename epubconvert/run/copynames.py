@@ -8,19 +8,17 @@ the files that are taken along rather than converted.
 
 from __future__ import annotations
 
-import re
 from collections import Counter
 from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NamedTuple
 
-from ..collect.identifiers import usable_identifier
-from ..collect.package import ValidationError, read_archive_package
-from ..export.naming import DISAMBIGUATOR_CHARS, disambiguator, filesystem_key
+from ..export.naming import disambiguator, filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
+    MARKED,
     NUMBERED,
     Claims,
     claim_order,
@@ -28,15 +26,8 @@ from .claims import (
     shelf_files,
     shelf_names,
 )
-from .holders import identifier_on_shelf
-from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
-
-#: A name marked by planning._stable_base, numbered or not, as a filesystem
-#: key: its stem, the digest, and the extension.
-_MARKED = re.compile(
-    rf"(?P<stem>.*) \[(?P<digest>[0-9a-f]{{{DISAMBIGUATOR_CHARS}}})\]"
-    r"(?: \(\d+\))?(?P<extension>\.[^.]*)?"
-)
+from .holders import identifier_on_shelf, source_identifier
+from .planning import SUFFIX, CollisionMode, _claim, _Naming
 
 
 class Names(NamedTuple):
@@ -81,8 +72,9 @@ def claim_copies(
     at a name: a copy that finds its own bytes under the name another book
     holds -- copied before the package arrived -- keeps that file in either
     mode, rather than being copied again under a suffix, and the package that
-    now wants it has its identifier read, as a folder-named book about to be
-    written has, so it is not reported exported from the other book's file.
+    now wants it claims another name, or in skip mode loses it
+    (:meth:`_Claiming.reclaim`), so it is not reported exported from the
+    other book's file whatever the identifiers can say.
 
     :param assigned: The whole library's package names, from
         :func:`~epubconvert.run.planning.assign_names`.
@@ -146,8 +138,6 @@ class _Claiming:
     claims: Claims = field(default_factory=Claims)
     #: The name that took each filesystem key.
     holders: dict[str, str] = field(default_factory=dict)
-    #: Each copy's identifier, once read.
-    read: dict[Path, str | None] = field(default_factory=dict)
     #: The shelf's files by the key of their name less any " (n)", with n.
     numbered: dict[str, list[tuple[int, Path]]] = field(default_factory=dict)
     #: The shelf's files by the key of their name less any digest marker and
@@ -157,6 +147,10 @@ class _Claiming:
     packaged: dict[str, Assignment] = field(default_factory=dict)
     #: The shelf's files a copy has kept as its own, each by one copy only.
     taken: set[Path] = field(default_factory=set)
+    #: Those of them stat says are the copy's own bytes, whatever any
+    #: identifier says, with the copy's identifier when it was read: no
+    #: package is placed at one (:meth:`reclaim`).
+    own_bytes: dict[Path, str | None] = field(default_factory=dict)
     #: The modification time of every file the pass copies, in nanoseconds.
     stamps: frozenset[int] = frozenset()
 
@@ -169,7 +163,7 @@ class _Claiming:
                 plain = numbered["stem"] + (numbered["extension"] or "")
                 position = int(numbered["position"])
                 self.numbered.setdefault(plain, []).append((position, found))
-            if marked := _MARKED.fullmatch(key):
+            if marked := MARKED.fullmatch(key):
                 plain = marked["stem"] + (marked["extension"] or "")
                 self.marked.setdefault(plain, []).append((marked["digest"], found))
 
@@ -203,7 +197,7 @@ class _Claiming:
 
     def reclaim(self, item: Assignment) -> Assignment:
         """
-        Name a package again that kept a numbered file a copy keeps.
+        Name a package again whose file a copy keeps.
 
         A package keeps a numbered file of its name (claims.kept_numbers):
         one declaring its identifier, or with none to go by, the one
@@ -217,20 +211,36 @@ class _Claiming:
         the package claims the first free name of its own, as before it kept
         any.
 
+        So too for any package given a name whose file stat says is a copy's
+        own bytes (:meth:`keep_all`), however it came by the name. Placing
+        asks the identifiers whose file it is, and where either says nothing
+        it trusts the name: the package was placed at the copy's file, two
+        rows at one file, and never exported; ``--force`` wrote it over the
+        copy, and ``-ae -ar`` wrote its highlights into the copy's archive.
+        In skip mode it has no other name to claim, and loses this one.
+
         :param item: A package's assignment.
 
-        :return: It, or when a copy keeps the numbered file it kept, its
-            first free name, or no name and the reason.
+        :return: It, or when a copy keeps the file it was given, its first
+            free name, or no name and the reason.
         """
-        if not item.kept_number or item.marked is None:
+        if not item.filename:
             return item
         key = filesystem_key(item.identity)
-        policy = self.setup.policy
-        if not any(
-            filesystem_key(policy.identity(found.name)) == key for found in self.taken
-        ):
+        held = self._kept_at(key, self.own_bytes) or (
+            self._kept_at(key, self.taken) if item.kept_number else None
+        )
+        if held is None:
             return item
         self.packaged.pop(key, None)
+        policy = self.setup.policy
+        if item.marked is None:
+            return replace(
+                item,
+                filename="",
+                reason=self._held_by_copy(held, item.identifier),
+                kept_number=False,
+            )
         wanted = item.marked
         taken = _claim(self.claims, wanted, policy.identity(wanted), setup=self.setup)
         if taken is None:  # pragma: no cover - every " (n)" spoken for
@@ -246,6 +256,36 @@ class _Claiming:
         self.holders[filesystem_key(identity)] = filename
         self.packaged[filesystem_key(identity)] = item
         return replace(item, filename=filename, identity=identity, kept_number=False)
+
+    def _held_by_copy(self, held: Path, identifier: str | None) -> str:
+        """
+        Say why a package may not have the name of a copy's own file.
+
+        :param held: The copy's file.
+        :param identifier: The package's usable identifier, when read.
+
+        :return: The reason, naming the copy's book where its identifier
+            was read and is not the package's.
+        """
+        other = self.own_bytes.get(held)
+        reason = (
+            f"{held.name} holds another book, {other}"
+            if other is not None and other != identifier
+            else f"{held.name} already holds this name"
+        )
+        return f"{reason}; this book is {identifier}" if identifier else reason
+
+    def _kept_at(self, key: str, files: Collection[Path]) -> Path | None:
+        """The file of *files* whose name has the filesystem key *key*, if any."""
+        policy = self.setup.policy
+        return next(
+            (
+                found
+                for found in files
+                if filesystem_key(policy.identity(found.name)) == key
+            ),
+            None,
+        )
 
     def settle(
         self,
@@ -375,12 +415,20 @@ class _Claiming:
             return None
         mine, identity, identifier = kept
         self.taken.add(mine)
+        if exact:
+            self.own_bytes[mine] = identifier
         # Refused only where a package was given the name, since no other
         # copy's file gets here: the copy's own bytes, which it keeps while
         # that package moves on.
         self.claims.take(identity, 1, identity, mine.name)
         self.holders.setdefault(filesystem_key(identity), mine.name)
-        return Assignment(source, mine.name, identity, identifier=identifier)
+        return Assignment(
+            source,
+            mine.name,
+            identity,
+            identifier=identifier,
+            unverified=self._doubted(source, mine),
+        )
 
     def name(self, source: Path, name: str, group: str) -> Assignment:
         """
@@ -406,9 +454,7 @@ class _Claiming:
             if found is not None
             else (True, None)
         )
-        # A zipped book left unopened may declare the identifier that says
-        # the file is its own; only a size that differs cannot tell.
-        doubt = source in self.unopened and source.suffix.lower() == PACKAGE_SUFFIX
+        doubt = found is not None and self._doubted(source, found)
         return Assignment(
             source,
             filename,
@@ -421,6 +467,32 @@ class _Claiming:
             # under its name, once the book copied there left the library,
             # was placed at that file and never copied.
             not_own=not (own or doubt),
+            # Nothing says, and the file may be a deleted book's: it was
+            # reported copied from that file, and never copied.
+            unverified=doubt,
+        )
+
+    def _doubted(self, source: Path, found: Path) -> bool:
+        """
+        Say whether nothing can tell *found* from *source*'s copy.
+
+        A zipped book left unopened may declare the identifier that says the
+        file is its own, or another's; only its own bytes, its size and
+        modification time both, say so without it. A size alone, which a
+        copy made before copies kept their time has, says nothing: taken for
+        its copy, a zipped book of the size of a deleted book's was listed
+        as copied from that book's file, and never copied.
+
+        :param source: The file to copy.
+        :param found: The file on the shelf under the name it takes.
+
+        :return: True when *source* is unopened and *found* is not its own
+            bytes.
+        """
+        return (
+            source in self.unopened
+            and source.suffix.lower() == PACKAGE_SUFFIX
+            and _stamp(found) != _stamp(source)
         )
 
     def _lost(self, source: Path, group: str) -> Assignment:
@@ -435,8 +507,14 @@ class _Claiming:
         key = filesystem_key(group)
         found = self.existing.get(key)
         # The file under the name is not its own (kept): read what this book
-        # is, for the reason.
-        identifier = None if found is None else self._own(source, found, key)[1]
+        # is, for the reason. Not where a package of this pass has the name,
+        # which says enough: that read was all a no-op rerun opened the copy
+        # for.
+        identifier = (
+            None
+            if found is None or key in self.packaged
+            else self._own(source, found, key)[1]
+        )
         return Assignment(
             source,
             "",
@@ -494,19 +572,29 @@ class _Claiming:
         zipped books of one size told apart by nothing else, and the one
         added later was never copied; there the identifiers decide. They
         decide too for a file of another size, which may be the copy's own
-        from before Apple rewrote the book. A PDF has none, and its size is
-        all there is.
+        from before Apple rewrote the book, and for one only its size says
+        is its copy, made before copies kept their time: a zipped book of
+        the size of a deleted book's copy, and older, was taken for it and
+        never copied. A PDF has none, and its size is all there is.
 
         :param source: The file to copy.
         :param found: The file on the shelf under the name it wants.
         :param key: That name's filesystem key.
-        :param exact: Only a file :func:`_same_file` finds is *source*'s will
-            do, whatever the identifiers say.
+        :param exact: Only *source*'s own bytes will do: its size and its
+            modification time both. A file of its size and newer, which
+            :func:`_same_file` takes for a copy made before copies kept their
+            time, is left to the pass after this one, where the identifiers
+            and the size decide: taken here, it was the copy's own bytes
+            ahead of anything else, and a package declaring no identifier
+            was sent off its own archive of that size (:meth:`reclaim`).
 
         :return: Whether it is, and *source*'s identifier when it was read.
         """
         same = _same_file(source, found, self.stamps)
-        if same and key not in self.contested:
+        own_bytes = same and _stamp(found) == _stamp(source)
+        if exact and not own_bytes:
+            return False, None
+        if own_bytes and key not in self.contested:
             return True, None
         identifier = self._identifier(source)
         if identifier is not None:
@@ -517,11 +605,7 @@ class _Claiming:
 
     def _identifier(self, source: Path) -> str | None:
         """Read a file's identifier, unless opening it would download it."""
-        if source not in self.read:
-            self.read[source] = (
-                None if source in self.unopened else _copy_identifier(source)
-            )
-        return self.read[source]
+        return None if source in self.unopened else source_identifier(source)
 
 
 def _on_shelf(output_dir: Path | None, policy: NamingPolicy) -> dict[str, Path]:
@@ -579,19 +663,14 @@ def _package_identifier(package: Path, unopened: Container[Path]) -> str | None:
 
     Asked before the read: under ``--skip-incomplete`` the package document
     of a book iCloud had evicted was downloaded to be compared, before the
-    inspection that calls the book not downloaded.
+    inspection that calls the book not downloaded. Remembered while the
+    book is unchanged (:func:`~epubconvert.run.holders.source_identifier`):
+    the claim pass asked at each look, and a no-op rerun read the package
+    document three times.
     """
     if package in unopened:
         return None
-    return usable_identifier(_metadata_of(package, True))
-
-
-def _copy_identifier(source: Path) -> str | None:
-    """Read an already-zipped book's usable identifier; None for anything else."""
-    try:
-        return usable_identifier(read_archive_package(source))
-    except ValidationError:
-        return None
+    return source_identifier(package)
 
 
 def _stamp(path: Path) -> tuple[int, int]:

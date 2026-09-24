@@ -23,6 +23,7 @@ from epubconvert.collect import package as package_reader
 from epubconvert.run import run
 from tests.conftest import make_metadata_package, make_package, remove_tree
 from tests.test_copy_claims import SUFFIX, identifier_of, listing, shelf, zipped_book
+from tests.test_copy_through import _evict
 from tests.test_efficiency import _named
 
 AUTHOR_TITLE = ["--name-by", "author-title"]
@@ -247,6 +248,63 @@ class TestSharingOneIdentifier:
         assert "Exported 0 epub file(s)" in ran.out
         assert "orphan" not in ran.out
         assert list(output_dir.glob("*.epub")) == [second]
+
+
+class TestAnEvictedNumberedBook:
+    """
+    The numbered book's identifier is read to find its file
+    (claims.kept_numbers), and that read was skipped for a package iCloud
+    had evicted, whatever the run was asked: without ``--skip-incomplete``
+    the book's only archive was listed as an orphan. A run that may
+    download reads it; one under ``--skip-incomplete`` does not, and then
+    no numbered or marked file of its name is listed as an orphan, since
+    any may be its own.
+    """
+
+    @staticmethod
+    def _left(tmp_path: Path, output_dir: Path, monkeypatch) -> Path:
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:A"
+        )
+        package = make_metadata_package(
+            library / "b", "Dune.epub", title="Dune", identifier="urn:uuid:B"
+        )
+        run.main([*_argv(library, output_dir), "-q"])
+        assert identifier_of(output_dir / "Dune (2).epub") == "urn:uuid:B"
+        remove_tree(library / "a")
+        _evict(monkeypatch, *(path for path in package.rglob("*") if path.is_file()))
+        return library
+
+    def test_a_run_that_may_download_it_reads_it(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = self._left(tmp_path, output_dir, monkeypatch)
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+
+        assert [(row["status"], Path(row["target"]).name) for row in rows] == [
+            ("exported", "Dune (2).epub"),
+            ("orphan", "Dune.epub"),
+        ]
+
+    def test_under_skip_incomplete_its_numbers_are_no_orphans(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = self._left(tmp_path, output_dir, monkeypatch)
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, *SUFFIX, "--skip-incomplete")
+        run.main([*_argv(library, output_dir), "--skip-incomplete"])
+        ran = capsys.readouterr()
+
+        assert ("Dune (2).epub", "orphan") not in listed
+        assert "orphan" not in ran.out
+        assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
 
 
 def len_then_name(path: Path) -> tuple[int, str]:

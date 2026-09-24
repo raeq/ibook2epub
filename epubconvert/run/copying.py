@@ -113,6 +113,10 @@ class CopyPlan:
     lost: tuple[tuple[Path, str], ...] = ()
     #: ``--skip-incomplete``, which leaves an evicted package unopened too.
     skip_incomplete: bool = False
+    #: Evicted files whose name holds a file nothing could tell from their
+    #: copy (:attr:`~epubconvert.utils.policy.Assignment.unverified`). Set by
+    #: :func:`placed_copies`.
+    unverified: frozenset[Path] = frozenset()
 
     @property
     def unopened(self) -> Unopened:
@@ -211,7 +215,14 @@ def placed_copies(plan: CopyPlan, copies: Sequence[Assignment]) -> CopyPlan:
             named.append((source, item.filename))
         else:
             lost.append((source, item.reason or "another book claims this name"))
-    return replace(plan, named=tuple(named), lost=tuple(lost))
+    return replace(
+        plan,
+        named=tuple(named),
+        lost=tuple(lost),
+        unverified=frozenset(
+            item.package for item in copies if item.filename and item.unverified
+        ),
+    )
 
 
 def select_copies(plan: CopyPlan, pattern: str | None) -> CopyPlan:
@@ -240,6 +251,7 @@ def select_copies(plan: CopyPlan, pattern: str | None) -> CopyPlan:
         named=tuple(entry for entry in plan.named if entry[0] in chosen),
         evicted=plan.evicted & chosen,
         lost=tuple(entry for entry in plan.lost if entry[0] in chosen),
+        unverified=plan.unverified & chosen,
     )
 
 
@@ -250,7 +262,8 @@ def copy_decisions(plan: CopyPlan, output_dir: Path) -> list[Decision]:
     ``-d`` said "2 to copy" while the listing showed nothing of the copies.
     Settled as the copy settles them (:func:`_group_copies`): a file whose
     name holds its copy is already on the shelf, one not downloaded that is
-    not there is incomplete, and one that lost its name is a collision.
+    not there, or cannot be told from the file there, is incomplete, and one
+    that lost its name is a collision.
 
     :param plan: The files this run copies, under the names they take.
     :param output_dir: Directory the copies go into.
@@ -261,16 +274,42 @@ def copy_decisions(plan: CopyPlan, output_dir: Path) -> list[Decision]:
         Decision(source, COLLISION, reason=reason) for source, reason in plan.lost
     ]
     for source, name in plan.named:
-        target = output_dir / name if name is not None else None
-        if target is not None and target.exists():
-            decisions.append(Decision(source, COPIED, target))
-        elif source in plan.evicted or target is None:
-            decisions.append(
-                Decision(source, INCOMPLETE, reason="not downloaded from iCloud")
-            )
+        reason = _not_downloaded(plan, output_dir, source, name)
+        if reason is not None or name is None:
+            decisions.append(Decision(source, INCOMPLETE, reason=reason))
+        elif (output_dir / name).exists():
+            decisions.append(Decision(source, COPIED, output_dir / name))
         else:
-            decisions.append(Decision(source, COPY, target))
+            decisions.append(Decision(source, COPY, output_dir / name))
     return sorted(decisions, key=lambda decision: decision.package)
+
+
+def _not_downloaded(
+    plan: CopyPlan, output_dir: Path, source: Path, name: str | None
+) -> str | None:
+    """
+    Say why an evicted file is skipped as not downloaded, if it is.
+
+    One whose copy is already on the shelf is finished work. One left
+    unnamed cannot be looked for, and nor can one whose name holds a file
+    nothing could tell from its copy (:attr:`CopyPlan.unverified`): taken
+    for its copy, a zipped book added under a deleted book's name was
+    reported copied from that book's file, and never copied.
+
+    :param plan: The files and their names.
+    :param output_dir: Directory the copies go into.
+    :param source: The file.
+    :param name: The name it takes, or None when it was left unnamed.
+
+    :return: The reason, or None when the file is not skipped for it.
+    """
+    if source not in plan.evicted and name is not None:
+        return None
+    if name is None or not (output_dir / name).exists():
+        return "not downloaded from iCloud"
+    if source in plan.unverified:
+        return f"not downloaded from iCloud; cannot tell whether {name} is its copy"
+    return None
 
 
 def _group_copies(
@@ -283,7 +322,8 @@ def _group_copies(
     whose copy is already there is finished work, not a skipped book. Without
     that, every rerun after iCloud evicts the source again would report the
     whole PDF shelf as not downloaded. One left unnamed cannot be looked for,
-    so it counts as not downloaded.
+    so it counts as not downloaded, as does one whose name holds a file it
+    cannot be told from (:func:`_not_downloaded`).
 
     :param plan: The files and their names, from :func:`plan_copies`.
     :param output_dir: Directory to copy into.
@@ -301,17 +341,16 @@ def _group_copies(
             printable(reason),
         )
     groups: dict[str, list[tuple[Path, Path]]] = {}
-    not_downloaded: list[Path] = []
+    not_downloaded: list[tuple[Path, str]] = []
     for source, name in plan.named:
         if source in plan.evicted or name is None:
-            if name is None or not (output_dir / name).exists():
-                not_downloaded.append(source)
+            skipped = _not_downloaded(plan, output_dir, source, name)
+            if skipped is not None:
+                not_downloaded.append((source, skipped))
             continue
         groups.setdefault(filesystem_key(name), []).append((source, output_dir / name))
-    for source in not_downloaded:
-        logger.warning(
-            "Skipped, not downloaded from iCloud: %s", printable(source.name)
-        )
+    for source, skipped in not_downloaded:
+        logger.warning("Skipped, %s: %s", printable(skipped), printable(source.name))
     with _REPORT_LOCK:
         report.incomplete += len(not_downloaded)
         report.collisions += len(plan.lost)

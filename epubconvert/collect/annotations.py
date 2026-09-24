@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Container
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -254,7 +255,10 @@ def _href_of(cfi: str, book: Package | None) -> str | None:
 
 
 def collect(
-    container: Path | None = None, policy: NamingPolicy | None = None
+    container: Path | None = None,
+    policy: NamingPolicy | None = None,
+    *,
+    unopened: Container[Path] = frozenset(),
 ) -> list[dict[str, Any]]:
     """
     Gather every exportable annotation.
@@ -264,6 +268,11 @@ def collect(
         what its file on the shelf is called. Without one no claim is made:
         the name belongs to the policy, and guessing it here is what let the
         two disagree.
+    :param unopened: Books whose package document is not to be read,
+        because reading it downloads the book: under ``--skip-incomplete``,
+        a package iCloud has evicted
+        (:class:`~epubconvert.run.holders.Unopened`). Every vault route read
+        each highlighted book's package document, and so downloaded it.
 
     :return: Annotations, grouped by book title and ordered by when each was
         made within a book.
@@ -290,7 +299,7 @@ def collect(
 
     # Manifests are read lazily and kept, so a book with twenty highlights is
     # opened once and a library with none is never opened at all.
-    parsed: dict[Path, Package | None] = {}
+    parsed = _left_unread(found_rows, library, unopened)
     found = []
     for row in found_rows:
         # One row at a time, because this was a comprehension and one
@@ -315,6 +324,36 @@ def collect(
     # the book, which this deliberately does not do.
     found.sort(key=_reading_order)
     return found
+
+
+def _left_unread(
+    found_rows: list[sqlite3.Row],
+    library: dict[str, dict[str, Any]],
+    unopened: Container[Path],
+) -> dict[Path, Package | None]:
+    """
+    Take the highlighted books not to be opened as read, and found wanting.
+
+    :func:`~epubconvert.collect.library.read_package_once` reads each book
+    once and keeps the answer, so a book already answered for is not read.
+
+    :param found_rows: The annotation rows.
+    :param library: What the library database knows.
+    :param unopened: Books whose package document is not to be read.
+
+    :return: Those books, each with no package document.
+    """
+    if not unopened:
+        return {}
+    highlighted = {
+        package_of(library.get(row["ZANNOTATIONASSETID"] or "", {}))
+        for row in found_rows
+    }
+    return {
+        package: None
+        for package in highlighted
+        if package is not None and package in unopened
+    }
 
 
 def _reading_order(item: dict[str, Any]) -> tuple[str, bool, str]:

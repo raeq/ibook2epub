@@ -92,6 +92,13 @@ EXPECTED = {
     ),
     "RerunPlanner.CopiesRemovalsRead": HOLDS,
     "RerunPlanner.CopiesRemovalsDeleted": HOLDS,
+    # A copy with no usable identifier: without a package given the name of
+    # a copy's own bytes claiming again, it was placed at that file too.
+    "RerunPlanner.CopiesUnidentified": HOLDS,
+    "RerunPlanner.CopiesUnidentifiedSkip": HOLDS,
+    "RerunPlanner.CopiesUnidentifiedLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
     "RerunPlanner.NumberedRemovals": HOLDS,
     "RerunPlanner.NumberedRemovalsStuck": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."

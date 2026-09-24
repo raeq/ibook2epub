@@ -207,6 +207,7 @@ def placed(
     *,
     writing: bool = False,
     only: Collection[Path] | None = None,
+    unopened: Container[Path] = frozenset(),
 ) -> dict[Path, Path | None]:
     """
     Find the archive on the shelf that is each book's own.
@@ -232,18 +233,25 @@ def placed(
         still placed, because where one moves on depends on the books before
         it; ``-ae -ar`` compared all 2,000 books of a shelf to rewrite the one
         with a highlight, 8.7x slower than before the comparison.
+    :param unopened: The books not to open for their identifier, as the plan
+        leaves them (holders.Unopened): judged as a book whose identifier says
+        nothing, as the plan judges it. Under ``--skip-incomplete``, ``-ar``
+        read an evicted package's document before the write, and so
+        downloaded it.
 
     :return: Each package, and its own archive or None when it has none.
     """
-    shelf = read_shelf(output_dir, policy, assigned)
+    shelf = read_shelf(output_dir, policy, assigned, unopened=unopened)
     unread = writing and not getattr(policy, "needs_metadata", False)
     found: dict[Path, Path | None] = {}
     for item in assigned:
         clash = place(item, shelf).clash
+        compared = only is None or item.package in only
         if (
             clash is not None
             and unread
-            and (only is None or item.package in only)
+            and compared
+            and item.package not in unopened
             and holds_another_book(clash.path, _identifier_of(item.package))
         ):
             clash = None

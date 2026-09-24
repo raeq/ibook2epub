@@ -22,7 +22,7 @@ cache: between 0.4 s and 3.9 s over a 2,800-book shelf, against no reads at
 all. Under a policy that already reads each source's package document it runs
 once per run for every archive under a name the plan gave a book, whole
 library included under ``--match``: the orphan check
-(:func:`epubconvert.run.planning.find_orphans`) and the plan
+(:func:`epubconvert.run.orphans.find_orphans`) and the plan
 (:func:`epubconvert.run.planning.plan_exports`) each ask, and the second is
 answered from what the first read. Asked apart, they read the shelf twice: 400
 opens for a no-op rerun over 200 books. Under the policies that name from the
