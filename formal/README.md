@@ -241,7 +241,9 @@ What the configurations that fail show:
   `exported` from the other book's file and its archive is not reported as
   an orphan. It is never written over. In suffix mode a namesake added
   beside it no longer is, where both declare a usable identifier
-  (`NamesakeAdded`).
+  (`NamesakeAdded`), nor a namesake whose identifier was read to find its
+  numbered file (`claims.kept_numbers`): it carries that identifier to
+  placing, and moves on past a number a deleted namesake left.
   `tests/test_planning.py::TestAFolderNameIsNotProofOfTheBook` replays the
   writes against the CLI.
 
