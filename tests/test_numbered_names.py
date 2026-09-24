@@ -1,0 +1,128 @@
+"""
+Tests for a book numbered by ``--on-collision suffix`` once its namesake leaves.
+
+A book with no digest to mark it -- named from the folder, or sharing its
+identifier -- is numbered by its place in its group: ``Dune (2).epub``. When
+the book holding the plain name, or the number before it, left the library
+with its archive, the numbered book took the name it had given up and was
+written again, and its own archive was listed as an orphan.
+"""
+
+# Test names describe the behaviour under test; separate docstrings would only
+# restate them.
+# pylint: disable=missing-function-docstring,missing-class-docstring
+# pylint: disable=too-few-public-methods
+
+from collections import Counter
+from pathlib import Path
+from zipfile import ZipFile
+
+from epubconvert.collect import package as package_reader
+from epubconvert.run import run
+from tests.conftest import make_metadata_package, make_package, remove_tree
+from tests.test_copy_claims import SUFFIX, listing, shelf
+
+AUTHOR_TITLE = ["--name-by", "author-title"]
+
+
+def _argv(library: Path, output_dir: Path, *extra: str) -> list[str]:
+    return ["-s", str(library), "-o", str(output_dir), "-m", "0", *SUFFIX, *extra]
+
+
+class TestNamedFromTheFolder:
+    @staticmethod
+    def _left(tmp_path: Path, output_dir: Path) -> Path:
+        library = tmp_path / "lib"
+        for folder in ("a", "b"):
+            make_package(library / folder, "Dune.epub")
+        run.main([*_argv(library, output_dir), "-q"])
+        assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
+        remove_tree(library / "a")
+        (output_dir / "Dune.epub").unlink()
+        return library
+
+    def test_the_numbered_book_keeps_its_file(self, tmp_path, output_dir, capsys):
+        library = self._left(tmp_path, output_dir)
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, *SUFFIX)
+        run.main(_argv(library, output_dir))
+        ran = capsys.readouterr()
+
+        assert listed == [("Dune.epub", "exported")]
+        assert "Exported 0 epub file(s)" in ran.out
+        assert "orphan" not in ran.out
+        assert shelf(output_dir) == ["Dune (2).epub"]
+
+    def test_not_while_another_book_wants_the_plain_name(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Nothing but the name says whose the numbered file is, so it is
+        # kept only by the one book that wants the name.
+        library = self._left(tmp_path, output_dir)
+        make_package(library / "c", "Dune.epub")
+        capsys.readouterr()
+
+        run.main([*_argv(library, output_dir), "-q"])
+
+        assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
+
+    def test_a_rerun_reads_nothing(self, tmp_path, output_dir, monkeypatch):
+        library = tmp_path / "lib"
+        for folder in ("a", "b", "c"):
+            make_package(library / folder, "Dune.epub")
+        run.main([*_argv(library, output_dir), "-q"])
+        opened: Counter[str] = Counter()
+        original_zip = ZipFile.__init__
+        original_read = package_reader.read_package_dir
+
+        def zip_counting(self, file, *args, **kwargs):
+            opened[str(file)] += 1
+            original_zip(self, file, *args, **kwargs)
+
+        def read_counting(package: Path):
+            opened[str(package)] += 1
+            return original_read(package)
+
+        monkeypatch.setattr(ZipFile, "__init__", zip_counting)
+        for module in ("holders", "placing", "planning"):
+            monkeypatch.setattr(
+                f"epubconvert.run.{module}.read_package_dir", read_counting
+            )
+
+        run.main([*_argv(library, output_dir), "-q"])
+
+        assert opened == Counter()
+
+
+class TestSharingOneIdentifier:
+    def test_the_last_keeps_its_file_when_the_middle_one_leaves(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        for folder in ("a", "b", "c"):
+            make_metadata_package(
+                library / folder,
+                "Dune.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier="urn:isbn:9780441013593",
+            )
+        argv = _argv(library, output_dir, *AUTHOR_TITLE)
+        run.main([*argv, "-q"])
+        [first, second, third] = sorted(output_dir.glob("*.epub"), key=len_then_name)
+        remove_tree(library / "b")
+        second.unlink()
+        capsys.readouterr()
+
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert "Exported 0 epub file(s)" in ran.out
+        assert "orphan" not in ran.out
+        assert sorted(output_dir.glob("*.epub")) == sorted([first, third])
+
+
+def len_then_name(path: Path) -> tuple[int, str]:
+    """Order ``X.epub``, ``X (2).epub``, ``X (3).epub`` by their number."""
+    return len(path.name), path.name

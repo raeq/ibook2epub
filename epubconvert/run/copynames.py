@@ -19,13 +19,16 @@ from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package
 from ..export.naming import DISAMBIGUATOR_CHARS, disambiguator, filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
-from .claims import Claims, claim_order, lost_to, shelf_files, shelf_names
+from .claims import (
+    NUMBERED,
+    Claims,
+    claim_order,
+    lost_to,
+    shelf_files,
+    shelf_names,
+)
 from .holders import identifier_on_shelf
 from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
-
-#: A name numbered by claims.suffixed, as a filesystem key: its stem, the
-#: number, and the extension.
-_NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
 
 #: A name marked by planning._stable_base, numbered or not, as a filesystem
 #: key: its stem, the digest, and the extension.
@@ -149,7 +152,7 @@ class _Claiming:
 
     def __post_init__(self) -> None:
         for key, found in self.existing.items():
-            numbered = _NUMBERED.fullmatch(key)
+            numbered = NUMBERED.fullmatch(key)
             if numbered is None:
                 self.numbered.setdefault(key, []).append((1, found))
             else:

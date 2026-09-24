@@ -29,6 +29,7 @@ from .claims import (
     MAX_SUFFIX,
     Claims,
     claim_order,
+    kept_numbers,
     lost_to,
     marked,
     shelf_files,
@@ -229,7 +230,9 @@ def assign_names(
     than a cascade. And a book whose identifier is junk or shared -- 92 books in
     a surveyed library claim to be ``none``, and 52 more share a real value --
     keeps the old positional suffix, because a marker that pretended to be
-    stable would be worse than a number that admits it is not.
+    stable would be worse than a number that admits it is not. A numbered book
+    whose own file is on the shelf keeps that number when the books before it
+    leave (:func:`~epubconvert.run.claims.kept_numbers`).
 
     Policies that name a book after its own metadata need the package document
     read first. That read is skipped entirely for the policies that do not ask
@@ -252,11 +255,33 @@ def assign_names(
     claims = Claims()
 
     first = [_bases(name, metadata, setup, crowded)[0] for _, name, metadata in wanted]
+    kept = (
+        kept_numbers(
+            [
+                (
+                    base,
+                    usable_identifier(item[2]),
+                    crowded[policy.identity(item[1])] == 1,
+                )
+                for base, item in zip(first, wanted, strict=True)
+            ],
+            shelf,
+            policy,
+        )
+        if on_collision == SUFFIX
+        else {}
+    )
     named: dict[int, Assignment] = {}
-    for index in claim_order(first, shelf):
+    for index in [*kept, *(i for i in claim_order(first, shelf) if i not in kept)]:
         package, name, metadata = wanted[index]
         named[index] = _assign_one(
-            package, name, metadata, setup=setup, claims=claims, crowded=crowded
+            package,
+            name,
+            metadata,
+            setup=setup,
+            claims=claims,
+            crowded=crowded,
+            kept=kept.get(index),
         )
     return [named[index] for index in range(len(wanted))]
 
@@ -302,6 +327,7 @@ def _assign_one(
     setup: _Naming,
     claims: Claims,
     crowded: Counter[str],
+    kept: str | None = None,
 ) -> Assignment:
     """
     Settle one package's output name against the names already taken.
@@ -312,13 +338,19 @@ def _assign_one(
     :param setup: The naming configuration.
     :param claims: Names already spoken for, updated in place.
     :param crowded: How many packages wanted each identity.
+    :param kept: The numbered file on the shelf it keeps, if any
+        (:func:`~epubconvert.run.claims.kept_numbers`).
 
     :return: The assignment, with an empty filename if the book lost.
     """
     base, stable = _bases(name, metadata, setup, crowded)
     group = setup.policy.identity(base)
 
-    taken = _claim(claims, base, group, setup=setup)
+    taken = (
+        (kept, setup.policy.identity(kept))
+        if kept and claims.keep(group, setup.policy.identity(kept), kept)
+        else _claim(claims, base, group, setup=setup)
+    )
     if taken is None:
         # Carries its identifier though it has no name, so an archive of it
         # already on the shelf is still recognised as a live book's.

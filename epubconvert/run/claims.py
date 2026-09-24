@@ -9,21 +9,28 @@ tried as, which placing a book on the shelf tries too
 
 from __future__ import annotations
 
+import re
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..collect.identifiers import usable_identifier
 from ..export.archive import COPYABLE_SUFFIXES, PARTIAL_PREFIX
 from ..export.naming import encode_name, filesystem_key, split_extension, truncate_bytes
+from .holders import identifier_on_shelf
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..utils.opf import Package
+    from ..utils.policy import NamingPolicy
 
 
 #: Highest ``" (n)"`` suffix the planner will try before giving up on a name.
 MAX_SUFFIX = 99
+
+#: A name numbered by :func:`suffixed`, as a filesystem key: its stem, the
+#: number, and the extension.
+NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
 
 
 def suffixed(filename: str, position: int, max_bytes: int) -> str:
@@ -107,6 +114,22 @@ class Claims:
         self.holders.setdefault(group, candidate)
         return True
 
+    def keep(self, group: str, key: str, candidate: str) -> bool:
+        """
+        Claim a file already on the shelf for a book, if both are free.
+
+        As :meth:`take`, but where the search for the group's first free
+        position resumes is left alone: the file is kept at its number, and
+        the positions before it are still free for the rest of the group.
+        """
+        path_key = filesystem_key(candidate)
+        if key in self.identities or path_key in self.paths:
+            return False
+        self.identities.add(key)
+        self.paths.add(path_key)
+        self.holders.setdefault(group, candidate)
+        return True
+
     def holder(self, group: str) -> str | None:
         """Return the name that took this group, if anything did."""
         return self.holders.get(group)
@@ -169,7 +192,22 @@ def shelf_files(output_dir: Path) -> list[Path]:
     ]
 
 
-def shelf_names(output_dir: Path | None) -> frozenset[str]:
+class ShelfNames(frozenset[str]):
+    """The names of the files on a shelf, and the directory they are in."""
+
+    #: The shelf, when there is one to read a file's identifier from.
+    directory: Path | None
+
+    def __new__(
+        cls, names: Iterable[str] = (), directory: Path | None = None
+    ) -> ShelfNames:
+        """Hold *names*, read from *directory*."""
+        made = super().__new__(cls, names)
+        made.directory = directory
+        return made
+
+
+def shelf_names(output_dir: Path | None) -> ShelfNames:
     """
     Read the name of every file on the shelf, for the claim pass to weigh.
 
@@ -179,16 +217,100 @@ def shelf_names(output_dir: Path | None) -> frozenset[str]:
         empty when there is no shelf to read.
     """
     if output_dir is None:
-        return frozenset()
+        return ShelfNames()
     try:
-        return frozenset(
-            unicodedata.normalize("NFC", found.name)
-            for found in output_dir.iterdir()
-            if found.is_file()
+        return ShelfNames(
+            (
+                unicodedata.normalize("NFC", found.name)
+                for found in output_dir.iterdir()
+                if found.is_file()
+            ),
+            output_dir,
         )
     except OSError:
         # Missing, which is what a dry run or a first run finds.
-        return frozenset()
+        return ShelfNames()
+
+
+def numbered_names(
+    names: Iterable[str], policy: NamingPolicy
+) -> dict[str, list[tuple[int, str]]]:
+    """
+    Index names by the filesystem key of the name they number.
+
+    :param names: File names on the shelf.
+    :param policy: The naming policy, whose identities the keys are of.
+
+    :return: Each name under the key of its name less any ``" (n)"``, with
+        n; 1 for a name with no number.
+    """
+    index: dict[str, list[tuple[int, str]]] = {}
+    for name in names:
+        key = filesystem_key(policy.identity(name))
+        numbered = NUMBERED.fullmatch(key)
+        if numbered is None:
+            index.setdefault(key, []).append((1, name))
+        else:
+            plain = numbered["stem"] + (numbered["extension"] or "")
+            index.setdefault(plain, []).append((int(numbered["position"]), name))
+    return index
+
+
+def kept_numbers(
+    books: Sequence[tuple[str, str | None, bool]],
+    shelf: Collection[str],
+    policy: NamingPolicy,
+) -> dict[int, str]:
+    """
+    Find the numbered file on the shelf each package in suffix mode keeps.
+
+    A package with no digest marker is numbered by its place in its group,
+    so once the book before it left the library with its archive, it took
+    the name it had given up, was written again, and its own file was
+    listed as an orphan. Before any name is claimed, each book whose name
+    has numbered files on the shelf keeps one of them: where it has a
+    usable identifier, the lowest-numbered one declaring that identifier;
+    where it has none, as under a policy that names from the folder, the
+    one numbered file, when no other book wants its name and no file has
+    the plain name. Nothing else can say whose it is. A file under a name
+    another book wants is never kept, as for a title that looks like a
+    number (``Dune (2)``).
+
+    Identifiers are read only for a name with numbered files on the shelf,
+    and only where the book's own was read, so a policy that names from the
+    folder reads nothing.
+
+    :param books: Each package's first name, usable identifier, and whether
+        no other package wants its name, in sorted order.
+    :param shelf: The shelf's names, from :func:`shelf_names`.
+    :param policy: The naming policy in force.
+
+    :return: The file kept, by index into *books*.
+    """
+    index = numbered_names(shelf, policy)
+    wanted = {filesystem_key(policy.identity(base)) for base, _, _ in books}
+    directory = getattr(shelf, "directory", None)
+    kept: dict[int, str] = {}
+    for position, (base, identifier, alone) in enumerate(books):
+        numbers = sorted(
+            (number, name)
+            for number, name in index.get(filesystem_key(policy.identity(base)), [])
+            if name not in kept.values()
+            and (number == 1 or filesystem_key(policy.identity(name)) not in wanted)
+        )
+        if all(number == 1 for number, _ in numbers):
+            continue
+        if identifier is not None and directory is not None:
+            found = [
+                name
+                for _, name in numbers
+                if identifier_on_shelf(directory / name) == identifier
+            ]
+        else:
+            found = [name for _, name in numbers] if alone else []
+        if len(found) == 1 or (found and identifier is not None):
+            kept[position] = found[0]
+    return kept
 
 
 def claim_order(candidates: Sequence[str], shelf: Collection[str]) -> list[int]:

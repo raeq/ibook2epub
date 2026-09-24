@@ -620,6 +620,12 @@ Two cases still fall back to ` (2)`, and both say so rather than pretending:
   in that library share a series ISBN, and six unrelated technical books share
   one converter's template UUID.
 
+A numbered book keeps its number when a book before it leaves the library with
+its archive, rather than taking the freed name and being written again. It is
+found by its identifier when naming read one; named from the folder, only when
+it alone wants the name and nothing holds the plain name, since nothing else
+can say whose the numbered file is.
+
 Measured on that library with `--name-by author-title --on-collision suffix`:
 2,692 names untouched, 78 marked with a digest, 10 of those needing a number as
 well, and 29 falling back to a number outright. Every one of the 2,799 names
