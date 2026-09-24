@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from epubconvert.collect import annotations
+from epubconvert.collect import package as package_reader
 from epubconvert.export.naming import disambiguator
 from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
@@ -33,7 +34,7 @@ PLAIN_NOTE = "Frank Herbert - Dune.md"
 def _read_from(monkeypatch: pytest.MonkeyPatch, container: Path) -> None:
     monkeypatch.setattr(
         "epubconvert.run.annotating.collect_annotations",
-        lambda policy=None: annotations.collect(container, policy),
+        lambda policy=None, **kwargs: annotations.collect(container, policy, **kwargs),
     )
 
 
@@ -237,6 +238,92 @@ class TestAVaultLeavesAnEvictedBookAlone:
 
         assert code == 0
         assert not opened
+
+
+def _package_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """Record every package document read from a package directory."""
+    read: list[Path] = []
+    original = package_reader.read_package_dir
+
+    def counting(package: Path):
+        read.append(package)
+        return original(package)
+
+    for module in ("run.holders", "run.placing", "run.planning", "collect.library"):
+        monkeypatch.setattr(f"epubconvert.{module}.read_package_dir", counting)
+    return read
+
+
+class TestAVaultLeavesAnEvictedPackageAlone:
+    """
+    Every vault route placed the books without ``--skip-incomplete``'s
+    books left unopened, so a package renamed by case had its identifier
+    read to judge the file under its old spelling, and ``-ar`` read it
+    again before the write; and the annotations read each highlighted
+    book's package document. Each downloaded the book the flag exists to
+    leave where it is.
+    """
+
+    ROUTES = [
+        ["-ao", "{vault}"],
+        ["-m", "0", "-ad", "{vault}"],
+        ["-ae", "-ar", "-ad", "{vault}"],
+    ]
+
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_no_route_reads_it(self, tmp_path, monkeypatch, route):
+        library, container = tmp_path / "lib", tmp_path / "container"
+        output, vault = tmp_path / "out", tmp_path / "vault"
+        _read_from(monkeypatch, container)
+        book = make_metadata_package(
+            library / "a", "dune.epub", title="Dune", identifier="urn:uuid:P"
+        )
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-q"])
+        book = book.rename(library / "a" / "Dune.epub")
+        make_databases(
+            container,
+            rows=[highlight(asset="P", uuid="UP", text="THE TEXT")],
+            books=[library_row(asset="P", path=str(book), title="Dune")],
+        )
+        _evict(monkeypatch, *(path for path in book.rglob("*") if path.is_file()))
+        read = _package_reads(monkeypatch)
+
+        code = main(
+            ["-s", str(library), "-o", str(output), "-q", "--skip-incomplete"]
+            + [part.format(vault=vault) for part in route]
+            + ["--annotations-format", "markdown"]
+        )
+
+        assert code == 0
+        assert book not in read
+        assert [note.name for note in vault.glob("*.md")] == ["dune.md"]
+
+    @pytest.mark.parametrize("route", ROUTES[:2])
+    def test_nor_names_it_from_its_package_document(
+        self, tmp_path, monkeypatch, capsys, route
+    ):
+        library, container = tmp_path / "lib", tmp_path / "container"
+        output, vault = tmp_path / "out", tmp_path / "vault"
+        _read_from(monkeypatch, container)
+        _edition(library, container, "A", "urn:uuid:A")
+        book = library / "Dune.epub"
+        _evict(monkeypatch, *(path for path in book.rglob("*") if path.is_file()))
+        read = _package_reads(monkeypatch)
+
+        code = main(
+            ["-s", str(library), "-o", str(output), "-q", "--skip-incomplete"]
+            + [part.format(vault=vault) for part in route]
+            + ["--annotations-format", "markdown", "--name-by", "author-title"]
+        )
+
+        err = capsys.readouterr().err
+        assert code == 0
+        assert book not in read
+        assert "lost a name collision" not in err
+        assert (
+            "1 book(s) not downloaded from iCloud could not be named without "
+            "downloading them, so their highlights were not written: Dune.epub"
+        ) in err
 
 
 class TestANoteForABookRenamedByCase:

@@ -40,6 +40,7 @@ from .claims import NUMBERED, shelf_names
 from .convert import OutputLockedError, output_lock, progress_for
 from .copying import plan_copies
 from .copynames import Names, claim_copies
+from .holders import Unopened
 from .placing import placed, settled
 from .planning import assign_names
 from .preflight import ShelfUnwritableError, check_writable
@@ -68,7 +69,7 @@ def gather_annotations(
     if not (args.annotations_embedded or args.annotations_detached):
         return None
     try:
-        return collect_annotations(policy=policy)
+        return _read_annotations(args, policy)
     except ContainerUnavailableError as exc:
         if required:
             raise
@@ -336,7 +337,7 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     :return: A process exit code.
     """
     try:
-        found = collect_annotations(policy=policy)
+        found = _read_annotations(args, policy)
     except ContainerUnavailableError as exc:
         logger.critical("Could not read annotations: %s", printable(str(exc)))
         return exc.exit_code
@@ -371,6 +372,27 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
         else []
     )
     return write_export(args, found, args.annotations_only, named, copyable=copyable)
+
+
+def _read_annotations(
+    args: argparse.Namespace, policy: NamingPolicy
+) -> list[dict[str, Any]]:
+    """
+    Read the annotations, leaving unopened what ``--skip-incomplete`` says to.
+
+    Each highlighted book's package document is read for what it says of
+    the book, which downloaded a package iCloud had evicted. Only under the
+    flag are the books left unopened, so every other run reads the
+    annotations as it always did.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy.
+
+    :return: The annotations.
+    """
+    if args.skip_incomplete:
+        return collect_annotations(policy=policy, unopened=Unopened(packages=True))
+    return collect_annotations(policy=policy)
 
 
 def _source_of(item: dict[str, Any]) -> object:
@@ -410,7 +432,7 @@ def _with_copies(
 
     :return: The packages' names, then the other books'.
     """
-    names = _claimed(
+    names, unopened = _claimed(
         args,
         policy,
         assignments,
@@ -422,7 +444,7 @@ def _with_copies(
         return everything
     if highlighted is not None:
         everything = _read_only_for(everything, highlighted, policy)
-    return settled(everything, args.output_dir, policy)
+    return settled(everything, args.output_dir, policy, unopened=unopened)
 
 
 def _read_only_for(
@@ -475,7 +497,7 @@ def _claimed(
     copyable: Sequence[Path],
     *,
     output_dir: Path | None,
-) -> Names:
+) -> tuple[Names, Unopened]:
     """
     Name the library's copies in the claim pass the packages were named in.
 
@@ -486,7 +508,9 @@ def _claimed(
     :param output_dir: The shelf to weigh, or None to name without one.
 
     :return: The packages' names, some with an identifier read, and the
-        copies', as :func:`~epubconvert.run.copynames.claim_copies` gives them.
+        copies', as :func:`~epubconvert.run.copynames.claim_copies` gives
+        them; and the books not to open to place them, as the run places
+        them (run._shared_names).
     """
     copies = plan_copies(
         copyable,
@@ -498,7 +522,7 @@ def _claimed(
         # opened, and so downloaded, to refresh the other books' highlights.
         copied=not args.annotations_refresh,
     )
-    return claim_copies(
+    names = claim_copies(
         assignments,
         copies.named,
         policy,
@@ -506,6 +530,7 @@ def _claimed(
         output_dir=output_dir,
         unopened=copies.unopened,
     )
+    return names, copies.unopened
 
 
 def _shelved(
@@ -531,10 +556,14 @@ def _shelved(
 
     :return: The packages' names, then the copies'.
     """
-    names = _claimed(args, policy, assignments, copyable, output_dir=args.output_dir)
+    names, unopened = _claimed(
+        args, policy, assignments, copyable, output_dir=args.output_dir
+    )
     if not names.copies:
         return names.packages
-    copies = settled([*names.packages, *names.copies], args.output_dir, policy)
+    copies = settled(
+        [*names.packages, *names.copies], args.output_dir, policy, unopened=unopened
+    )
     return [*names.packages, *copies[len(names.packages) :]]
 
 
@@ -662,6 +691,7 @@ def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
         args.on_collision,
         # The shelf the conversion weighed, so every route names alike.
         shelf=shelf_names(args.output_dir),
+        unopened=Unopened(packages=args.skip_incomplete),
     )
 
 
@@ -717,6 +747,7 @@ def _embed_in_shelf(
                 args.output_dir,
                 policy,
                 writing=True,
+                unopened=Unopened(packages=args.skip_incomplete),
                 only=highlighted,
             )
             # Before anything is rewritten, and in the dry run as well: a

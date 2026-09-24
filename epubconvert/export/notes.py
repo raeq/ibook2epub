@@ -579,6 +579,10 @@ def _write_notes(
         if not mine:
             continue
         name = naming.given[item.package] if item.filename else None
+        if name is None and item.unnamed:
+            # Not downloaded, and naming it would download it: no collision.
+            tally["unnamed"].append(item.package.name)
+            continue
         if name is None:
             # Lost a name collision: the book's own, which leaves it no stem to
             # share -- under -ao no planner runs to report that, and these
@@ -613,6 +617,8 @@ OUTCOMES = (
     "blocked",
     "left",
     "failed",
+    # Not a note: a book --skip-incomplete left unnamed (Assignment.unnamed).
+    "unnamed",
 )
 
 #: The outcomes that leave a book's highlights in no file at all, each of
@@ -645,6 +651,8 @@ REPORTS = {
     "not be moved to the one it has now, so their books' highlights were not "
     "written; see the errors above: %s",
     "failed": "%d note(s) could not be written: %s",
+    "unnamed": "%d book(s) not downloaded from iCloud could not be named without "
+    "downloading them, so their highlights were not written: %s",
 }
 
 
