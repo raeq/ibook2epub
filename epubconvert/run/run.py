@@ -296,14 +296,14 @@ def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
         return None
     stem, suffix = Path(name).stem, Path(name).suffix
     # The stem reads best but matches anywhere, so "Plain" finds Complain too.
-    # The escaped name is anchored only if escaping gave it a bracket; the
-    # bracketed dot anchors any name.
-    candidates = (stem, glob.escape(name), f"{glob.escape(stem)}[.]{suffix[1:]}")
-    for pattern in candidates:
+    # The escaped name is anchored only if escaping gave it a bracket.
+    for pattern in (stem, glob.escape(name)):
         chosen = {p for p in packages if matches_pattern(p.name, pattern)}
         if chosen == wanted:
             return pattern
-    return candidates[-1]
+    # The bracketed dot makes it a glob, which matches the whole name, and
+    # every other character stands for itself: this selects exactly *wanted*.
+    return f"{glob.escape(stem)}[.]{suffix[1:]}"
 
 
 def _plan_options(args: argparse.Namespace) -> PlanOptions:
