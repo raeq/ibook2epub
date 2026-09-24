@@ -15,6 +15,42 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A lock file that is a symlink or a hard link is refused (exit 5, "not a
+  plain file") instead of followed: a planted `.ibook2epub.lock` no longer
+  truncates the file it points at, creates a file elsewhere, or truncates its
+  other name. A dry run judges the lock file the real run opens, so one that
+  cannot be opened stops both with 5, and a read-only shelf with a writable
+  lock file is no longer refused.
+
+- An output directory that cannot be listed stops `--list`, `--verify`, `-ar`
+  and every run with exit 5 ("Cannot read output directory"), where it read
+  as empty: `--verify` checked nothing, `--list` showed every book pending,
+  and a run exported them all again.
+
+- The repair command `--verify` prints reads back exactly when `-o` or `-s`
+  holds a control character or an undecodable byte (bash/zsh `$'...'`
+  quoting), and finds a shelf file whose name is stored decomposed. Before,
+  running it created a new directory and repaired nothing.
+
+- The summary and every log line that names the output or source directory
+  escape it, so a path that is not UTF-8 no longer crashes a strict UTF-8
+  stdout after the books are written. A dangling symlink or a symlink loop
+  under `-o` is no longer described as "a file".
+
+- `-ae -ar -ad FILE.json` (or CSV) no longer names and opens every zipped
+  book, which downloaded evicted iCloud books, for a file that never uses the
+  names.
+
+- `-ae` says the highlights of books the `--min-free` floor stopped wait for a
+  rerun, rather than that they reached no file. `-ae -ar` no longer says books
+  were "copied through unchanged" over a shelf built with `--no-copy-through`.
+
+- Ctrl-C during `--annotations-refresh` says how many books it had refreshed,
+  and exits 130.
+
+- A refresh refusing an archive whose directory repeats a member names the
+  member.
+
 - A FIFO named `*.epub` in the library no longer hangs `--name-by
   author-title` runs, `--list` and `-d` included, or fails every passthrough
   run: it is skipped with a warning, and an archive's metadata, and
