@@ -9,6 +9,7 @@ book, so every read is bounded and every name is checked before it is used.
 
 from __future__ import annotations
 
+import os
 import posixpath
 import re
 import stat
@@ -468,13 +469,42 @@ def read_archive_package(path: Path) -> Package:
     :raises ValidationError: If the archive cannot be opened or read, or its
         package document is missing or unparsable -- an OSError included, as
         every caller treats a file it cannot open as one that cannot describe
-        itself.
+        itself. So is anything but a regular file.
     """
     try:
-        with ZipFile(path) as archive:
+        # zipfile leaves a stream it was handed open, so it is closed here.
+        with _open_regular(path) as handle, ZipFile(handle) as archive:
             return read_package(archive)
     except UNREADABLE_MEMBER as exc:
         raise ValidationError(printable(str(exc))) from exc
+
+
+def _open_regular(path: Path) -> IO[bytes]:
+    """
+    Open a file for reading, refusing anything that is not a regular file.
+
+    A FIFO named ``*.epub`` in the library was opened for reading, which waits
+    for a writer, so a ``--name-by author-title`` run -- ``--list`` included --
+    hung for ever. Opened without blocking and judged on the descriptor, so a
+    name swapped after a check cannot slip one in. Not ``open_contained``: that
+    refuses a hard link too, and a book on the shelf may legitimately be one.
+
+    :param path: The file to open.
+
+    :return: A binary stream, positioned at the start.
+
+    :raises ValidationError: If it is not a regular file.
+    :raises OSError: If it cannot be opened.
+    """
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValidationError("not a regular file")
+        os.set_blocking(descriptor, True)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return os.fdopen(descriptor, "rb")
 
 
 def _package(members: _Members) -> Package:

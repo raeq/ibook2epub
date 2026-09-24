@@ -284,6 +284,53 @@ def _sound_epub(path: Path) -> Path:
     return path
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="this platform has no FIFOs")
+class TestALibraryFileThatIsNotAFileIsNotOpened:
+    """
+    A FIFO named ``*.epub`` in the library was kept as a book to copy, and
+    reading its metadata opened it for reading: ``--name-by author-title``
+    waited for a writer for ever, ``--list`` and ``-d`` included.
+    """
+
+    def test_its_package_is_refused_not_waited_on(self, tmp_path):
+        fifo = tmp_path / "Piped.epub"
+        os.mkfifo(fifo)
+
+        raised = _within(5, fifo, lambda: package_reader.read_archive_package(fifo))
+
+        assert isinstance(raised, package_reader.ValidationError)
+        assert "not a regular file" in str(raised)
+
+    def test_it_is_not_a_book_to_copy(self, tmp_path):
+        library = tmp_path / "lib"
+        library.mkdir()
+        _sound_epub(library / "Good.epub")
+        os.mkfifo(library / "Piped.epub")
+
+        assert archive.collect_copyable(library) == [library / "Good.epub"]
+
+    def test_a_file_gone_before_it_is_judged_is_not_a_book_to_copy(self, tmp_path):
+        # Listed by the walk, deleted before the check: skipped, not raised.
+        judge = archive._is_regular  # pylint: disable=protected-access
+
+        assert judge(tmp_path / "Gone.epub") is False
+
+    def test_a_listing_named_by_author_finishes(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        library.mkdir()
+        fifo = library / "Piped.epub"
+        os.mkfifo(fifo)
+        arguments = ["-s", str(library), "-o", str(output_dir), "-q"]
+
+        code = _within(
+            5,
+            fifo,
+            lambda: run.main([*arguments, "--name-by", "author-title", "--list"]),
+        )
+
+        assert code == 0
+
+
 class TestAMemberThatGrowsWhileReadIsStillBounded:
     def test_the_read_stops_at_the_bound(self, tmp_path, monkeypatch):
         # The size is measured before the open, so a file that grows in

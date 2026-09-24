@@ -175,10 +175,22 @@ def collect_copyable(source_dir: Path) -> list[Path]:
                     printable(source_dir.name),
                 )
                 continue
+            # A FIFO named *.epub was kept, and reading it waited for ever.
+            if not _is_regular(path):
+                logger.warning("Skipped %s: not a regular file", printable(name))
+                continue
             found.append(path)
 
     found.sort()
     return found
+
+
+def _is_regular(path: Path) -> bool:
+    """Report whether *path* is a regular file, without following a link."""
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except OSError:
+        return False
 
 
 def copy_through(source: Path, target: Path) -> None:
