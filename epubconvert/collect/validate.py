@@ -161,7 +161,7 @@ def _check_contents(archive: ZipFile, members: set[str], size: int) -> list[str]
     if declared > max(MAX_CHECKED_BYTES, MAX_CHECKED_RATIO * size):
         problems.append(
             f"too large to check its members: they declare {declared} bytes, "
-            f"more than {MAX_CHECKED_RATIO} times the {size} the book holds"
+            f"more than {MAX_CHECKED_RATIO} times the {size} bytes the book holds"
         )
     else:
         broken = _first_corrupt(archive)
