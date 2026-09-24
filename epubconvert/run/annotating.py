@@ -29,14 +29,15 @@ from ..export.archive import (
     replace_annotations,
 )
 from ..export.detached import library_export, library_refusal, vault_of, write_export
+from ..export.naming import filesystem_key
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
-from .claims import shelf_names
+from .claims import NUMBERED, shelf_names
 from .convert import OutputLockedError, output_lock, progress_for
 from .copying import plan_copies
-from .copynames import claim_copies
+from .copynames import Names, claim_copies
 from .placing import placed, settled
 from .planning import assign_names
 
@@ -139,6 +140,7 @@ def annotations_after_export(
             [item.package for item in named if item.package in kept],
             copied=not args.no_copy_through,
         )
+        _warn_about_bookless(found)
     return None if code == exits.SUCCESS else code
 
 
@@ -190,6 +192,31 @@ def _warn_about_copies(
         how,
         shown,
     )
+
+
+def _warn_about_bookless(found: Sequence[dict[str, Any]]) -> None:
+    """
+    Say so when highlights were recorded against no book at all.
+
+    Apple records some highlights with no asset id. They name no book, so
+    none is embedded anywhere (index_by_package leaves them out), and only a
+    detached file carries them; ``-ae`` and ``-ae -ar`` said nothing of
+    them. Like the copies' warning, this one is not given under ``-ad`` and
+    changes no exit code.
+
+    :param found: Every annotation this run read.
+    """
+    bookless = sum(
+        1
+        for item in found
+        if not (isinstance(book := item.get("book"), dict) and book.get("assetId"))
+    )
+    if bookless:
+        logger.warning(
+            "%d highlight(s) Apple recorded against no book were not embedded; "
+            "use -ad FILE or -ao FILE.",
+            bookless,
+        )
 
 
 def _warn_about_stranded(
@@ -379,29 +406,129 @@ def _with_copies(
 
     :return: The packages' names, then the other books'.
     """
-    copies = plan_copies(
-        copyable,
+    names = _claimed(
+        args,
         policy,
-        max_workers=args.workers,
-        skip_incomplete=args.skip_incomplete,
-    )
-    names = claim_copies(
         assignments,
-        copies.named,
-        policy,
-        args.on_collision,
+        copyable,
         output_dir=args.output_dir if shelf else None,
-        unopened=copies.evicted,
     )
     everything = [*names.packages, *names.copies]
     if not shelf:
         return everything
     if highlighted is not None:
-        everything = [
-            item if item.package.name in highlighted else replace(item, identifier=None)
-            for item in everything
-        ]
+        everything = _read_only_for(everything, highlighted, policy)
     return settled(everything, args.output_dir, policy)
+
+
+def _read_only_for(
+    everything: Sequence[Assignment],
+    highlighted: Collection[object],
+    policy: NamingPolicy,
+) -> list[Assignment]:
+    """
+    Keep the identifiers that placing the highlighted books depends on.
+
+    A book with highlights is placed by its identifier, and every other book
+    by its name alone, so writing three notes does not open every archive on
+    a 2,000-book shelf. Except one whose place a highlighted book's depends
+    on: a book moving on past another book's archive speaks for the first
+    free position of its marked name, so one the run moves on, left at its
+    name, left that position to the highlighted book after it, whose note
+    was then named after a file the run never writes.
+
+    :param everything: Every book's name, in the order they are placed.
+    :param highlighted: The package names that have highlights.
+    :param policy: The naming policy in force.
+
+    :return: The names, with no identifier for the books it cannot matter for.
+    """
+    families = {
+        _family(item, policy) for item in everything if item.package.name in highlighted
+    }
+    return [
+        item
+        if item.package.name in highlighted
+        or (item.marked is not None and _family(item, policy) in families)
+        else replace(item, identifier=None)
+        for item in everything
+    ]
+
+
+def _family(item: Assignment, policy: NamingPolicy) -> str | None:
+    """The name a book moves on through, as a filesystem key less any number."""
+    if item.marked is None:
+        return None
+    key = filesystem_key(policy.identity(item.marked))
+    numbered = NUMBERED.fullmatch(key)
+    return key if numbered is None else numbered["stem"] + (numbered["extension"] or "")
+
+
+def _claimed(
+    args: argparse.Namespace,
+    policy: NamingPolicy,
+    assignments: Sequence[Assignment],
+    copyable: Sequence[Path],
+    *,
+    output_dir: Path | None,
+) -> Names:
+    """
+    Name the library's copies in the claim pass the packages were named in.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+    :param assignments: Every package's name.
+    :param copyable: The library's already-zipped books and PDFs.
+    :param output_dir: The shelf to weigh, or None to name without one.
+
+    :return: The packages' names, some with an identifier read, and the
+        copies', as :func:`~epubconvert.run.copynames.claim_copies` gives them.
+    """
+    copies = plan_copies(
+        copyable,
+        policy,
+        max_workers=args.workers,
+        skip_incomplete=args.skip_incomplete,
+        copied=not args.no_copy_through,
+    )
+    return claim_copies(
+        assignments,
+        copies.named,
+        policy,
+        args.on_collision,
+        output_dir=output_dir,
+        unopened=copies.unopened,
+    )
+
+
+def _shelved(
+    args: argparse.Namespace,
+    policy: NamingPolicy,
+    assignments: Sequence[Assignment],
+    copyable: Sequence[Path],
+) -> list[Assignment]:
+    """
+    Name every book as the run names it, to place the packages as it does.
+
+    The packages, with the identifier read of each a copy wanted the name of,
+    then the copies, placed on the shelf (run._shared_names). ``-ar`` placed
+    the packages alone and read no identifier, so a package named from the
+    folder that the run had moved on past a copy's file took that file for
+    its own; compared before the write, it then had no archive at all, and
+    its highlights were never refreshed.
+
+    :param args: Parsed command line arguments.
+    :param policy: The naming policy in force.
+    :param assignments: Every package's name.
+    :param copyable: The library's already-zipped books and PDFs.
+
+    :return: The packages' names, then the copies'.
+    """
+    names = _claimed(args, policy, assignments, copyable, output_dir=args.output_dir)
+    if not names.copies:
+        return names.packages
+    copies = settled([*names.packages, *names.copies], args.output_dir, policy)
+    return [*names.packages, *copies[len(names.packages) :]]
 
 
 def apply_annotations(
@@ -599,7 +726,7 @@ def _embed_in_shelf(
             # from the folder reads the book's own identifier to compare --
             # only for the books with highlights, the ones rewritten.
             places = placed(
-                assignments,
+                _shelved(args, policy, assignments, copyable),
                 args.output_dir,
                 policy,
                 writing=True,
@@ -622,6 +749,7 @@ def _embed_in_shelf(
         # Rewritten are the packages' archives; a copy is not rebuilt. Whether
         # there is one on the shelf is the conversion's business, not known here.
         _warn_about_copies(index, copyable, copied=None)
+        _warn_about_bookless(found)
     return _refresh_outcome(tally, converted=converted)
 
 

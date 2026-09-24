@@ -94,9 +94,11 @@ four properties:
 - **NoArchiveOfTheLibraryIsAnOrphan:** the orphan check (`find_orphans`)
   never lists the archive of a book that is still in the library: the list
   a person reviews before deleting. Checked in `Changing` and the copies
-  configurations. Suffix mode breaks it by design when a book enters a
-  collision and takes its marker, or a numbered book leaves one: the old
-  file stays, and is reported as an orphan.
+  and removal configurations. Suffix mode breaks it by design when a book
+  enters a collision and takes its marker: the old file stays, and is
+  reported as an orphan. A book whose crowd leaves keeps its marked or
+  numbered file where anything can say it is its own
+  (`claims.kept_numbers`); the configurations below say where nothing can.
 
 Names are strings, so a title that looks like a suffix (`Dune (2)`) collides
 exactly as it does on disk. The model has 3 editions sharing one title, as
@@ -118,7 +120,26 @@ on the claim-pass fixes: a copy whose own file is on the shelf under its name
 or one of its numbers keeps it in either mode and claims before the others,
 and a package with no digest marker moves on to its own name, numbered.
 `AllowChanges` lets the library start with any of its books and have books
-added; `AllowRemovals` lets books be removed as well.
+added; `AllowRemovals` lets books be removed as well. `TakesArchive` removes
+a book's archive from the shelf with the book, as a person deleting both
+does, and with it a library that starts whole can lose books without gaining
+any.
+
+`SharedId` is the books that declare one identifier between them, so anything
+that compares identifiers takes each for the others. A copy's own file is its
+own bytes, which the claim pass tells by size and modification time; where the
+copy and the file both declare an identifier, a file of the copy's identifier
+is its own too, the copy made before Apple rewrote the book. `KeepOne` switches
+on the round-5 claim pass: each file on the shelf is kept by one copy at most,
+a copy whose own bytes are there keeps them before a copy that goes by
+identifier, and a file under a name a package was given is that package's
+unless the identifiers say otherwise. `KeepNumbered` switches on
+`claims.kept_numbers`: in suffix mode a package keeps the numbered file of its
+name that declares its identifier, which is read for this whatever the
+policy, or the file of its marked name once its crowd has left it; with no
+usable identifier, the one numbered file when no other package wants the name
+and nothing holds the plain name. A copy that keeps that file sends the
+package back to claim a name (`_Claiming.reclaim`).
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
@@ -135,6 +156,17 @@ added; `AllowRemovals` lets books be removed as well.
 | `FolderNamedReports` | the same | books added and removed | all | before a write | **ExportedMeansTheBooksOwnFile violated** |
 | `CopiesSuffix` | `--match`, `--refresh`, suffix mode, named from the folder, two copies and a package | books added | all | before a write, and where a copy wants the name | all four hold |
 | `CopiesSuffixStuck` | the same, without `KeepOwn` | books added | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `CopiesSharedId` | as `CopiesSuffix`, the two copies of one identifier | books added | all | the same | all four hold |
+| `CopiesSharedIdLoose` | the same, without `KeepOne` | books added | all | the same | **ExportedMeansTheBooksOwnFile violated** |
+| `CopiesOneIdentifier` | as `CopiesSuffix`, all three of one identifier | books added | all | the same | SuffixKeepsEveryIdentifiableBook and NoArchiveOfTheLibraryIsAnOrphan hold |
+| `CopiesOneIdentifierLoose` | the same, without `KeepOne` | books added | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `CopiesRemovals` | as `CopiesSuffix` | books added and removed | all | the same | NoArchiveOfTheLibraryIsAnOrphan holds |
+| `CopiesRemovalsStuck` | the same, without `KeepNumbered` | books added and removed | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `CopiesRemovalsRead` | the same, every identifier read | books added and removed | all | on | all four hold |
+| `CopiesRemovalsDeleted` | the same, each book removed with its archive | books added and removed | all | on | all four hold |
+| `NumberedRemovals` | `--match`, `--refresh`, suffix mode, named from the folder, two packages | removed with their archives | none | before a write | NoArchiveOfTheLibraryIsAnOrphan holds |
+| `NumberedRemovalsStuck` | the same, without `KeepNumbered` | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `NumberedRemovalsCrowd` | `NumberedRemovals` with three packages | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 
 What the configurations that fail show:
 
@@ -208,11 +240,49 @@ What the configurations that fail show:
   narrowed with `--match` took ` (3)` once a package arrived, and was copied
   again, until a copy kept its own file under any of its numbers.
 
-  With removals too it does not hold, for the reasons above: a package
-  named from the folder that takes the name of a copy since deleted from the
-  library is reported exported from that copy's file (`FolderNamedReports`),
-  and a numbered book whose namesake leaves takes the plain name and is
-  written again.
+  With removals too, `CopiesRemovals` holds NoArchiveOfTheLibraryIsAnOrphan
+  named from the folder, and `CopiesRemovalsRead` and
+  `CopiesRemovalsDeleted` all four where naming reads every identifier,
+  whether a book's archive stays or goes with it. Named from the folder,
+  ExportedMeansTheBooksOwnFile still fails as in `FolderNamedReports`.
+
+- **`CopiesSharedIdLoose` and `CopiesOneIdentifierLoose`** are the claim
+  pass before `KeepOne`. It asked of each copy only whether a file under its
+  name, or one of its numbers, was its own, and two copies of one book, or a
+  copy and a package of one, declare one identifier: the second copy took
+  the first's file, or the package's archive, for its own. In skip mode the
+  collision the first run reported was gone from the next, listed as copied
+  (`CopiesSharedIdLoose`); in suffix mode the second copy's own file was
+  listed as an orphan (`CopiesOneIdentifierLoose`).
+  `tests/test_copy_keeping.py` replays both against the CLI. Where all
+  three share one identifier, ExportedMeansTheBooksOwnFile and
+  NeverWritesOverAnotherBook still do not hold: the `Unidentifiable` limit.
+
+- **`CopiesRemovalsStuck` and `NumberedRemovalsStuck`** are suffix mode
+  before `claims.kept_numbers`. A book with no digest marker is numbered by
+  its place, or moved on past another book's file to the first free
+  number, and when that book left the library it took the name it had
+  given up: reported exported from the other book's file where that
+  stayed, written again where it went with its book, and its own archive
+  listed as an orphan either way. A package's identifier is now read for a
+  name with numbered files on the shelf, and it keeps the one declaring
+  it, or, once its crowd has left it, the file of its marked name. That
+  was a rename by design, and `CopiesRemovalsDeleted` found the case of it
+  that left an orphan: a book moved on to its marked name past another
+  book's archive took its plain name back once that archive was deleted.
+  `NumberedRemovals` is the rule for books with no usable identifier: two
+  packages of one name, the numbered one alone once the other leaves with
+  its archive. `tests/test_numbered_names.py` replays these against the CLI.
+
+  The model found a case the rule had made worse, now closed: a package
+  alone among the packages kept a numbered file that was a copy's own
+  bytes, moved on past it, and left the plain name to another copy, and a
+  later run listed its archive as an orphan (`_Claiming.reclaim`).
+
+- **`NumberedRemovalsCrowd`** is the limit of that rule: with three
+  packages and no usable identifier, once the first leaves, two books still
+  want the plain name, and nothing says which numbered file is whose. The
+  last takes the second's number, and its own archive is an orphan.
 
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.
@@ -223,13 +293,18 @@ What the model does not describe, and why:
   exactly, as `PassthroughNaming.identity` compares them, while the shelf is
   looked up by `filesystem_key`, which folds both. Modelling the fold means
   two name spaces and a map between them, for a state space that already
-  takes minutes; so the rules that exist only because of it -- a book renamed
-  by case finds its own archive (`holders.foreign`), and a book whose exact
-  name is on the shelf claims it first (`claims.claim_order`) -- are replayed
-  against the CLI in `tests/test_case_namesakes.py`.
+  takes minutes; so the rule that exists only because of it -- a book renamed
+  by case finds its own archive (`holders.foreign`) -- is replayed against
+  the CLI in `tests/test_case_namesakes.py`.
 - **`--force`**, which writes over a book's own archive as `--refresh` does
   for a newer source, and is checked before the write the same way.
-- **Two different copies of one size.** A copy's own file is told exactly
-  here; the code tells it by size, and by identifier where two books want
-  the name (`tests/test_copy_shelf.py`). PDFs have no identifier, and two
-  PDFs of one name and one size cannot be told apart.
+- **Two different files of one size and one modification time.** A copy's
+  own bytes are told exactly here; the code tells them by size and
+  modification time, which a copy keeps from its source
+  (`tests/test_copy_keeping.py`). A copy made before copies kept the time
+  is newer than its source, and is told by its size alone.
+- **`claim_order` for packages.** It puts every package whose first name is a
+  file on the shelf ahead of the rest -- whatever put the file there: a
+  namesake by case, the book's own archive or another's, or a title that
+  looks like a number -- and the model's packages claim in sorted order. The
+  copies claim in its order.

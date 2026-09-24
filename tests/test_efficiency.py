@@ -400,6 +400,39 @@ class TestEachShelfArchiveIsReadOnce:
         assert self._opens(monkeypatch, library, output_dir) == Counter()
 
 
+class TestABookRenamedByCaseIsReadOnce:
+    """
+    A file of another spelling of a book's name may be its own archive, and
+    one source read settles it (holders.foreign). The run and ``--list``
+    each place the library three times -- the copies, the plan, the orphan
+    check -- and each placing read the book's package document again.
+    """
+
+    @pytest.mark.parametrize("listing", [[], ["--list"]])
+    def test_its_package_document_is_read_once(
+        self, tmp_path, output_dir, monkeypatch, listing
+    ):
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "b", "dune.epub", title="Dune", identifier="urn:uuid:D"
+        )
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        renamed = (library / "b" / "dune.epub").rename(library / "b" / "Dune.epub")
+        reads: Counter[Path] = Counter()
+        original = package_reader.read_package_dir
+
+        def counting(package: Path):
+            reads[package] += 1
+            return original(package)
+
+        monkeypatch.setattr("epubconvert.run.holders.read_package_dir", counting)
+        cap = [] if listing else ["-m", "0"]
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-q", *cap, *listing])
+
+        assert reads == Counter({renamed: 1})
+
+
 class TestARerunOverCopiesOpensNothing:
     """
     Whether a file on the shelf is a copy's own is settled by its size while

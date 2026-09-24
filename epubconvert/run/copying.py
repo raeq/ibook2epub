@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..collect.source import is_dataless
@@ -27,6 +27,7 @@ from .convert import (
     matches_pattern,
     progress_for,
 )
+from .holders import Unopened
 from .planning import (
     COLLISION,
     COPIED,
@@ -102,11 +103,20 @@ class CopyPlan:
 
     #: Each file with its name, or None when it was left unnamed.
     named: tuple[tuple[Path, str | None], ...] = ()
-    #: Files ``--skip-incomplete`` leaves where they are.
+    #: Files iCloud has evicted that are left where they are, unopened:
+    #: under ``--skip-incomplete``, or ``--no-copy-through``, which copies
+    #: nothing.
     evicted: frozenset[Path] = frozenset()
     #: Files that lost the name they wanted to another book, with why. Set by
     #: :func:`placed_copies`; each is a collision, reported and counted.
     lost: tuple[tuple[Path, str], ...] = ()
+    #: ``--skip-incomplete``, which leaves an evicted package unopened too.
+    skip_incomplete: bool = False
+
+    @property
+    def unopened(self) -> Unopened:
+        """The books not to open for their identifier, packages included."""
+        return Unopened(self.evicted, packages=self.skip_incomplete)
 
     @property
     def sources(self) -> list[Path]:
@@ -128,6 +138,7 @@ def plan_copies(
     *,
     max_workers: int | None = None,
     skip_incomplete: bool = False,
+    copied: bool = True,
 ) -> CopyPlan:
     """
     Name each file for the shelf, in a pool, without opening an evicted one.
@@ -143,14 +154,18 @@ def plan_copies(
     :param max_workers: Size of the thread pool, as for
         :func:`~epubconvert.run.convert.export_planned`.
     :param skip_incomplete: Whether evicted files are to be left alone.
+    :param copied: Whether the run copies the files. Under
+        ``--no-copy-through`` it does not, so an evicted file is left alone
+        whatever ``--skip-incomplete`` says: every zipped book was opened to
+        be named, and so downloaded, for a copy that never happens.
 
     :return: The plan.
     """
     if not copyable:
-        return CopyPlan()
+        return CopyPlan(skip_incomplete=skip_incomplete)
     evicted = (
         frozenset(source for source in copyable if is_dataless(source))
-        if skip_incomplete
+        if skip_incomplete or not copied
         else frozenset()
     )
 
@@ -166,7 +181,11 @@ def plan_copies(
         names = list(pool.map(name, copyable))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
-    return CopyPlan(tuple(zip(copyable, names, strict=True)), evicted)
+    return CopyPlan(
+        tuple(zip(copyable, names, strict=True)),
+        evicted,
+        skip_incomplete=skip_incomplete,
+    )
 
 
 def placed_copies(plan: CopyPlan, copies: Sequence[Assignment]) -> CopyPlan:
@@ -191,7 +210,7 @@ def placed_copies(plan: CopyPlan, copies: Sequence[Assignment]) -> CopyPlan:
             named.append((source, item.filename))
         else:
             lost.append((source, item.reason or "another book claims this name"))
-    return CopyPlan(tuple(named), plan.evicted, tuple(lost))
+    return replace(plan, named=tuple(named), lost=tuple(lost))
 
 
 def select_copies(plan: CopyPlan, pattern: str | None) -> CopyPlan:
@@ -215,10 +234,11 @@ def select_copies(plan: CopyPlan, pattern: str | None) -> CopyPlan:
     chosen = {
         source for source in plan.sources if matches_pattern(source.name, pattern)
     }
-    return CopyPlan(
-        tuple(entry for entry in plan.named if entry[0] in chosen),
-        plan.evicted & chosen,
-        tuple(entry for entry in plan.lost if entry[0] in chosen),
+    return replace(
+        plan,
+        named=tuple(entry for entry in plan.named if entry[0] in chosen),
+        evicted=plan.evicted & chosen,
+        lost=tuple(entry for entry in plan.lost if entry[0] in chosen),
     )
 
 

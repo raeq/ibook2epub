@@ -201,6 +201,12 @@ def copy_through(source: Path, target: Path) -> None:
     so an interrupted run never leaves a half-copied file that a later run
     mistakes for finished work.
 
+    The copy keeps the source's modification time, taken from the descriptor
+    it read: with its size, that is how a later run knows the file for this
+    source's copy without opening either (copynames._same_file). By size
+    alone, a book of the same size replacing a deleted one was taken as
+    already copied.
+
     :param source: The file to copy.
     :param target: Where it should land.
     """
@@ -213,6 +219,8 @@ def copy_through(source: Path, target: Path) -> None:
         partial.chmod(file_mode())
         with open_contained(source) as reading, partial.open("wb") as writing:
             shutil.copyfileobj(reading, writing)
+            read = os.fstat(reading.fileno())
+        os.utime(partial, ns=(read.st_atime_ns, read.st_mtime_ns))
         partial.replace(target)
     except BaseException:
         partial.unlink(missing_ok=True)

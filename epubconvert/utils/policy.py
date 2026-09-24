@@ -48,6 +48,13 @@ class Assignment:
     #: *identifier* that the book moves on to when the archive under its own
     #: name holds another book. None when there is no identifier to digest.
     marked: str | None = None
+    #: A file copied through that the claim pass found is not the one on the
+    #: shelf under its name, or any of its numbers: every file it is placed
+    #: at is another book's, whatever the identifiers can say.
+    not_own: bool = False
+    #: A package that kept a numbered file of its name on the shelf
+    #: (claims.kept_numbers), rather than claiming the first free name.
+    kept_number: bool = False
 
 
 @runtime_checkable

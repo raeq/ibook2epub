@@ -12,7 +12,7 @@ marked name.
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NamedTuple
@@ -46,6 +46,8 @@ class Shelf:
     #: The identity of every book in the plan, NFC-normalized, so a file of
     #: another spelling is known for a namesake's (holders.foreign).
     live: frozenset[str] = field(default_factory=frozenset)
+    #: The books not to open for their identifier (holders.Unopened).
+    unopened: Container[Path] = frozenset()
 
 
 class Place(NamedTuple):
@@ -60,7 +62,11 @@ class Place(NamedTuple):
 
 
 def read_shelf(
-    output_dir: Path, policy: NamingPolicy, assigned: Sequence[Assignment]
+    output_dir: Path,
+    policy: NamingPolicy,
+    assigned: Sequence[Assignment],
+    *,
+    unopened: Container[Path] = frozenset(),
 ) -> Shelf:
     """
     Read the archives already on the shelf, for a plan to place books against.
@@ -68,6 +74,7 @@ def read_shelf(
     :param output_dir: Directory holding exported files.
     :param policy: Naming policy supplying identities.
     :param assigned: The plan's names.
+    :param unopened: The books not to open for their identifier.
 
     :return: The shelf, with every assigned name spoken for.
     """
@@ -83,7 +90,7 @@ def read_shelf(
     }
     spoken = {filesystem_key(item.identity) for item in assigned if item.filename}
     live = frozenset(unicodedata.normalize("NFC", item.identity) for item in assigned)
-    return Shelf(policy, existing, spoken, live)
+    return Shelf(policy, existing, spoken, live, unopened)
 
 
 def place(assignment: Assignment, shelf: Shelf) -> Place:
@@ -132,18 +139,28 @@ def _foreign_to(
     """Say why *clash* is not this book's archive; None if free or its own."""
     if clash is None:
         return None
-    return foreign(
+    reason = foreign(
         clash.path,
         clash.identity,
         identity,
         assignment.identifier,
         source=assignment.package,
         live=shelf.live,
+        unopened=shelf.unopened,
     )
+    if reason is None and assignment.not_own:
+        # Settled by the claim pass, which read the sizes: a PDF has no
+        # identifier for foreign to go by.
+        return f"{clash.path.name} already holds this name"
+    return reason
 
 
 def settled(
-    assigned: Sequence[Assignment], output_dir: Path, policy: NamingPolicy
+    assigned: Sequence[Assignment],
+    output_dir: Path,
+    policy: NamingPolicy,
+    *,
+    unopened: Container[Path] = frozenset(),
 ) -> list[Assignment]:
     """
     Rename each assignment to where :func:`place` puts it.
@@ -157,10 +174,11 @@ def settled(
     :param assigned: Names, in the order the plan gives them.
     :param output_dir: Directory holding exported files.
     :param policy: The naming policy the names came from.
+    :param unopened: The books not to open for their identifier.
 
     :return: Each assignment, renamed, or with no name and the reason.
     """
-    shelf = read_shelf(output_dir, policy, assigned)
+    shelf = read_shelf(output_dir, policy, assigned, unopened=unopened)
     result = []
     for item in assigned:
         filename, clash, reason = place(item, shelf)

@@ -43,15 +43,27 @@
  *       to its own name, numbered
  *   _identified                a package's identifier is read when a copy
  *       wants its name, whatever the policy
- *   _own                       a copy's identifier is read for a file under
- *       its name that is not its own, and with KeepOwn also where another
- *       book wants that name. A copy's own file is told exactly here: the
- *       size test, and the identifiers where the name is contested, stand in
- *       for that
+ *   _own                       a copy's own file is its own bytes, which the
+ *       size and modification time tell (_same_file); where it and the file
+ *       both declare a usable identifier, a file of its identifier is its
+ *       own too (its copy from before Apple rewrote the book). The books in
+ *       SharedId declare one identifier, so each is taken for the others
+ *   _Claiming.settle / _packages   with KeepOne, a file is kept by one copy
+ *       at most, a copy whose own bytes are there keeps them before one that
+ *       goes by identifier, and a file under a name a package was given is
+ *       that package's unless the identifiers say otherwise. Without it, two
+ *       copies of one identifier both kept the one file
  *   copy_through_all           a copy whose target exists is not copied
  * KeepOwn stands for the claim-pass fixes together: with it, _assign_one
  * also gives a package with no digest marker somewhere to move on to in
- * suffix mode, its own name numbered, as a copy has.
+ * suffix mode, its own name numbered, as a copy has. KeepNumbered is
+ * claims.kept_numbers: in suffix mode a package keeps the numbered file of
+ * its name that declares its identifier, which is read for this whatever
+ * the policy, or the file of its marked name once its crowd has left it;
+ * with no usable identifier, the one numbered file when no other package
+ * wants its name and nothing holds the plain name. One that kept a file a
+ * copy keeps claims a name again (_Claiming.reclaim). TakesArchive stands for a person deleting a book's
+ * archive with the book: nothing in the tool deletes one.
  *
  * find_orphans is modelled too: an archive on the shelf is an orphan when no
  * book is placed at it, no book that lost its name may hold it, and it is not
@@ -60,16 +72,18 @@
  * Not modelled:
  *   - case folding and Unicode normalization. Names are strings compared
  *     exactly: PassthroughNaming.identity is the filename. So a book renamed
- *     by case (holders.foreign), and claim_order's rule that a book whose
- *     exact name is on the shelf claims first -- which reorders only books
- *     whose names differ in case, or a copy whose own file is there -- are
- *     left to tests/test_case_namesakes.py; the copies' own-file-first order
- *     is modelled.
+ *     by case (holders.foreign) is left to tests/test_case_namesakes.py.
+ *   - claim_order for packages. It puts every book whose first name is a
+ *     file on the shelf ahead of the rest, whatever put the file there: a
+ *     namesake by case, the book's own archive or another book's, or a
+ *     title that looks like a number (Dune (2)). The packages claim here in
+ *     sorted order; the copies claim in claim_order's.
  *   - --force, which writes as --refresh does for a newer source.
- *   - two different copies of one size: the identifier comparison that tells
- *     them apart is taken as given (tests/test_copy_shelf.py).
- * A digest marker is " [b]" for book b; a real digest is a hash of the
- * identifier, equal for equal identifiers.
+ *   - two different files of one size and one modification time: the stat
+ *     that tells a copy's own bytes is taken as given
+ *     (tests/test_copy_keeping.py). Distinct books are distinct files here.
+ * A digest marker is " [b]" for book b, or for the least book of SharedId;
+ * a real digest is a hash of the identifier, equal for equal identifiers.
  *)
 EXTENDS Naturals, Sequences, FiniteSets, TLC
 
@@ -82,15 +96,21 @@ CONSTANTS
     AllowRefresh,  \* runs may pass --refresh
     AllowChanges,  \* books may be added to the library, which may start
                    \* with any of them
-    AllowRemovals, \* with AllowChanges, books may be removed from it too
+    AllowRemovals, \* with AllowChanges, books may be removed from it too;
+                   \* with TakesArchive, from a library that starts whole
     VerifyHolder,  \* _decide_against_holder: the check that fixes the defects
     ReadsSources,  \* naming reads each package document (--name-by author-title);
                    \* otherwise the check runs only before a write
     MoveOn,        \* place: under suffix, a book whose name holds another book
                    \* moves on to its marked name
     Copies,        \* books copied through rather than converted
-    KeepOwn        \* the claim-pass fixes: a copy keeps its own file whatever
+    KeepOwn,       \* the claim-pass fixes: a copy keeps its own file whatever
                    \* the mode, and a package without a digest can move on
+    SharedId,      \* books declaring one usable identifier between them
+    KeepOne,       \* a file is kept by one copy at most, its own bytes first
+    KeepNumbered,  \* claims.kept_numbers: a package keeps its numbered file
+    TakesArchive   \* with AllowRemovals, a book leaves with its archive, as a
+                   \* person deletes both; otherwise the archive stays
 
 Books == 1..N
 
@@ -116,12 +136,18 @@ Limit == IF OnCollision = "suffix" THEN N ELSE 1
 MoveLimit == IF OnCollision = "suffix" THEN 2 * N ELSE 1
 
 Suffixed(base, k) == IF k = 1 THEN base ELSE base \o " (" \o ToString(k) \o ")"
-Marked(name, b) == name \o " [" \o ToString(b) \o "]"
+\* The digest of b's identifier: one for the books sharing one.
+Digest(b) ==
+    IF b \in SharedId THEN CHOOSE m \in SharedId : \A j \in SharedId : m <= j ELSE b
+Marked(name, b) == name \o " [" \o ToString(Digest(b)) \o "]"
 
 Min(T) == CHOOSE k \in T : \A j \in T : k <= j
 
 Packages(X) == X \ Copies
 CopiesOf(X) == X \cap Copies
+
+\* Two books declaring one identifier: one book, to anything that reads it.
+Mate(b, c) == b = c \/ (b \in SharedId /\ c \in SharedId)
 
 Crowd(S, want) == Cardinality({c \in S : Wanted[c] = want})
 
@@ -141,6 +167,48 @@ Sorted(S) ==
     ELSE LET m == CHOOSE x \in S : \A y \in S : x <= y
          IN <<m>> \o Sorted(S \ {m})
 
+(* kept_numbers, in suffix mode with KeepNumbered: the numbered file of its
+   name each package keeps, in sorted order, never one another kept or one
+   under a name another package wants. Where it has a usable identifier,
+   read for this even where naming read none, the lowest-numbered file
+   declaring it, and, once its crowd has left it, one of its marked name
+   declaring it; where it has none, the one numbered file, when no other
+   package wants the name and nothing holds the plain name. "" for a
+   package that keeps none. *)
+RECURSIVE Numbered(_, _, _)
+Numbered(S, order, taken) ==
+    IF order = <<>> THEN [b \in {} |-> ""]
+    ELSE LET b      == Head(order)
+             base   == Base(S, b)
+             stable == IF Digested(b) THEN Marked(Wanted[b], b) ELSE Wanted[b]
+             wants  == {Base(S, d) : d \in S}
+             Forms(nm) == {k \in 1..MoveLimit :
+                             LET n == Suffixed(nm, k)
+                             IN /\ shelf[n] # 0
+                                /\ n \notin taken
+                                /\ (k = 1 \/ n \notin wants)}
+             there  == Forms(base)
+             marked == IF stable # base THEN Forms(stable) ELSE {}
+             Mine(nm, T) == {k \in T : Mate(shelf[Suffixed(nm, k)], b)}
+             look   == /\ KeepNumbered
+                       /\ OnCollision = "suffix"
+                       /\ (\E k \in there : k > 1) \/ marked # {}
+             name   == IF ~look THEN ""
+                       ELSE IF b \in Usable
+                         THEN IF Mine(base, there) # {}
+                                THEN Suffixed(base, Min(Mine(base, there)))
+                              ELSE IF Mine(stable, marked) # {}
+                                THEN Suffixed(stable, Min(Mine(stable, marked)))
+                              ELSE ""
+                       ELSE IF /\ Crowd(S, Wanted[b]) = 1
+                               /\ Cardinality(there) = 1
+                               /\ \A k \in there : k > 1
+                         THEN Suffixed(base, Min(there))
+                       ELSE ""
+             rest   == Numbered(S, Tail(order),
+                                IF name = "" THEN taken ELSE taken \cup {name})
+         IN [c \in {b} \cup DOMAIN rest |-> IF c = b THEN name ELSE rest[c]]
+
 (* _claim: the first free candidate, in sorted order of packages. "" means
    the book lost (COLLISION). *)
 RECURSIVE Claim(_, _, _)
@@ -154,64 +222,121 @@ Claim(S, order, claimed) ==
                            IF name = "" THEN claimed ELSE claimed \cup {name})
          IN [c \in {b} \cup DOMAIN rest |-> IF c = b THEN name ELSE rest[c]]
 
-\* The positions of c's name under which the shelf holds c's own file:
-\* _Claiming.kept, which looks at them all only in suffix mode.
-OwnAt(c) == {k \in 1..MoveLimit : shelf[Suffixed(Wanted[c], k)] = c}
+\* assign_names: the packages that keep a numbered file first, then the rest.
+PackageClaim(S) ==
+    LET kept    == Numbered(S, Sorted(S), {})
+        keepers == {b \in S : kept[b] # ""}
+        rest    == Claim(S, Sorted(S \ keepers), {kept[b] : b \in keepers})
+    IN [b \in S |-> IF b \in keepers THEN kept[b] ELSE rest[b]]
 
-(* _Claiming.name: with KeepOwn, a copy whose own file is under its name or
-   one of its numbers keeps it, whoever holds the name. Otherwise the first
-   free position of its name; with none free, a file of its own under the
-   name it wanted (_Claiming._lost, before KeepOwn), or nothing. *)
+(* _Claiming._own: c's own bytes, or, where c and the file both declare a
+   usable identifier, a file of its identifier. *)
+OwnBy(c, n) ==
+    IF c \in Usable /\ shelf[n] \in Usable THEN Mate(shelf[n], c) ELSE shelf[n] = c
+
+(* _Claiming._packages: a file under the name a package was given is that
+   package's archive, unless it is c's own bytes, or the identifiers say it
+   holds another book. *)
+Packaged(pkgs, c, n) ==
+    \E p \in DOMAIN pkgs :
+        /\ pkgs[p] = n
+        /\ shelf[n] # c
+        /\ (p \in Usable /\ shelf[n] \in Usable) => Mate(shelf[n], p)
+
+\* The positions of c's name under which the shelf holds a file it keeps:
+\* _Claiming.kept, which looks at them all only in suffix mode. With
+\* KeepOne, none another copy kept, and on the exact pass only its own bytes.
+OwnAt(c, pkgs, taken, exact) ==
+    {k \in 1..MoveLimit :
+        LET n == Suffixed(Wanted[c], k)
+        IN /\ shelf[n] # 0
+           /\ IF KeepOne
+                THEN /\ n \notin taken
+                     /\ IF exact THEN shelf[n] = c
+                        ELSE OwnBy(c, n) /\ ~Packaged(pkgs, c, n)
+                ELSE OwnBy(c, n)}
+
+(* _Claiming.keep, over the copies in the order they claim: with KeepOwn, a
+   copy whose own file is under its name or one of its numbers keeps it,
+   whoever holds the name. *)
+RECURSIVE KeepPass(_, _, _, _)
+KeepPass(order, pkgs, exact, kept) ==
+    IF order = <<>> THEN kept
+    ELSE LET c    == Head(order)
+             at   == OwnAt(c, pkgs, {kept[x] : x \in DOMAIN kept}, exact)
+             keep == KeepOwn /\ c \notin DOMAIN kept /\ at # {}
+         IN KeepPass(Tail(order), pkgs, exact,
+                     IF keep THEN (c :> Suffixed(Wanted[c], Min(at))) @@ kept
+                     ELSE kept)
+
+(* _Claiming.name: the first free position of its name; with none free, a
+   file of its own under the name it wanted (_Claiming._lost, before
+   KeepOwn), or nothing. *)
 RECURSIVE CopyClaim(_, _)
 CopyClaim(order, claimed) ==
     IF order = <<>> THEN [b \in {} |-> ""]
     ELSE LET c    == Head(order)
              want == Wanted[c]
-             keep == KeepOwn /\ OwnAt(c) # {}
              free == {k \in 1..Limit : Suffixed(want, k) \notin claimed}
-             name == IF keep THEN Suffixed(want, Min(OwnAt(c)))
-                     ELSE IF free # {} THEN Suffixed(want, Min(free))
+             name == IF free # {} THEN Suffixed(want, Min(free))
                      ELSE IF shelf[want] = c THEN want
                      ELSE ""
-             took == IF keep THEN TRUE ELSE free # {}
              rest == CopyClaim(Tail(order),
-                               IF took THEN claimed \cup {name} ELSE claimed)
+                               IF free # {} THEN claimed \cup {name} ELSE claimed)
          IN [x \in {c} \cup DOMAIN rest |-> IF x = c THEN name ELSE rest[x]]
 
-\* With KeepOwn, a copy whose own file is under its name or one of its
-\* numbers claims first, then one whose name holds a file (claim_order), then
-\* the rest, each sorted.
-CopyOrder(C) ==
-    IF KeepOwn
-      THEN Sorted({c \in C : OwnAt(c) # {}})
-           \o Sorted({c \in C : OwnAt(c) = {} /\ shelf[Wanted[c]] # 0})
-           \o Sorted({c \in C : OwnAt(c) = {} /\ shelf[Wanted[c]] = 0})
-      ELSE Sorted(C)
+\* claim_order: a copy whose name holds a file claims before the rest.
+ClaimOrder(C) ==
+    Sorted({c \in C : shelf[Wanted[c]] # 0})
+    \o Sorted({c \in C : shelf[Wanted[c]] = 0})
 
-\* Every book's name: the packages', then the copies' claimed after them.
+\* The copies that keep a file: with KeepOne, those keeping their own bytes,
+\* then those going by identifier; without it, one pass that took a file
+\* whoever had kept it.
+Kept(C, pkgs) ==
+    LET none == [c \in {} |-> ""]
+    IN IF KeepOne
+         THEN KeepPass(ClaimOrder(C), pkgs, FALSE,
+                       KeepPass(ClaimOrder(C), pkgs, TRUE, none))
+         ELSE KeepPass(Sorted(C), pkgs, FALSE, none)
+
+(* Every book's name: the packages', then the copies keep their files,
+   then _Claiming.reclaim names again a package that kept a numbered file a
+   copy keeps, and the other copies claim names after them all. *)
 Assigned(L) ==
-    LET pkgs   == Claim(Packages(L), Sorted(Packages(L)), {})
-        copies == CopyClaim(CopyOrder(CopiesOf(L)),
-                            {pkgs[b] : b \in Packages(L)} \ {""})
-    IN [b \in L |-> IF b \in Copies THEN copies[b] ELSE pkgs[b]]
+    LET P      == Packages(L)
+        first  == PackageClaim(P)
+        kept   == Kept(CopiesOf(L), first)
+        held   == {kept[c] : c \in DOMAIN kept}
+        again  == {b \in P : /\ first[b] \in held
+                             /\ Numbered(P, Sorted(P), {})[b] # ""}
+        redo   == Claim(P, Sorted(again),
+                        ({first[b] : b \in P \ again} \ {""}) \cup held)
+        pkgs   == [b \in P |-> IF b \in again THEN redo[b] ELSE first[b]]
+        order  == SelectSeq(ClaimOrder(CopiesOf(L)),
+                            LAMBDA c : c \notin DOMAIN kept)
+        copies == CopyClaim(order, ({pkgs[b] : b \in P} \ {""}) \cup held)
+    IN [b \in L |-> IF b \in DOMAIN kept THEN kept[b]
+                    ELSE IF b \in Copies THEN copies[b] ELSE pkgs[b]]
 
 \* The archive named n holds another book: its identifier and b's are both
 \* usable and differ (holds_another_book).
 Holds(b, n) == /\ VerifyHolder
                /\ b \in Usable
                /\ shelf[n] \in Usable
-               /\ shelf[n] # b
+               /\ ~Mate(shelf[n], b)
 
 (* Whose identifier the plan has read, given every book's name asg. A
-   package's when naming read it, or a copy wants its name (_identified). A
-   copy's where a file under a name it wants is not its own, or with KeepOwn
-   where another book wants that name too (_Claiming._own). *)
+   package's when naming read it, or a copy wants its name or keeps its file
+   (_identified). A copy's where a file under a name it wants is not its
+   own, or with KeepOwn where another book wants that name too
+   (_Claiming._own). *)
 Contested(L, asg, c) ==
     \E d \in L \ {c} : IF d \in Copies THEN Wanted[d] = Wanted[c]
                                        ELSE asg[d] = Wanted[c]
 Known(L, asg) ==
     {b \in Packages(L) :
-        ReadsSources \/ \E c \in CopiesOf(L) : Wanted[c] = asg[b]}
+        ReadsSources \/ \E c \in CopiesOf(L) : asg[b] \in {Wanted[c], asg[c]}}
     \cup
     {c \in CopiesOf(L) :
         \E n \in {Wanted[c], asg[c]} \ {""} :
@@ -278,12 +403,15 @@ AddBook(b) ==
     /\ UNCHANGED <<shelf, misreported, clobbered, stranded, orphaned>>
 
 RemoveBook(b) ==
-    /\ AllowChanges
+    /\ AllowChanges \/ TakesArchive
     /\ AllowRemovals
     /\ b \in lib
     /\ lib' = lib \ {b}
+    /\ shelf' = IF TakesArchive
+                  THEN [n \in Names |-> IF shelf[n] = b THEN 0 ELSE shelf[n]]
+                  ELSE shelf
     /\ last' = <<"removed", b>>
-    /\ UNCHANGED <<shelf, misreported, clobbered, stranded, orphaned>>
+    /\ UNCHANGED <<misreported, clobbered, stranded, orphaned>>
 
 (* One run over the selection S. Every decision is made before anything is
    written (plan_exports, then the export). `newer` is the packages whose
@@ -400,6 +528,7 @@ NoArchiveOfTheLibraryIsAnOrphan == ~orphaned
 TypeOK ==
     /\ lib \subseteq Books
     /\ Copies \subseteq Books
+    /\ SharedId \subseteq Usable
     /\ shelf \in [Names -> 0..N]
     /\ misreported \in BOOLEAN
     /\ clobbered \in BOOLEAN

@@ -172,13 +172,16 @@ def _shared_names(
         policy,
         args.on_collision,
         output_dir=args.output_dir,
-        unopened=copies.evicted,
+        unopened=copies.unopened,
     )
     if not names.copies:
         return names, copies
-    placed = settled([*names.packages, *names.copies], args.output_dir, policy)[
-        len(names.packages) :
-    ]
+    placed = settled(
+        [*names.packages, *names.copies],
+        args.output_dir,
+        policy,
+        unopened=copies.unopened,
+    )[len(names.packages) :]
     return Names(names.packages, placed), placed_copies(copies, placed)
 
 
@@ -203,6 +206,7 @@ def _plan_copies(args: argparse.Namespace, policy: NamingPolicy) -> CopyPlan:
         policy,
         max_workers=args.workers,
         skip_incomplete=args.skip_incomplete,
+        copied=not args.no_copy_through,
     )
     if plan.unnamed:
         logger.warning(
@@ -243,6 +247,7 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             discovered,
             args.on_collision,
             assigned=everything,
+            unopened=copies.unopened,
         )
     )
     emit(render_listing(decisions + orphans, args.as_json))
@@ -492,6 +497,7 @@ def _survey(
             discovered,
             args.on_collision,
             assigned=everything,
+            unopened=copies.unopened,
         )
     )
     return packages, copies, everything

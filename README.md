@@ -620,6 +620,13 @@ Two cases still fall back to ` (2)`, and both say so rather than pretending:
   in that library share a series ISBN, and six unrelated technical books share
   one converter's template UUID.
 
+A numbered book keeps its number when a book before it leaves the library,
+rather than taking the freed name and being written again. It is found by its
+identifier, which is read for a name with numbered files on the shelf even when
+the book is named from its folder; a book with no usable identifier keeps its
+number only when it alone wants the name and nothing holds the plain name,
+since nothing else can say whose the numbered file is.
+
 Measured on that library with `--name-by author-title --on-collision suffix`:
 2,692 names untouched, 78 marked with a digest, 10 of those needing a number as
 well, and 29 falling back to a number outright. Every one of the 2,799 names
@@ -627,7 +634,8 @@ came out distinct, and two independent runs produced identical results.
 
 One thing the marker cannot fix: a book *entering* a collision gains its marker,
 which is a rename. That happens once, when the second copy shows up, instead of
-every time the group changes.
+every time the group changes. A book *leaving* one keeps the marked archive it
+has on the shelf rather than being written again under the plain name.
 
 A PDF or an already-zipped book that is copied rather than converted competes
 for its name too, after every package: a package `a/Book.epub/` and a zipped
@@ -638,6 +646,15 @@ shelf before the package arrived keeps its file, in either mode, and is not
 copied again: the package is reported as a collision rather than as exported
 from the other book's file, or under `--on-collision suffix` is written beside
 it, as `Book (2).epub` when it has no digest marker either.
+
+A copy is recognised on the shelf without opening it: a copy keeps its
+source's modification time, and the file under its name is its copy when the
+size and the time match. A file of another size, or older than the source, is
+another book's, so a different PDF of the same name and size replacing a
+deleted one is copied rather than taken as already there. Copies made by
+releases before this one carry the time they were written, which is later than
+their source's; such a file is still recognised by its size alone, so
+upgrading copies nothing again.
 
 ### Taking your highlights with you
 
@@ -892,6 +909,14 @@ warning of their own, which is quiet under `-ad` too:
 
 `-ae -ar` converts nothing and cannot tell whether a copy is on the shelf, so
 it says those books were "not converted by ibook2epub" instead.
+
+Apple records some highlights against no book at all. They are embedded
+nowhere, and only a detached file carries them, so `-ae` and `-ae -ar` say that
+too, and are quiet under `-ad`:
+
+```text
+2 highlight(s) Apple recorded against no book were not embedded; use -ad FILE or -ao FILE.
+```
 
 **This is ahead of the specification, not conformant to it.** That draft still
 has sections marked T.B.D., and its dependency on text fragments has not yet

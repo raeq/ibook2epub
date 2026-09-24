@@ -23,6 +23,7 @@ from xml.etree import ElementTree
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained, resolve
 from ..utils.display import printable
+from ..utils.spec import CONTAINER_PATH
 from .package import parse_xml
 
 ENCRYPTION_PATH = "META-INF/encryption.xml"
@@ -282,6 +283,26 @@ def is_dataless(path: Path) -> bool:
     except OSError:
         return False
     return bool(flags & SF_DATALESS)
+
+
+def is_evicted(book: Path) -> bool:
+    """
+    Report whether reading what a book says about itself would download it.
+
+    One stat. A file copied through is read whole, so it is its own answer.
+    A package is described by its package document, which only its
+    container document can locate; iCloud evicts a package's files
+    together, so that one stat stands for the rest, rather than the walk
+    :func:`has_dataless_files` makes.
+
+    :param book: A package directory, or a file copied through.
+
+    :return: True if the platform can tell and the book is not downloaded.
+    """
+    if not book.is_dir():
+        return is_dataless(book)
+    container = resolve(book, CONTAINER_PATH)
+    return container is not None and is_dataless(container)
 
 
 def has_dataless_files(package: Path) -> bool:

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -28,14 +28,16 @@ from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
     MAX_SUFFIX,
     Claims,
+    Wanting,
     claim_order,
+    kept_numbers,
     lost_to,
     marked,
     shelf_files,
     shelf_names,
     suffixed,
 )
-from .holders import holds_another_book, identifier_on_shelf, same_identity
+from .holders import Unopened, holds_another_book, identifier_on_shelf, same_identity
 from .placing import Existing, Shelf, place, read_shelf
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
@@ -108,6 +110,10 @@ class Decision:
     status: Status
     target: Path | None = None
     reason: str | None = None
+    #: Where the plan placed a book it then found it could not write, such
+    #: as a DRM-protected one: a vault note is named after it, as ``-ao``
+    #: names it.
+    placed: Path | None = None
 
     @property
     def display_name(self) -> str:
@@ -220,12 +226,15 @@ def assign_names(
     a crowded group is marked, not all but the first, because "all but the
     first" is itself a position.
 
-    Two things still move a name, and both are visible. A book entering or
-    leaving a collision gains or loses its marker, which is one rename rather
-    than a cascade. And a book whose identifier is junk or shared -- 92 books in
-    a surveyed library claim to be ``none``, and 52 more share a real value --
-    keeps the old positional suffix, because a marker that pretended to be
-    stable would be worse than a number that admits it is not.
+    Two things still move a name, and both are visible. A book entering a
+    collision gains its marker, which is one rename rather than a cascade. And
+    a book whose identifier is junk or shared -- 92 books in a surveyed
+    library claim to be ``none``, and 52 more share a real value -- keeps the
+    old positional suffix, because a marker that pretended to be stable would
+    be worse than a number that admits it is not. A book whose own file is on
+    the shelf under a number of its name, or under its marked name, keeps it
+    when the books before it leave, or its crowd does
+    (:func:`~epubconvert.run.claims.kept_numbers`).
 
     Policies that name a book after its own metadata need the package document
     read first. That read is skipped entirely for the policies that do not ask
@@ -247,14 +256,68 @@ def assign_names(
     crowded = Counter(policy.identity(name) for _, name, _ in wanted)
     claims = Claims()
 
-    first = [_bases(name, metadata, setup, crowded)[0] for _, name, metadata in wanted]
+    bases = [_bases(name, metadata, setup, crowded) for _, name, metadata in wanted]
+    kept = _kept_on_shelf(wanted, bases, crowded, setup, shelf)
     named: dict[int, Assignment] = {}
-    for index in claim_order(first, shelf):
+    for index in [
+        *kept,
+        *(i for i in claim_order([b for b, _ in bases], shelf) if i not in kept),
+    ]:
         package, name, metadata = wanted[index]
         named[index] = _assign_one(
-            package, name, metadata, setup=setup, claims=claims, crowded=crowded
+            package,
+            name,
+            metadata,
+            setup=setup,
+            claims=claims,
+            crowded=crowded,
+            kept=kept.get(index),
         )
     return [named[index] for index in range(len(wanted))]
+
+
+def _kept_on_shelf(
+    wanted: Sequence[tuple[Path, str, Package | None]],
+    bases: Sequence[tuple[str, str]],
+    crowded: Counter[str],
+    setup: _Naming,
+    shelf: Collection[str],
+) -> dict[int, str]:
+    """
+    Find the books that keep a numbered or marked file of theirs on the shelf.
+
+    Only under :data:`SUFFIX`; see :func:`~epubconvert.run.claims.kept_numbers`.
+
+    :param wanted: Package, wanted name and metadata, in sorted order.
+    :param bases: Each book's base and stable name, in the same order.
+    :param crowded: How many books want each identity.
+    :param setup: The naming configuration.
+    :param shelf: The names of the files on the shelf.
+
+    :return: The file each such book keeps, by its index in *wanted*.
+    """
+    if setup.on_collision != SUFFIX:
+        return {}
+    policy = setup.policy
+    # A policy that reads no package document leaves the identifier to be
+    # read here, and only for a name with numbered files on the shelf.
+    unread = not getattr(policy, "needs_metadata", False)
+    return kept_numbers(
+        [
+            Wanting(
+                base,
+                stable,
+                usable_identifier(metadata),
+                crowded[policy.identity(name)] == 1,
+                package if unread else None,
+            )
+            for (base, stable), (package, name, metadata) in zip(
+                bases, wanted, strict=True
+            )
+        ],
+        shelf,
+        policy,
+    )
 
 
 @dataclass(frozen=True)
@@ -298,6 +361,7 @@ def _assign_one(
     setup: _Naming,
     claims: Claims,
     crowded: Counter[str],
+    kept: str | None = None,
 ) -> Assignment:
     """
     Settle one package's output name against the names already taken.
@@ -308,17 +372,23 @@ def _assign_one(
     :param setup: The naming configuration.
     :param claims: Names already spoken for, updated in place.
     :param crowded: How many packages wanted each identity.
+    :param kept: The numbered file on the shelf it keeps, if any
+        (:func:`~epubconvert.run.claims.kept_numbers`).
 
     :return: The assignment, with an empty filename if the book lost.
     """
     base, stable = _bases(name, metadata, setup, crowded)
     group = setup.policy.identity(base)
 
-    taken = _claim(claims, base, group, setup=setup)
+    taken = (
+        (kept, setup.policy.identity(kept))
+        if kept and claims.keep(group, setup.policy.identity(kept), kept)
+        else _claim(claims, base, group, setup=setup)
+    )
     if taken is None:
         # Carries its identifier though it has no name, so an archive of it
         # already on the shelf is still recognised as a live book's.
-        reason = lost_to(claims.holder(group), metadata)
+        reason = lost_to(claims.holder(group, base), metadata)
         return Assignment(
             package, "", group, reason, identifier=usable_identifier(metadata)
         )
@@ -337,6 +407,7 @@ def _assign_one(
         # the shelf keeps its file (copynames.claim_copies), and a package
         # with nowhere to go was a collision on every run in suffix mode.
         stable if setup.on_collision == SUFFIX else None,
+        kept_number=filename == kept,
     )
 
 
@@ -430,6 +501,7 @@ def find_orphans(
     on_collision: CollisionMode = SKIP,
     *,
     assigned: Sequence[Assignment] | None = None,
+    unopened: Container[Path] = frozenset(),
 ) -> list[Path]:
     """
     Find archives on the shelf that no book in the library claims.
@@ -475,6 +547,7 @@ def find_orphans(
         files copied through included
         (:func:`~epubconvert.run.copynames.claim_copies`): a copy claims
         the file it is placed at, as a package does.
+    :param unopened: The books not to open for their identifier.
 
     :return: Archives no book accounts for, sorted by path.
     """
@@ -482,7 +555,7 @@ def find_orphans(
         assigned = assign_names(
             packages, policy, on_collision, shelf=shelf_names(output_dir)
         )
-    shelf = read_shelf(output_dir, policy, assigned)
+    shelf = read_shelf(output_dir, policy, assigned, unopened=unopened)
     claimed: set[str] = set()
     for item in assigned:
         clash = place(item, shelf).clash
@@ -508,11 +581,16 @@ def _held_by_loser(item: Assignment, shelf: Shelf) -> Existing | None:
     :param shelf: The archives already present.
 
     :return: The archive under that name when it can be this book's, as the
-        plan would judge a book of that name: of its identity, and not
-        holding another book by identifier.
+        plan would judge a book of that name: of its identity, not holding
+        another book by identifier, and not a file the claim pass found is
+        not a copy's own.
     """
     found = shelf.existing.get(filesystem_key(item.identity))
-    if found is None or not same_identity(found.identity, item.identity):
+    if (
+        found is None
+        or item.not_own
+        or not same_identity(found.identity, item.identity)
+    ):
         return None
     return found if holds_another_book(found.path, item.identifier) is None else None
 
@@ -563,7 +641,12 @@ def plan_exports(
             packages, policy, settings.on_collision, shelf=shelf_names(output_dir)
         )
     assignments = assigned
-    shelf = read_shelf(output_dir, policy, assignments)
+    shelf = read_shelf(
+        output_dir,
+        policy,
+        assignments,
+        unopened=Unopened(packages=settings.check_incomplete),
+    )
     # Neither is a failure, and both change what the shelf looks like. A run
     # that says nothing leaves the only way to notice as looking afterwards
     # and wondering.
@@ -628,6 +711,8 @@ def _decide(
 
     unusable = _decide_before_writing(package, found, settings, unread=unread)
     if unusable is not None:
+        if unusable.status != COLLISION:
+            unusable.placed = found or output_dir / filename
         return unusable
 
     if found is not None and (forced or refreshing):
@@ -656,6 +741,12 @@ def _decide_before_writing(
 
     :return: The decision, or None when the book may be written.
     """
+    # Under --skip-incomplete the source is inspected first: the read below
+    # downloaded the package document of a book the inspection then called
+    # not downloaded.
+    inspected = settings.check_incomplete
+    if inspected and (unusable := _decide_against_source(package, settings)):
+        return unusable
     if found is not None and unread:
         # About to write over the archive holding this name, and naming read
         # nothing that could say whose it is. Folder names are not unique: the
@@ -668,7 +759,7 @@ def _decide_before_writing(
         other = _decide_against_holder(package, found, identifier)
         if other is not None:
             return other
-    return _decide_against_source(package, settings)
+    return None if inspected else _decide_against_source(package, settings)
 
 
 def _decide_against_holder(

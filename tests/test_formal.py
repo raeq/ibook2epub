@@ -74,6 +74,32 @@ EXPECTED = {
     "RerunPlanner.CopiesSuffixStuck": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
     ),
+    # Two copies, or copies and a package, of one identifier: without a file
+    # kept by one copy at most, a copy took another's file for its own.
+    "RerunPlanner.CopiesSharedId": HOLDS,
+    "RerunPlanner.CopiesSharedIdLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
+    "RerunPlanner.CopiesOneIdentifier": HOLDS,
+    "RerunPlanner.CopiesOneIdentifierLoose": (
+        "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
+    ),
+    # Books removed: a numbered or marked book keeps its file when the book
+    # before it, or its crowd, leaves.
+    "RerunPlanner.CopiesRemovals": HOLDS,
+    "RerunPlanner.CopiesRemovalsStuck": (
+        "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
+    ),
+    "RerunPlanner.CopiesRemovalsRead": HOLDS,
+    "RerunPlanner.CopiesRemovalsDeleted": HOLDS,
+    "RerunPlanner.NumberedRemovals": HOLDS,
+    "RerunPlanner.NumberedRemovalsStuck": (
+        "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
+    ),
+    # The known limit: no identifier, and two books still want the name.
+    "RerunPlanner.NumberedRemovalsCrowd": (
+        "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
+    ),
 }
 
 
