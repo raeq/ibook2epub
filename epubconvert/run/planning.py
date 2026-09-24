@@ -32,7 +32,7 @@ from ..export.naming import (
     truncate_bytes,
 )
 from ..utils.app_logger import logger
-from ..utils.display import printable
+from ..utils.display import printable, printable_json
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -897,7 +897,10 @@ def record_decisions(decisions: Sequence[Decision], report: Report) -> None:
         log = logger.warning if outcome.warn else logger.info
         log(
             outcome.line,
-            {"name": printable(decision.package.name), "reason": decision.reason},
+            {
+                "name": printable(decision.package.name),
+                "reason": printable(str(decision.reason)),
+            },
         )
 
     # Counted from the decisions in hand rather than from the report, which
@@ -920,23 +923,26 @@ def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:
     :return: The text to print.
     """
     if as_json:
-        return json.dumps(
-            [
-                {
-                    "name": decision.package.name,
-                    # An orphan has no source package; the path in "target" is
-                    # where the file actually is.
-                    "source": (
-                        None if decision.status == ORPHAN else str(decision.package)
-                    ),
-                    "status": decision.status,
-                    "target": str(decision.target) if decision.target else None,
-                    "reason": decision.reason,
-                }
-                for decision in decisions
-            ],
-            indent=2,
-            ensure_ascii=False,
+        # Titles stay readable; only what printable() would escape is escaped.
+        return printable_json(
+            json.dumps(
+                [
+                    {
+                        "name": decision.package.name,
+                        # An orphan has no source package; the path in "target" is
+                        # where the file actually is.
+                        "source": (
+                            None if decision.status == ORPHAN else str(decision.package)
+                        ),
+                        "status": decision.status,
+                        "target": str(decision.target) if decision.target else None,
+                        "reason": decision.reason,
+                    }
+                    for decision in decisions
+                ],
+                indent=2,
+                ensure_ascii=False,
+            )
         )
 
     if not decisions:
@@ -945,7 +951,7 @@ def render_listing(decisions: Sequence[Decision], as_json: bool) -> str:
     width = max(len(decision.status) for decision in decisions)
     lines = [
         f"{decision.status:<{width}}  {printable(decision.display_name)}"
-        + (f"  ({decision.reason})" if decision.reason else "")
+        + (f"  ({printable(decision.reason)})" if decision.reason else "")
         for decision in decisions
     ]
     counts = Counter(decision.status for decision in decisions)

@@ -544,3 +544,68 @@ class TestAFolderNameIsNotProofOfTheBook:
         run.main([*argv, "--refresh"])
 
         assert exported.stat().st_mtime_ns != before
+
+
+class TestAReasonCannotSteerTheTerminal:
+    """
+    A reason names a file on the shelf or in the library, so it is input too.
+
+    Names were escaped wherever they were shown, but the reason beside them
+    was printed and logged raw: ``--list`` put a package's ``ESC[2K`` on the
+    terminal, and a name ``os.walk`` could not decode left a lone surrogate
+    that made ``--list`` and ``--list --json`` die with UnicodeEncodeError on
+    a UTF-8 stdout.
+    """
+
+    @staticmethod
+    def _namesakes(tmp_path: Path, name: str) -> Path:
+        library = tmp_path / "lib"
+        make_package(library / "a", name)
+        make_package(library / "b", name)
+        return library
+
+    def test_the_listing_escapes_a_reason(self, tmp_path, output_dir, capsys):
+        library = self._namesakes(tmp_path, "Innocent\x1b[2KDONE.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
+
+        out = capsys.readouterr().out
+        assert planning.COLLISION in out
+        assert "\x1b" not in out
+
+    def test_the_log_escapes_a_reason(self, tmp_path, output_dir, capsys):
+        library = self._namesakes(tmp_path, "Innocent\x1b[2KDONE.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0"])
+
+        err = capsys.readouterr().err
+        assert "Name collision" in err
+        assert "\x1b" not in err
+
+    def test_the_listing_survives_an_undecodable_name(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = self._namesakes(tmp_path, "Bo\udcffk.epub")
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "--list", "-q"])
+
+        assert code == 0
+        assert planning.COLLISION in capsys.readouterr().out
+
+    def test_the_json_carries_an_undecodable_name_intact(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Escaped as JSON escapes it, so a reader gets the very name back and
+        # can still open the file; everything else stays readable as written.
+        name = "Café \x9b2K Bo\udcffk.epub"
+        library = self._namesakes(tmp_path, name)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "--list", "--json", "-q"]
+        )
+
+        out = capsys.readouterr().out
+        assert code == 0
+        assert "Café" in out
+        assert "\x9b" not in out
+        assert [item["name"] for item in json.loads(out)] == [name, name]
