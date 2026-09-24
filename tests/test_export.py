@@ -974,6 +974,8 @@ class TestRewritingASidecarKeepsWhatTheUserSet:
 
         assert stat.S_IMODE(target.stat().st_mode) == 0o444
         assert target.read_text(encoding="utf-8") == "second"
+
+
 def _zipped(path: Path) -> None:
     """Write an already-zipped epub, which a run copies rather than converts."""
     with ZipFile(path, "w") as opened:
