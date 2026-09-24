@@ -575,10 +575,12 @@ def _run_export(
     # A dry run exports nothing, so what it would export is what it takes
     # off: counting only exports said "-m 0 -d" would leave every book it
     # had just listed.
-    done = report.planned if args.dry_run else report.exported
     return (
         report,
-        max(0, pending_before - done),
+        max(
+            0,
+            pending_before - (report.planned if args.dry_run else report.exported),
+        ),
         # The files --match selects too, copied or not: a vault writes a note
         # for each. Under --no-copy-through their highlights are still the
         # point of a note, and the vault had none for a zipped book or a PDF.

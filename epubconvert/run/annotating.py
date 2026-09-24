@@ -120,7 +120,9 @@ def annotations_after_export(
         # A file copied through is copied as it is, with nothing embedded.
         kept = set(copyable)
         packages = [item for item in named if item.package not in kept]
-        _warn_about_stranded(args, policy, found, packages, copyable, held_back)
+        _warn_about_stranded(
+            args, policy, found, packages, copyable, held_back=held_back
+        )
         _warn_about_copies(
             index_by_package(
                 found, [item.package for item in named], copyable=copyable, quiet=True
@@ -178,6 +180,7 @@ def _warn_about_stranded(
     found: list[dict[str, Any]],
     named: Sequence[Assignment],
     copyable: Sequence[Path],
+    *,
     held_back: Collection[Path] = frozenset(),
 ) -> None:
     """
