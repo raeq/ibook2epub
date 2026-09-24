@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
 
+import pytest
+
 from epubconvert.collect import source
 from epubconvert.collect.validate import read_package
 from epubconvert.export.archive import collect_package_dirs
@@ -519,6 +521,8 @@ class TestAFolderNameIsNotProofOfTheBook:
     def test_refresh_does_not_write_over_a_romanized_namesakes_archive(
         self, tmp_path, output_dir
     ):
+        # romanize is the disarm extra's; the test-minimal job has none.
+        pytest.importorskip("disarm", reason="romanize needs the disarm extra")
         library = tmp_path / "lib"
         make_metadata_package(
             library, "Café.epub", title="Café", identifier="urn:uuid:A"
