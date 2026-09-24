@@ -29,11 +29,12 @@ from ..export.archive import (
     replace_annotations,
 )
 from ..export.detached import library_export, library_refusal, vault_of, write_export
+from ..export.naming import filesystem_key
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
-from .claims import shelf_names
+from .claims import NUMBERED, shelf_names
 from .convert import OutputLockedError, output_lock, progress_for
 from .copying import plan_copies
 from .copynames import Names, claim_copies
@@ -416,11 +417,51 @@ def _with_copies(
     if not shelf:
         return everything
     if highlighted is not None:
-        everything = [
-            item if item.package.name in highlighted else replace(item, identifier=None)
-            for item in everything
-        ]
+        everything = _read_only_for(everything, highlighted, policy)
     return settled(everything, args.output_dir, policy)
+
+
+def _read_only_for(
+    everything: Sequence[Assignment],
+    highlighted: Collection[object],
+    policy: NamingPolicy,
+) -> list[Assignment]:
+    """
+    Keep the identifiers that placing the highlighted books depends on.
+
+    A book with highlights is placed by its identifier, and every other book
+    by its name alone, so writing three notes does not open every archive on
+    a 2,000-book shelf. Except one whose place a highlighted book's depends
+    on: a book moving on past another book's archive speaks for the first
+    free position of its marked name, so one the run moves on, left at its
+    name, left that position to the highlighted book after it, whose note
+    was then named after a file the run never writes.
+
+    :param everything: Every book's name, in the order they are placed.
+    :param highlighted: The package names that have highlights.
+    :param policy: The naming policy in force.
+
+    :return: The names, with no identifier for the books it cannot matter for.
+    """
+    families = {
+        _family(item, policy) for item in everything if item.package.name in highlighted
+    }
+    return [
+        item
+        if item.package.name in highlighted
+        or (item.marked is not None and _family(item, policy) in families)
+        else replace(item, identifier=None)
+        for item in everything
+    ]
+
+
+def _family(item: Assignment, policy: NamingPolicy) -> str | None:
+    """The name a book moves on through, as a filesystem key less any number."""
+    if item.marked is None:
+        return None
+    key = filesystem_key(policy.identity(item.marked))
+    numbered = NUMBERED.fullmatch(key)
+    return key if numbered is None else numbered["stem"] + (numbered["extension"] or "")
 
 
 def _claimed(

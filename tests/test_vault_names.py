@@ -13,6 +13,7 @@ book with no package -- already zipped, or a PDF -- got no note at all.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import json
 from pathlib import Path
 
 import pytest
@@ -270,3 +271,49 @@ class TestANoteForABookRenamedByCase:
 
         assert sorted(note.name for note in converted.glob("*.md")) == ["dune.md"]
         assert sorted(note.name for note in refreshed.glob("*.md")) == ["dune.md"]
+
+
+class TestANoteWithoutAConversionFollowsTheRun:
+    """
+    ``-ao`` places only the books with highlights by their identifiers, so as
+    not to open every archive on the shelf. But where a book moves on past
+    another book's archive depends on the books placed before it: a book
+    without highlights that the run moves on, ``-ao`` left at its name, and
+    the highlighted book after it took a different number, so its note was
+    named after a file the run never writes.
+    """
+
+    def test_it_is_named_after_the_file_the_run_writes(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        library, container = tmp_path / "lib", tmp_path / "container"
+        output = tmp_path / "out"
+        _read_from(monkeypatch, container)
+        # Two books since deleted from the library left their archives
+        # under the name the package and the zipped book want.
+        zipped_book(tmp_path / "r1", output / "Dune.epub", "urn:uuid:R1")
+        zipped_book(tmp_path / "r2", output / "Dune (2).epub", "urn:uuid:R2")
+        make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:X"
+        )
+        # A name of its own in the library, which -p strip makes the other's.
+        book = zipped_book(tmp_path, library / "b" / "Dune<.epub", "urn:uuid:H")
+        make_databases(
+            container,
+            rows=[highlight(asset="H", uuid="UH", text="H TEXT")],
+            books=[library_row(asset="H", path=str(book), title="Dune")],
+        )
+        argv = ["-s", str(library), "-o", str(output), "-p", "strip"]
+        argv += ["--on-collision", "suffix"]
+        capsys.readouterr()
+        main([*argv, "--list", "--json"])
+        [target] = [
+            Path(row["target"]).stem
+            for row in json.loads(capsys.readouterr().out)
+            if row["source"] == str(book)
+        ]
+        vault = tmp_path / "vault"
+
+        main([*argv, "-ao", str(vault), "--annotations-format", "markdown", "-q"])
+
+        assert sorted(note.name for note in vault.glob("*.md")) == [f"{target}.md"]
