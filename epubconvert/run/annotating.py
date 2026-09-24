@@ -33,6 +33,7 @@ from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
+from .claims import shelf_names
 from .convert import OutputLockedError, output_lock, progress_for
 from .copying import plan_copies
 from .copynames import claim_copies
@@ -430,7 +431,11 @@ def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
     :return: One assignment per package.
     """
     return assign_names(
-        collect_package_dirs(args.source_dir), policy, args.on_collision
+        collect_package_dirs(args.source_dir),
+        policy,
+        args.on_collision,
+        # The shelf the conversion weighed, so every route names alike.
+        shelf=shelf_names(args.output_dir),
     )
 
 

@@ -51,6 +51,7 @@ from .annotating import (
     gather_annotations,
     run_container_only,
 )
+from .claims import shelf_names
 from .cli import parse_args
 from .convert import (
     ExportOptions,
@@ -158,7 +159,12 @@ def _shared_names(
     :return: Every name, and the copy plan under the names it is written to.
     """
     names = claim_copies(
-        assign_names(discovered, policy, args.on_collision),
+        assign_names(
+            discovered,
+            policy,
+            args.on_collision,
+            shelf=shelf_names(args.output_dir),
+        ),
         copies.named,
         policy,
         args.on_collision,

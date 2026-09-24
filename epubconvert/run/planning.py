@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -25,7 +25,15 @@ from ..utils.display import printable, printable_json
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
-from .claims import MAX_SUFFIX, Claims, lost_to, marked, suffixed
+from .claims import (
+    MAX_SUFFIX,
+    Claims,
+    claim_order,
+    lost_to,
+    marked,
+    shelf_names,
+    suffixed,
+)
 from .holders import holds_another_book, identifier_on_shelf, same_identity
 from .placing import Existing, Shelf, place, read_shelf
 
@@ -180,14 +188,19 @@ def copy_target_name(source: Path, policy: NamingPolicy) -> str:
 
 
 def assign_names(
-    packages: Sequence[Path], policy: NamingPolicy, on_collision: CollisionMode
+    packages: Sequence[Path],
+    policy: NamingPolicy,
+    on_collision: CollisionMode,
+    *,
+    shelf: Collection[str] = frozenset(),
 ) -> list[Assignment]:
     """
     Give every package an output name, resolving collisions deterministically.
 
     Assignment walks the packages in sorted order rather than the order they
     were selected, so the same set of packages always produces the same names
-    regardless of shuffling.
+    regardless of shuffling -- except that a book whose name is already a
+    file on the shelf claims it first (:func:`~epubconvert.run.claims.claim_order`).
 
     Under :data:`SUFFIX`, a book that has to share a name is marked with a
     digest of its own ``dc:identifier`` rather than its position in the
@@ -213,6 +226,9 @@ def assign_names(
     :param packages: Packages to name.
     :param policy: Naming policy supplying filenames and identities.
     :param on_collision: :data:`SKIP` or :data:`SUFFIX`.
+    :param shelf: The names of the files on the shelf, from
+        :func:`~epubconvert.run.claims.shelf_names`. Every caller that names
+        the library for a run passes the same shelf, so every route agrees.
 
     :return: One :class:`Assignment` per package, in sorted order.
     """
@@ -221,12 +237,14 @@ def assign_names(
     crowded = Counter(policy.identity(name) for _, name, _ in wanted)
     claims = Claims()
 
-    return [
-        _assign_one(
+    first = [_bases(name, metadata, setup, crowded)[0] for _, name, metadata in wanted]
+    named: dict[int, Assignment] = {}
+    for index in claim_order(first, shelf):
+        package, name, metadata = wanted[index]
+        named[index] = _assign_one(
             package, name, metadata, setup=setup, claims=claims, crowded=crowded
         )
-        for package, name, metadata in wanted
-    ]
+    return [named[index] for index in range(len(wanted))]
 
 
 @dataclass(frozen=True)
@@ -283,10 +301,7 @@ def _assign_one(
 
     :return: The assignment, with an empty filename if the book lost.
     """
-    base = name
-    stable = _stable_base(name, metadata, setup.budget)
-    if setup.on_collision == SUFFIX and crowded[setup.policy.identity(name)] > 1:
-        base = stable
+    base, stable = _bases(name, metadata, setup, crowded)
     group = setup.policy.identity(base)
 
     taken = _claim(claims, base, group, setup=setup)
@@ -313,6 +328,26 @@ def _assign_one(
         # with nowhere to go was a collision on every run in suffix mode.
         stable if setup.on_collision == SUFFIX else None,
     )
+
+
+def _bases(
+    name: str, metadata: Package | None, setup: _Naming, crowded: Counter[str]
+) -> tuple[str, str]:
+    """
+    Find the name a book claims first, and its digest-marked name.
+
+    :param name: The name its policy asked for.
+    :param metadata: Its package document, if one was read.
+    :param setup: The naming configuration.
+    :param crowded: How many packages wanted each identity.
+
+    :return: The marked name when the book is in a crowd in suffix mode,
+        otherwise *name*; and the marked name either way.
+    """
+    stable = _stable_base(name, metadata, setup.budget)
+    if setup.on_collision == SUFFIX and crowded[setup.policy.identity(name)] > 1:
+        return stable, stable
+    return name, stable
 
 
 def _stable_base(name: str, metadata: Package | None, budget: int) -> str:
@@ -434,7 +469,9 @@ def find_orphans(
     :return: Archives no book accounts for, sorted by path.
     """
     if assigned is None:
-        assigned = assign_names(packages, policy, on_collision)
+        assigned = assign_names(
+            packages, policy, on_collision, shelf=shelf_names(output_dir)
+        )
     shelf = read_shelf(output_dir, policy, assigned)
     claimed: set[str] = set()
     for item in assigned:
@@ -513,7 +550,9 @@ def plan_exports(
     packages = list(dict.fromkeys(packages))
 
     if assigned is None:
-        assigned = assign_names(packages, policy, settings.on_collision)
+        assigned = assign_names(
+            packages, policy, settings.on_collision, shelf=shelf_names(output_dir)
+        )
     assignments = assigned
     shelf = read_shelf(output_dir, policy, assignments)
     # Neither is a failure, and both change what the shelf looks like. A run

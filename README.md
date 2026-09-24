@@ -581,6 +581,12 @@ ibook2epub -o ~/Books --name-by author-title --list
 `--on-collision suffix` keeps them all, and how it tells them apart matters if
 you run this on a schedule.
 
+"First" is the first in sorted order, except that a book whose exact name is
+already a file on the shelf keeps it. That matters for names that differ only
+in case, which macOS treats as one file: `b/dune.epub`, exported on its own,
+keeps `dune.epub` when `a/Dune.epub` arrives, and the newcomer is the collision,
+or `Dune (2).epub` under `suffix`.
+
 A book that has to share a name is marked with a short digest of its own
 `dc:identifier`:
 

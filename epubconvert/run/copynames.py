@@ -18,7 +18,7 @@ from ..collect.package import ValidationError, read_archive_package
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
-from .claims import Claims, lost_to
+from .claims import Claims, claim_order, lost_to, shelf_names
 from .holders import identifier_on_shelf
 from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
 
@@ -95,11 +95,16 @@ def claim_copies(
             claiming.claims.take(item.identity, 1, item.identity, item.filename)
             claiming.holders[filesystem_key(item.identity)] = item.filename
 
-    named = [
-        claiming.name(source, name, policy.identity(name))
-        for source, name in sorted(copies, key=lambda entry: entry[0])
-        if name is not None
-    ]
+    wanting = sorted(
+        ((source, name) for source, name in copies if name is not None),
+        key=lambda entry: entry[0],
+    )
+    # A copy whose name is on the shelf claims first, as a package does.
+    claimed = {
+        index: claiming.name(*wanting[index], policy.identity(wanting[index][1]))
+        for index in claim_order([name for _, name in wanting], shelf_names(output_dir))
+    }
+    named = [claimed[index] for index in range(len(wanting))]
     wanted = {filesystem_key(policy.identity(name)) for _, name in copies if name}
     return Names(_identified(assigned, wanted, policy), named)
 
