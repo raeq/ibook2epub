@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
@@ -622,7 +621,7 @@ def _run(args: argparse.Namespace) -> int:
     # summary in the middle of it would make the JSON unparsable, which is the
     # one thing a pipe cannot tolerate.
     # Either way, `ibook2epub | head` closes the pipe before it.
-    emit(summary, sys.stderr if args.annotations_detached == STDOUT else None)
+    emit(summary, stderr=args.annotations_detached == STDOUT)
     # Recorded in the log file only: the console already has it from the
     # print above, and logging it plainly printed every run's summary twice.
     app_logger.file_only(summary)

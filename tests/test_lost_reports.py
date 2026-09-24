@@ -14,6 +14,7 @@ anything else that stops the write is a report lost, and a script is told.
 
 import errno
 import io
+import json
 import os
 import sys
 from collections.abc import Callable, Iterator
@@ -22,9 +23,11 @@ from typing import TextIO
 
 import pytest
 
+from epubconvert.collect import annotations
 from epubconvert.run import run
 from epubconvert.utils import exits
 from tests.conftest import make_metadata_package, make_package
+from tests.test_annotations import highlight, library_row, make_databases
 
 
 @pytest.fixture(name="closed_pipe")
@@ -107,7 +110,7 @@ class TestAReportThatCannotBeWritten:
     """
 
     @staticmethod
-    def _shelf(tmp_path: Path) -> list[str]:
+    def shelf(tmp_path: Path) -> list[str]:
         library = tmp_path / "lib"
         make_metadata_package(library, "Book.epub", title="Book")
         base = ["-s", str(library), "-o", str(tmp_path / "out")]
@@ -126,7 +129,7 @@ class TestAReportThatCannotBeWritten:
     def test_is_said_once_and_exits_5(
         self, tmp_path, monkeypatch, capsys, failing, mode
     ):
-        base = self._shelf(tmp_path)
+        base = self.shelf(tmp_path)
         capsys.readouterr()
         monkeypatch.setattr(sys, "stdout", failing(FULL))
 
@@ -144,7 +147,7 @@ class TestAReportThatCannotBeWritten:
     def test_a_damaged_shelf_still_exits_7(
         self, tmp_path, monkeypatch, capsys, failing
     ):
-        base = self._shelf(tmp_path)
+        base = self.shelf(tmp_path)
         (tmp_path / "out" / "Book.epub").write_bytes(b"CORRUPTED")
         monkeypatch.setattr(sys, "stdout", failing(FULL))
 
@@ -154,7 +157,7 @@ class TestAReportThatCannotBeWritten:
         assert "Could not write the report" in capsys.readouterr().err
 
     def test_the_reason_is_escaped(self, tmp_path, monkeypatch, capsys, failing):
-        base = self._shelf(tmp_path)
+        base = self.shelf(tmp_path)
         monkeypatch.setattr(
             sys, "stdout", failing(OSError(errno.EIO, "odd\x1b[2K\u202eerror"))
         )
@@ -167,7 +170,7 @@ class TestAReportThatCannotBeWritten:
         assert "\x1b" not in err
 
     def test_the_next_run_starts_afresh(self, tmp_path, monkeypatch, failing):
-        base = self._shelf(tmp_path)
+        base = self.shelf(tmp_path)
         monkeypatch.setattr(sys, "stdout", failing(FULL))
         run.main([*base, "--list"])
         monkeypatch.setattr(sys, "stdout", io.StringIO())
@@ -176,7 +179,7 @@ class TestAReportThatCannotBeWritten:
 
     @pytest.mark.skipif(not Path("/dev/full").exists(), reason="no /dev/full here")
     def test_for_real(self, tmp_path, monkeypatch, capsys):
-        base = self._shelf(tmp_path)
+        base = self.shelf(tmp_path)
         with Path("/dev/full").open("w", encoding="utf-8") as full:
             monkeypatch.setattr(sys, "stdout", full)
 
@@ -184,3 +187,89 @@ class TestAReportThatCannotBeWritten:
 
         assert code == exits.NO_OUTPUT
         assert "No space left on device" in capsys.readouterr().err
+
+
+class TestAStreamThatIsClosed:
+    """
+    A standard stream closed before the run started (``>&-``, ``2>&-``) is
+    None in Python. ``emit`` passed that on to ``print``, which took it for
+    standard output: under ``-ad -`` the summary meant for standard error
+    landed in the middle of the JSON there, and ``--list >&-`` lost its
+    listing silently and exited 0.
+    """
+
+    def test_a_listing_to_a_closed_standard_output_is_lost(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        base = TestAReportThatCannotBeWritten.shelf(tmp_path)
+        capsys.readouterr()
+        monkeypatch.setattr(sys, "stdout", None)
+
+        code = run.main([*base, "--list"])
+
+        assert code == exits.NO_OUTPUT
+        assert "Could not write the report to standard output" in (
+            capsys.readouterr().err
+        )
+
+    def test_a_summary_to_a_closed_standard_error_stays_out_of_the_document(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        document = io.StringIO()
+        monkeypatch.setattr(sys, "stdout", document)
+        monkeypatch.setattr(sys, "stderr", None)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(tmp_path / "out"), "-m", "0", "-q"]
+            + ["-ae", "-ad", "-"]
+        )
+
+        assert code == exits.SUCCESS
+        assert json.loads(document.getvalue())["annotations"] == []
+        assert (tmp_path / "out" / "Book.epub").exists()
+
+
+class TestADocumentOnStandardOutput:
+    """
+    ``-ao -`` writes its document through its own path to standard output,
+    which handled only a closed pipe: ``-ao - > /dev/full`` and ``-ao - >&-``
+    each ended in a traceback and exit 1.
+    """
+
+    @pytest.fixture(name="highlights")
+    def _highlights(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        make_databases(
+            tmp_path / "container", rows=[highlight()], books=[library_row()]
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None, **_kwargs: annotations.collect(
+                tmp_path / "container", policy
+            ),
+        )
+        return ["-s", str(tmp_path / "lib"), "-o", str(tmp_path / "out"), "-ao", "-"]
+
+    def test_that_cannot_be_written_is_said_once_and_exits_5(
+        self, highlights, monkeypatch, capsys, failing
+    ):
+        monkeypatch.setattr(sys, "stdout", failing(FULL))
+
+        code = run.main(highlights)
+
+        assert code == exits.NO_OUTPUT
+        assert capsys.readouterr().err.count("No space left on device") == 1
+
+    def test_to_a_closed_standard_output_exits_5(self, highlights, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdout", None)
+
+        code = run.main(highlights)
+
+        assert code == exits.NO_OUTPUT
+        assert "Could not write the report to standard output" in (
+            capsys.readouterr().err
+        )

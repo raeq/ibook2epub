@@ -12,6 +12,7 @@ standard output goes out through :func:`emit` here too.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import re
@@ -94,7 +95,7 @@ def printable_json(document: str) -> str:
     )
 
 
-def emit(text: str, stream: TextIO | None = None) -> None:
+def emit(text: str, *, stderr: bool = False) -> None:
     """
     Print a report's text on standard output, and stop quietly if nobody reads.
 
@@ -108,13 +109,23 @@ def emit(text: str, stream: TextIO | None = None) -> None:
     standard error, and :func:`report_lost` tells the run, which exits 5 for
     it (see ``run.main``).
 
+    A stream closed before the run started is None in Python, and ``print``
+    took None for standard output: ``--list >&-`` lost its listing and
+    exited 0, and under ``-ad -`` a summary meant for a closed standard error
+    landed in the JSON on standard output. Standard output closed is a report
+    lost; standard error closed ends as a closed pipe there does.
+
     :param text: What to print; a newline is added.
-    :param stream: Where to print it, when not standard output: a summary
-        goes to standard error when ``-ad -`` has standard output for its
-        document, and ``... -ad - 2>&1 | head -c0`` ended that in a
-        traceback too, after every book was written.
+    :param stderr: Print it on standard error instead: a summary goes there
+        when ``-ad -`` has standard output for its document, and
+        ``... -ad - 2>&1 | head -c0`` ended that in a traceback too, after
+        every book was written.
     """
-    target = sys.stdout if stream is None else stream
+    target: TextIO | None = sys.stderr if stderr else sys.stdout
+    if target is None:
+        if not stderr:
+            lose_report(OSError(errno.EBADF, os.strerror(errno.EBADF)))
+        return
     try:
         print(text, file=target, flush=True)
     except OSError as exc:
@@ -125,17 +136,30 @@ def emit(text: str, stream: TextIO | None = None) -> None:
         os.close(devnull)
         if isinstance(exc, BrokenPipeError):
             return
-        said = _REPORT.lost
-        _REPORT.lost = True
         # Standard error is where it would be said, so a lost summary there
         # goes unsaid; the exit code still tells.
-        if not said and target is not sys.stderr:
-            # By name: app_logger displays through this module, so importing
-            # it here would be circular.
-            logging.getLogger("epubconvert").error(
-                "Could not write the report to standard output: %s",
-                printable(exc.strerror or str(exc)),
-            )
+        lose_report(exc, said=target is sys.stderr)
+
+
+def lose_report(exc: OSError, *, said: bool = False) -> None:
+    """
+    Record the report as lost, and say so the first time.
+
+    For whatever writes a report to standard output: :func:`emit`, and the
+    documents ``-ao -`` and ``--library-export -`` write there.
+
+    :param exc: Why it could not be written.
+    :param said: Whether saying so is already out of the question.
+    """
+    said = said or _REPORT.lost
+    _REPORT.lost = True
+    if not said:
+        # By name: app_logger displays through this module, so importing
+        # it here would be circular.
+        logging.getLogger("epubconvert").error(
+            "Could not write the report to standard output: %s",
+            printable(exc.strerror or str(exc)),
+        )
 
 
 class _Report:  # pylint: disable=too-few-public-methods

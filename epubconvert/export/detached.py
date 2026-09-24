@@ -35,7 +35,7 @@ from ..collect.library import collect as collect_library
 from ..utils import exits, schema
 from ..utils.app_logger import logger
 from ..utils.contained import is_free
-from ..utils.display import printable, printable_json
+from ..utils.display import lose_report, printable, printable_json
 from ..utils.policy import Assignment, NamingPolicy
 from . import catalogue, notes
 from .archive import write_atomically
@@ -379,9 +379,17 @@ def _emit(text: str) -> None:
     as UTF-8 under the text layer. A stream with no bytes layer -- one a
     caller swapped in -- is written as text.
 
+    A document that cannot be written is a report lost, as a listing is
+    (:func:`~epubconvert.utils.display.emit`): ``-ao - > /dev/full`` and
+    ``-ao - >&-`` ended in a traceback and exit 1.
+
     :param text: The whole document, ending in a newline.
     """
     stream = sys.stdout
+    if stream is None:
+        # Closed before the run started, which Python gives as None.
+        lose_report(OSError(errno.EBADF, os.strerror(errno.EBADF)))
+        return
     raw = getattr(stream, "buffer", None)
     try:
         if raw is None:
@@ -392,12 +400,17 @@ def _emit(text: str) -> None:
             raw.write(encode_name(text))
             raw.flush()
         stream.flush()
-    except BrokenPipeError:
+    except OSError as exc:
+        # The descriptor is replaced so the interpreter's shutdown flush
+        # cannot raise again.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stream.fileno())
+        os.close(devnull)
         # "-ao - | head" and "| less" then q are how the flag's own help text
-        # says to use it. Closing the pipe is the reader saying they have seen
-        # enough, not an error to report. The descriptor is replaced so the
-        # interpreter's shutdown flush cannot raise again.
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        # says to use it. Closing the pipe is the reader saying they have
+        # seen enough, not an error to report.
+        if not isinstance(exc, BrokenPipeError):
+            lose_report(exc)
 
 
 #: How large an export this will read back to merge into. Generous next to a
