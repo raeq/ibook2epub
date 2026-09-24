@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from ..utils.app_logger import logger
 from ..utils.contained import is_free, open_contained, resolve
 from ..utils.display import printable
 from ..utils.spec import PACKAGE_SUFFIX
+from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, file_mode
 
 #: Guards the "cannot measure free space" warning so it is said once per
 #: process rather than once per sampling interval.
@@ -120,13 +122,67 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         # resolving the path and then copying it reopened the check-then-open
         # window O_NOFOLLOW exists to close, in the one reader that did not use
         # it.
-        with open_contained(source) as reading, cover.open("wb") as writing:
-            shutil.copyfileobj(reading, writing)
+        #
+        # Into a partial and then published, never written under its final
+        # name. A cover is only written when its name is free, so one left
+        # truncated by a full disk was never rewritten: every later run saw the
+        # name taken.
+        if not _write_new(source, cover):
+            logger.debug(
+                "Not writing cover for %s: %s was taken while copying",
+                target_archive.name,
+                cover.name,
+            )
+            return None
     except (OSError, ValueError, ValidationError) as exc:
         logger.debug("No cover for %s: %s", printable(target_archive.name), exc)
         return None
 
     return cover
+
+
+def _write_new(source: Path, target: Path) -> bool:
+    """
+    Copy *source* to a name that must not exist yet, all at once or not at all.
+
+    The copy goes to a partial in the same directory and is published with
+    ``os.link``, which refuses a name that is already taken -- by a file, or
+    by a symlink it would otherwise follow -- so the window between the caller's
+    :func:`~epubconvert.utils.contained.is_free` check and the write cannot
+    overwrite anything. The partial is removed whatever happens.
+
+    :param source: The file to copy, opened without following a symlink.
+    :param target: The name to publish it under.
+
+    :return: True if written, False if the name was taken in the meantime.
+
+    :raises OSError: If the copy or the publishing failed for another reason.
+    """
+    handle, partial_name = tempfile.mkstemp(
+        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
+    )
+    os.close(handle)
+    partial = Path(partial_name)
+    try:
+        partial.chmod(file_mode())
+        with open_contained(source) as reading, partial.open("wb") as writing:
+            shutil.copyfileobj(reading, writing)
+        try:
+            os.link(partial, target)
+        except FileExistsError:
+            return False
+        except OSError:
+            # FAT and exFAT have no hard links, and they are the volumes a
+            # shelf is most often copied to. There the check is repeated and
+            # the partial renamed: the run lock already keeps this tool's own
+            # runs out, so the narrower guarantee is lost only against some
+            # other program writing the same name in the same instant.
+            if not is_free(target):
+                return False
+            partial.replace(target)
+        return True
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def verify_output(

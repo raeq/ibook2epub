@@ -5,9 +5,11 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import errno
 import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile
 
@@ -16,7 +18,7 @@ import pytest
 from epubconvert.collect.annotations import EMBEDDED_PATH
 from epubconvert.collect.validate import ValidationError, read_package_dir
 from epubconvert.export import inspect_output
-from epubconvert.export.archive import ARCHIVE_TIMESTAMP, zip_package
+from epubconvert.export.archive import ARCHIVE_TIMESTAMP, file_mode, zip_package
 from epubconvert.run import convert, run
 from tests.conftest import make_package
 
@@ -440,6 +442,123 @@ class TestCovers:
 
         with pytest.raises(ValidationError, match="outside the package"):
             read_package_dir(package)
+
+
+class TestACoverIsWrittenWholeOrNotAtAll:
+    """
+    A cover is written only when its name is free, so a truncated one is never
+    rewritten: it has to be complete the moment it has its name.
+    """
+
+    @staticmethod
+    def _book(tmp_path: Path) -> tuple[Path, Path]:
+        package = _cover_package(tmp_path / "lib" / "Book.epub")
+        (package / "OEBPS" / "images" / "cover.jpg").write_bytes(b"J" * 200_000)
+        target = tmp_path / "out" / "Book.epub"
+        target.parent.mkdir()
+        target.write_bytes(b"the book")
+        return package, target
+
+    def test_a_copy_that_fails_partway_leaves_no_cover_behind(
+        self, tmp_path, monkeypatch
+    ):
+        # Regression: the cover was opened under its final name and written in
+        # place. A full disk partway through left a prefix of the image, and
+        # every later run saw the name taken and never wrote it again.
+        package, target = self._book(tmp_path)
+
+        def disk_fills(reading, writing):
+            writing.write(reading.read(65536))
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(inspect_output.shutil, "copyfileobj", disk_fills)
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert sorted(p.name for p in target.parent.iterdir()) == ["Book.epub"]
+
+    def test_the_next_run_writes_the_whole_cover(self, tmp_path, monkeypatch):
+        package, target = self._book(tmp_path)
+        with monkeypatch.context() as patched:
+            patched.setattr(
+                inspect_output.shutil,
+                "copyfileobj",
+                lambda *_: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full")),
+            )
+            inspect_output.extract_cover(package, target)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover is not None
+        assert cover.read_bytes() == b"J" * 200_000
+
+    def test_a_cover_honours_the_umask(self, tmp_path):
+        package, target = self._book(tmp_path)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover is not None
+        assert stat.S_IMODE(cover.stat().st_mode) == file_mode()
+
+    def test_a_volume_without_hard_links_still_gets_its_cover(
+        self, tmp_path, monkeypatch
+    ):
+        # exFAT and FAT, the volumes a shelf is most often copied to, have no
+        # hard links, so publishing by link alone would silently stop writing
+        # covers there.
+        package, target = self._book(tmp_path)
+
+        def no_links(*_args):
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        monkeypatch.setattr(inspect_output.os, "link", no_links)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover is not None
+        assert cover.read_bytes() == b"J" * 200_000
+        assert sorted(p.name for p in target.parent.iterdir()) == [
+            "Book.epub",
+            "Book.jpg",
+        ]
+
+    def test_without_hard_links_a_name_taken_meanwhile_is_still_kept(
+        self, tmp_path, monkeypatch
+    ):
+        package, target = self._book(tmp_path)
+        cover = target.with_name("Book.jpg")
+
+        def taken_and_no_links(*_args):
+            cover.write_bytes(b"THEIRS")
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        monkeypatch.setattr(
+            "epubconvert.export.inspect_output.os.link", taken_and_no_links
+        )
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert cover.read_bytes() == b"THEIRS"
+
+    def test_a_name_taken_while_the_cover_was_copied_is_not_overwritten(
+        self, tmp_path, monkeypatch
+    ):
+        package, target = self._book(tmp_path)
+        cover = target.with_name("Book.jpg")
+        real = inspect_output.shutil.copyfileobj
+
+        def someone_else_writes_first(reading, writing):
+            real(reading, writing)
+            cover.write_bytes(b"THEIRS")
+
+        monkeypatch.setattr(
+            inspect_output.shutil, "copyfileobj", someone_else_writes_first
+        )
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert cover.read_bytes() == b"THEIRS"
+        assert sorted(p.name for p in target.parent.iterdir()) == [
+            "Book.epub",
+            "Book.jpg",
+        ]
 
 
 def _cover_package(package: Path) -> Path:
