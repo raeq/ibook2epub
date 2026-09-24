@@ -480,6 +480,26 @@ def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None
     return None
 
 
+def _file_in_the_way(output_dir: Path) -> Path | None:
+    """
+    Find a file that stands where the shelf, or a directory above it, must go.
+
+    Only the path itself used to be checked, and only if it existed, so
+    ``-o afile/books`` passed: a dry run and ``--list`` exited 0 and the real
+    run failed at ``mkdir`` with 5. The nearest part of the path that exists
+    is what ``mkdir(parents=True)`` will build on, so that is what is judged.
+
+    :param output_dir: The output directory as given.
+
+    :return: The nearest existing part of the path when it is not a directory,
+        otherwise None.
+    """
+    for candidate in (output_dir, *output_dir.parents):
+        if candidate.exists():
+            return None if candidate.is_dir() else candidate
+    return None
+
+
 def _check_environment(args: argparse.Namespace) -> int | None:
     """
     Check what the run needs from the machine, before it does anything.
@@ -521,8 +541,13 @@ def _check_environment(args: argparse.Namespace) -> int | None:
     # 0: the rehearsal said all was well for a run that could not start. The
     # runs that read only Apple's container never touch the shelf.
     uses_shelf = not (args.annotations_only or args.library_export)
-    if uses_shelf and args.output_dir.exists() and not args.output_dir.is_dir():
-        logger.critical("Output path is not a directory: %s", args.output_dir)
+    blocker = _file_in_the_way(args.output_dir) if uses_shelf else None
+    if blocker is not None:
+        logger.critical(
+            "Output path is not a directory: %s (%s is a file)",
+            args.output_dir,
+            blocker,
+        )
         return exits.NO_OUTPUT
 
     if args.epubcheck and not epubcheck_available():

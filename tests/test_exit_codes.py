@@ -463,3 +463,35 @@ class TestTheExitCodeAgreesWithTheSummary:
 
         assert code == exits.FAILED
         assert "failed 2" in capsys.readouterr().out.strip().splitlines()[-1]
+
+
+class TestAnOutputPathUnderAFileIsRefusedEverywhere:
+    """
+    ``-o afile/books`` does not exist, so the check for a file where the shelf
+    should be passed it: a dry run and --list read an empty "shelf" and exited
+    0, and the real run failed at mkdir with 5.
+    """
+
+    @pytest.mark.parametrize("mode", [["-d"], ["--list"], []])
+    def test_every_mode_exits_as_the_real_run_does(self, tmp_path, mode, capsys):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        blocker = tmp_path / "afile"
+        blocker.write_text("x", encoding="utf-8")
+
+        code = run.main(["-s", str(library), "-o", str(blocker / "books"), *mode])
+
+        assert code == exits.NO_OUTPUT
+        assert "afile" in capsys.readouterr().err
+
+    def test_a_missing_directory_under_a_directory_is_still_made(
+        self, tmp_path, output_dir
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = output_dir / "new" / "shelf"
+
+        code = run.main(["-s", str(library), "-o", str(shelf), "-q"])
+
+        assert code == exits.SUCCESS
+        assert (shelf / "Book.epub").is_file()
