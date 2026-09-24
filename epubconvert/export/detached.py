@@ -200,6 +200,59 @@ def _directory_refusal(folder: Path) -> str | None:
     return None
 
 
+def vault_refusal(directory: Path, *, pending: Sequence[Path] = ()) -> str | None:
+    """
+    Say why a vault of notes cannot be written, if it cannot.
+
+    Asked up front, as :func:`annotations_refusal` is of a file: a vault was
+    left to :func:`~epubconvert.export.notes.write_vault`, so one that was a
+    file, sat under a file or was on a read-only volume passed the dry run,
+    and the real run converted every book and then exited 5. The write still
+    judges it, for a vault that changes in between.
+
+    :param directory: The vault the run would write.
+    :param pending: Directories the run makes before it writes the vault, so
+        a vault inside a shelf the run is about to create is not judged by
+        what is there before the shelf is.
+
+    :return: The reason, or None when the vault can be written: it is a
+        directory this run may write into, or the nearest directory above it
+        is one it may create the vault in.
+    """
+    coming = {os.path.realpath(path) for path in pending}
+    for candidate in (directory, *directory.parents):
+        if os.path.realpath(candidate) in coming:
+            return None
+        if os.path.lexists(candidate):
+            # As mkdir(parents=True) meets it, and as the write then opens it.
+            return _vault_home_refusal(directory, candidate)
+    return None
+
+
+def _vault_home_refusal(directory: Path, nearest: Path) -> str | None:
+    """
+    Say why a vault cannot be written into, or created in, what is there.
+
+    :param directory: The vault the run would write.
+    :param nearest: The vault itself, when it is there, else the nearest
+        part of the path above it that is.
+
+    :return: The reason, or None when the vault can be written.
+    """
+    name = printable(str(directory))
+    if nearest == directory and os.path.isfile(directory):  # noqa: PTH113
+        # The words the write uses.
+        return (
+            f"{name} is a file; --annotations-format markdown writes one "
+            "note per book and needs a directory."
+        )
+    reason = _directory_refusal(nearest)
+    if reason is None:
+        return None
+    verb = "write into" if nearest == directory else "create"
+    return f"Could not {verb} {name}: {printable(reason)}"
+
+
 def _unwritable_reason(folder: Path) -> str:
     """
     Say why a directory ``os.access`` refused cannot be written into.
