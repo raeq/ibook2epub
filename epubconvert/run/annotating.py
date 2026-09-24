@@ -538,50 +538,31 @@ def _shelved(
     return [*names.packages, *copies[len(names.packages) :]]
 
 
-def apply_annotations(
-    args: argparse.Namespace,
-    policy: NamingPolicy,
-    *,
-    converted: bool = False,
-    named: Sequence[Assignment] | None = None,
-) -> int:
+def apply_annotations(args: argparse.Namespace, policy: NamingPolicy) -> int:
     """
-    Put the reader's annotations wherever this run asked for them.
+    Put the reader's annotations into the books already on the shelf: ``-ar``.
 
-    Applied to the shelf after a conversion rather than threaded through it, so
-    that ``-ar`` -- which converts nothing -- and an ordinary run reach the
-    books by exactly the same path. There is one place that decides what a book
-    carries.
-
-    Only archives already on the shelf are touched. Under ``-ar`` a book added
-    to the library since the conversion is therefore not converted: that mode
-    says what it does.
+    Converts nothing, so a book added to the library since the conversion is
+    not converted: that mode says what it does. A conversion embeds as each
+    book is written instead, and never comes here; the ``converted`` and
+    ``named`` parameters that served it were never passed, and are gone.
 
     :param args: Parsed command line arguments.
     :param policy: The naming policy, so a shelf name is worked out the way the
         conversion worked it out.
-    :param converted: Whether books were put on the shelf by this run, which
-        only changes what is said afterwards.
-    :param named: The names the export already worked out, when there was one.
-        Recomputing them re-parses every package document a second time under
-        a metadata naming policy, which is the 2x read this project has
-        already fixed once elsewhere.
 
     :return: A process exit code.
     """
     try:
-        found = gather_annotations(args, policy, required=not converted)
+        found = gather_annotations(args, policy, required=True)
     except ContainerUnavailableError as exc:
         # Nothing was converted, so the highlights were the whole run and why
         # they could not be read is its outcome: 4 for a missing library, 8
         # for a refusal (#19). This route only ever saw None before.
         logger.error("Could not read annotations: %s", printable(str(exc)))
         return exc.exit_code
-    if found is None:
-        # The books are the point and they are already on the shelf. Reporting
-        # NO_SOURCE here told a scheduled run the source directory was missing
-        # when it had been found and used.
-        return exits.SUCCESS if converted else exits.NO_SOURCE
+    if found is None:  # pragma: no cover - -ar requires -ae, which reads them
+        return exits.NO_SOURCE
 
     stopped = _before_writing(args)
     if stopped is not None:
@@ -590,7 +571,7 @@ def apply_annotations(
     # Named once, here, and passed to everything that needs it. Under a
     # metadata policy naming re-parses every package document, and computing it
     # in two places is the 2x read this project has already fixed twice.
-    assignments = list(named) if named is not None else _named(args, policy)
+    assignments = _named(args, policy)
     # Walked whether or not a conversion would copy them: a zipped book in the
     # library shares its name with a package either way.
     copyable = collect_copyable(args.source_dir)
@@ -601,7 +582,6 @@ def apply_annotations(
             args,
             policy,
             found,
-            converted=converted,
             assignments=assignments,
             copyable=copyable,
         )
@@ -627,8 +607,7 @@ def apply_annotations(
     # conversion route names it: named from the assignment, an edition
     # moved on to its marked name wrote into the other edition's note.
     # Only a vault uses the names, as for -ao: a JSON or CSV file named
-    # and opened every zipped book for nothing, and --skip-incomplete is
-    # refused beside it, so an evicted one was downloaded to be named.
+    # and opened every zipped book for nothing.
     written = write_export(
         args,
         found,
@@ -691,7 +670,6 @@ def _embed_in_shelf(
     policy: NamingPolicy,
     found: list[dict[str, Any]],
     *,
-    converted: bool,
     assignments: Sequence[Assignment],
     copyable: Sequence[Path],
 ) -> int:
@@ -707,20 +685,14 @@ def _embed_in_shelf(
     :param args: Parsed command line arguments.
     :param policy: The naming policy the names came from.
     :param found: Every annotation read from Apple.
-    :param converted: Whether this run also converted books.
     :param assignments: The names every package was given.
     :param copyable: The library's already-zipped books and PDFs, which
         answer to a package's name too.
 
     :return: A process exit code.
     """
-    # Quiet after a conversion, which embedded from the same index and has
-    # already said which annotations it could not place.
     index = index_by_package(
-        found,
-        [item.package for item in assignments],
-        copyable=copyable,
-        quiet=converted,
+        found, [item.package for item in assignments], copyable=copyable
     )
 
     # The same lock the export takes. These writes go into the output
@@ -767,10 +739,10 @@ def _embed_in_shelf(
         # there is one on the shelf is the conversion's business, not known here.
         _warn_about_copies(index, copyable, copied=None)
         _warn_about_bookless(found)
-    return _refresh_outcome(tally, converted=converted)
+    return _refresh_outcome(tally)
 
 
-def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
+def _refresh_outcome(tally: _Tally) -> int:
     """
     Say what a refresh did, and choose its exit code.
 
@@ -779,7 +751,6 @@ def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
     so a scheduled refresh that hit ENOSPC on every book reported success.
 
     :param tally: What the refresh did.
-    :param converted: Whether this run also converted books.
 
     :return: 130 if interrupted, 1 if a book was left behind, otherwise 0.
     """
@@ -790,8 +761,7 @@ def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
         parts.append("stopped at the --min-free floor before the rest")
     if tally.interrupted:
         parts.append("interrupted before the rest")
-    if not converted:
-        parts.append("converted nothing")
+    parts.append("converted nothing")
     summary = "; ".join(parts) + "."
     if tally.interrupted:
         logger.warning("%s", summary)
