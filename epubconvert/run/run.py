@@ -518,7 +518,7 @@ def _run_export(
     return (
         report,
         max(0, pending_before - done),
-        _selected(assigned, packages, decisions),
+        _selected(assigned, packages, decisions, policy),
         copyable,
     )
 
@@ -547,6 +547,7 @@ def _selected(
     assigned: Sequence[Assignment],
     packages: Sequence[Path],
     decisions: Sequence[Decision],
+    policy: NamingPolicy,
 ) -> list[Assignment]:
     """
     Keep the assignments of this run's own books, as the plan left them.
@@ -559,29 +560,48 @@ def _selected(
     before it writes, so ``--force`` and ``--refresh`` could call a book a
     collision whose name the annotation step then trusted: its highlights
     reached no file, and the warning, finding a file of that name, said
-    nothing.
+    nothing. A book the plan placed at another file, such as its marked name,
+    is renamed to it; see :func:`_as_decided`.
 
     :param assigned: The assignment of every package in the library.
     :param packages: The packages this run selected.
     :param decisions: What the plan decided about them, where it got that far.
+    :param policy: The naming policy the names came from.
 
     :return: Their assignments, in the library's order.
     """
     chosen = set(packages)
-    collided = {
-        decision.package: decision.reason
-        for decision in decisions
-        if decision.status == COLLISION
-    }
+    decided = {decision.package: decision for decision in decisions}
     return [
-        (
-            replace(entry, filename="", reason=collided[entry.package])
-            if entry.package in collided
-            else entry
-        )
+        _as_decided(entry, decided.get(entry.package), policy)
         for entry in assigned
         if entry.package in chosen
     ]
+
+
+def _as_decided(
+    entry: Assignment, decision: Decision | None, policy: NamingPolicy
+) -> Assignment:
+    """
+    Rename one book's assignment to the file the plan placed it at.
+
+    :param entry: Its assignment.
+    :param decision: What the plan decided about it, if it got that far.
+    :param policy: The naming policy the names came from.
+
+    :return: The assignment with no name for a collision, or the name of the
+        file the plan exports it to or found it at. A vault note shares that
+        file's stem: named from the assignment, an edition that moved on to
+        its marked name wrote its highlights into the other edition's note.
+    """
+    if decision is None:
+        return entry
+    if decision.status == COLLISION:
+        return replace(entry, filename="", reason=decision.reason)
+    if decision.target is not None and decision.target.name != entry.filename:
+        name = decision.target.name
+        return replace(entry, filename=name, identity=policy.identity(name))
+    return entry
 
 
 def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:

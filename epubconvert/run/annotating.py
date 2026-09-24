@@ -32,7 +32,7 @@ from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
 from .convert import OutputLockedError, output_lock, progress_for
-from .placing import placed
+from .placing import placed, settled
 from .planning import assign_names
 
 
@@ -290,8 +290,15 @@ def apply_annotations(
             return code
 
     if args.annotations_detached:
+        # Each note named after the file the book is placed at, as the
+        # conversion route names it: named from the assignment, an edition
+        # moved on to its marked name wrote into the other edition's note.
         written = write_export(
-            args, found, args.annotations_detached, assignments, copyable=copyable
+            args,
+            found,
+            args.annotations_detached,
+            settled(assignments, args.output_dir, policy),
+            copyable=copyable,
         )
         # A failed book outranks the destination's own error, the order a
         # conversion run uses too: see run._outcome.
