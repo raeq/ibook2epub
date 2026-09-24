@@ -52,22 +52,20 @@ from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
 from .cli import parse_args
 from .convert import (
-    CopyPlan,
     ExportOptions,
     OutputLockedError,
     Report,
     cap_exports,
-    copy_through_all,
     count_pending_decisions,
     exit_code,
     export_planned,
     filter_packages,
     format_summary,
     output_lock,
-    plan_copies,
     progress_for,
     sweep_partials,
 )
+from .copying import CopyPlan, copy_through_all, plan_copies
 from .planning import (
     CollisionMode,
     PlanOptions,

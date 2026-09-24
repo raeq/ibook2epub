@@ -22,7 +22,7 @@ from zipfile import ZipFile
 
 from epubconvert.collect import source as source_module
 from epubconvert.export import archive, naming
-from epubconvert.run import convert, planning, run
+from epubconvert.run import convert, copying, planning, run
 from tests.conftest import corrupt_member, damaged_streams, make_package, recompress
 
 
@@ -395,7 +395,7 @@ class TestAnInterruptedCopyStillCounts:
                 raise KeyboardInterrupt
             return real(source, target)
 
-        monkeypatch.setattr(convert, "copy_through", stop_at_the_third)
+        monkeypatch.setattr(copying, "copy_through", stop_at_the_third)
 
         code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
@@ -425,7 +425,7 @@ class TestCopiesRunConcurrently:
             both_started.wait()
             return real(source, target)
 
-        monkeypatch.setattr(convert, "copy_through", meet_then_copy)
+        monkeypatch.setattr(copying, "copy_through", meet_then_copy)
 
         code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "2", "-q"]
@@ -461,7 +461,7 @@ class TestCopiesRunConcurrently:
                 with guard:
                     running["now"] -= 1
 
-        monkeypatch.setattr(convert, "copy_through", counted)
+        monkeypatch.setattr(copying, "copy_through", counted)
 
         code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "1", "-q"]
@@ -497,7 +497,7 @@ class TestSameNamedCopiesStayDeterministic:
                 time.sleep(0.2)
             return real(source, target)
 
-        monkeypatch.setattr(convert, "copy_through", slow_first)
+        monkeypatch.setattr(copying, "copy_through", slow_first)
 
         code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "2", "-q"]
@@ -666,10 +666,10 @@ class TestSkipIncompleteCoversCopies:
         monkeypatch.setattr(planning, "ZipFile", recording)
         report = convert.Report()
 
-        plan = convert.plan_copies(
+        plan = copying.plan_copies(
             [evicted], naming.build_policy(None, "author-title"), skip_incomplete=True
         )
-        convert.copy_through_all(plan, output_dir, report)
+        copying.copy_through_all(plan, output_dir, report)
 
         assert opened == []
         assert report.incomplete == 1
