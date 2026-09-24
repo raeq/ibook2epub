@@ -300,7 +300,12 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
         completed = subprocess.run(  # noqa: S603 - fixed executable, no shell
             [executable, str(path)],
             capture_output=True,
+            # A JVM writes in its own locale's encoding, not necessarily this
+            # one's, and a strict decode raised UnicodeDecodeError out of here
+            # for a member named in ISO-8859-1.
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
