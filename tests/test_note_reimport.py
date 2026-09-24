@@ -84,6 +84,23 @@ class TestABookReimportedUnderANewAssetId:
 
         assert "> z" in (vault / "Dune.md").read_text(encoding="utf-8")
 
+    def test_it_is_written_under_the_spelling_it_has_on_disk(self, tmp_path: Path):
+        # Written when the book's file was "dune.epub". Adopted, but "Dune.md"
+        # was written beside it, which on a case-sensitive volume is a
+        # second file: the reader's writing stayed behind in the first.
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        note = notes.compose([_highlight("OLDASSET", "a")]) + MINE
+        (vault / "dune.md").write_text(note, encoding="utf-8")
+
+        for _ in range(2):
+            assert _write(vault, [_highlight("NEWASSET", "b")]) == exits.SUCCESS
+
+        assert [path.name for path in vault.iterdir()] == ["dune.md"]
+        text = (vault / "dune.md").read_text(encoding="utf-8")
+        assert "> b" in text
+        assert MINE in text
+
 
 class TestANoteOfAnotherBookThisRunKnows:
     def test_one_in_the_library_without_highlights_is_refused(

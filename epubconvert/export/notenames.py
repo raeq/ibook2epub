@@ -313,7 +313,9 @@ def note_names(
         book = claimants.get(item.package)
         if suffix and book is not None and _not_its(vault.held(own), book, known):
             continue
-        names.give(item, own)
+        # The spelling on disk: the book's own on a case-sensitive volume is
+        # a second file beside the note it adopted.
+        names.give(item, vault.spelling(own) or own)
     for item in named:
         if names.given[item.package] is not None or not suffix:
             continue
