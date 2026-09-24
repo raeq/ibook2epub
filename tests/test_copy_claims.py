@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
-from epubconvert.collect.validate import read_package
+from epubconvert.collect.package import read_package
 from epubconvert.export.archive import collect_package_dirs
 from epubconvert.export.naming import PassthroughNaming
 from epubconvert.run import copying, copynames, planning, run

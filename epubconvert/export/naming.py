@@ -31,7 +31,7 @@ import hashlib
 import unicodedata
 from typing import TYPE_CHECKING, Literal
 
-from ..collect.validate import usable_title
+from ..collect.identifiers import usable_title
 from ..utils.policy import NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 

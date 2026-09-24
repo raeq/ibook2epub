@@ -50,13 +50,8 @@ from .coredata import (
     newest,
     rows,
 )
-from .validate import (
-    ValidationError,
-    canonical_identifier,
-    read_package_dir,
-    usable_identifier,
-    usable_title,
-)
+from .identifiers import canonical_identifier, usable_identifier, usable_title
+from .package import ValidationError, read_package_dir
 
 #: What a book with neither a title nor an asset id is called. Both schemas
 #: require a non-empty title, and an entry with no identity at all is worse

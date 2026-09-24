@@ -17,13 +17,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from zipfile import BadZipFile, ZipFile
 
+from ..collect.identifiers import usable_identifier
+from ..collect.package import ValidationError, read_package, read_package_dir
 from ..collect.source import inspect_package
-from ..collect.validate import (
-    ValidationError,
-    read_package,
-    read_package_dir,
-    usable_identifier,
-)
 from ..export.naming import disambiguator, filesystem_key
 from ..utils.app_logger import logger
 from ..utils.display import printable, printable_json

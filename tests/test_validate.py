@@ -13,7 +13,8 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert.collect import validate
+from epubconvert.collect import identifiers, validate
+from epubconvert.collect import package as package_reader
 from epubconvert.export.archive import zip_package
 from epubconvert.run import run
 from epubconvert.utils import exits
@@ -198,7 +199,7 @@ class TestUnreadableArchives:
 class TestReadPackage:
     def test_metadata_is_extracted(self, good_epub):
         with ZipFile(good_epub) as archive:
-            package = validate.read_package(archive)
+            package = package_reader.read_package(archive)
 
         assert package.title == "A Wizard of Earthsea"
         assert package.creator == "Ursula K. Le Guin"
@@ -208,25 +209,25 @@ class TestReadPackage:
         # Beats guessing at inversion: "Le Guin, Ursula K." is not something a
         # whitespace split would produce.
         with ZipFile(good_epub) as archive:
-            package = validate.read_package(archive)
+            package = package_reader.read_package(archive)
 
         assert package.creator_sort == "Le Guin, Ursula K."
 
     def test_manifest_hrefs_resolve_against_the_opf_directory(self, good_epub):
         with ZipFile(good_epub) as archive:
-            package = validate.read_package(archive)
+            package = package_reader.read_package(archive)
 
         assert package.manifest["ch1"] == "OEBPS/text/chapter1.xhtml"
 
     def test_spine_is_read_in_order(self, good_epub):
         with ZipFile(good_epub) as archive:
-            package = validate.read_package(archive)
+            package = package_reader.read_package(archive)
 
         assert package.spine == ["ch1"]
 
     def test_cover_is_identified(self, good_epub):
         with ZipFile(good_epub) as archive:
-            package = validate.read_package(archive)
+            package = package_reader.read_package(archive)
 
         assert package.cover_id == "cover"
 
@@ -393,14 +394,14 @@ def _read_both_ways(tmp_path: Path, opf: str) -> tuple[Package, Package]:
     }
     archive_path = write_epub(tmp_path / "archive.epub", members)
     with ZipFile(archive_path) as opened:
-        from_archive = validate.read_package(opened)
+        from_archive = package_reader.read_package(opened)
 
     package = tmp_path / "source" / "Book.epub"
     for relative, body in {"mimetype": "application/epub+zip", **members}.items():
         path = package / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    return from_archive, validate.read_package_dir(package)
+    return from_archive, package_reader.read_package_dir(package)
 
 
 #: A retail id listed first, and the UUID the package actually declares.
@@ -582,21 +583,21 @@ class TestSortNameFromEpub3Refines:
 class TestDecompressorsThatMayBeMissing:
     """
     CPython builds ``lzma`` only where liblzma is present, and zipfile imports
-    it only when a member needs it. validate must import without it.
+    it only when a member needs it. The package reader must import without it.
     """
 
-    def test_validate_imports_without_lzma(self, monkeypatch):
+    def test_the_package_reader_imports_without_lzma(self, monkeypatch):
         # From Copilot's review of #22: UNREADABLE_MEMBER named lzma.LZMAError
         # unconditionally, so on a Python built without liblzma validate could
         # not be imported, and with it no command could run.
         monkeypatch.setitem(sys.modules, "lzma", None)
         spec = importlib.util.spec_from_file_location(
-            "epubconvert.collect._validate_without_lzma", validate.__file__
+            "epubconvert.collect._package_without_lzma", package_reader.__file__
         )
         assert spec is not None
         assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
-        # dataclass looks its class's module up in sys.modules while it runs.
+        # Registered as an import would be, before the module body runs.
         monkeypatch.setitem(sys.modules, spec.name, module)
 
         spec.loader.exec_module(module)
@@ -660,19 +661,19 @@ class TestMalformedArchives:
         path = recompress(write_epub(tmp_path / "Corrupt.epub"), method)
         corrupt_member(path, "OEBPS/content.opf", raising)
 
-        with ZipFile(path) as archive, pytest.raises(validate.ValidationError):
-            validate.read_package(archive)
+        with ZipFile(path) as archive, pytest.raises(package_reader.ValidationError):
+            package_reader.read_package(archive)
 
     def test_an_oversized_package_document_is_refused(self, tmp_path, monkeypatch):
         # A hostile or broken book should not be parsed into memory whole.
-        monkeypatch.setattr(validate, "MAX_XML_BYTES", 32)
+        monkeypatch.setattr(package_reader, "MAX_XML_BYTES", 32)
         path = write_epub(tmp_path / "Huge.epub")
 
         with (
             ZipFile(path) as archive,
-            pytest.raises(validate.ValidationError, match="implausibly large"),
+            pytest.raises(package_reader.ValidationError, match="implausibly large"),
         ):
-            validate.read_package(archive)
+            package_reader.read_package(archive)
 
     def test_an_unreadable_member_is_reported_not_raised(self, tmp_path, monkeypatch):
         path = write_epub(tmp_path / "Unreadable.epub")
@@ -684,9 +685,9 @@ class TestMalformedArchives:
 
         with (
             ZipFile(path) as archive,
-            pytest.raises(validate.ValidationError, match="could not read"),
+            pytest.raises(package_reader.ValidationError, match="could not read"),
         ):
-            validate.read_package(archive)
+            package_reader.read_package(archive)
 
 
 class TestMalformedPackageDocuments:
@@ -705,7 +706,7 @@ class TestMalformedPackageDocuments:
         path = write_epub(tmp_path / "Book.epub", members)
 
         with ZipFile(path) as archive:
-            assert validate.find_opf_path(archive) == "OEBPS/content.opf"
+            assert package_reader.find_opf_path(archive) == "OEBPS/content.opf"
 
     def test_a_container_naming_no_rootfile_is_refused(self, tmp_path):
         container = (
@@ -718,9 +719,9 @@ class TestMalformedPackageDocuments:
 
         with (
             ZipFile(path) as archive,
-            pytest.raises(validate.ValidationError, match="names no rootfile"),
+            pytest.raises(package_reader.ValidationError, match="names no rootfile"),
         ):
-            validate.find_opf_path(archive)
+            package_reader.find_opf_path(archive)
 
     def test_a_remote_manifest_item_is_not_recorded(self, tmp_path):
         # Recording it would produce a false "manifest item is not in the
@@ -769,16 +770,16 @@ class TestMalformedPackageDirectories:
         (package / "META-INF").mkdir(parents=True)
 
         with pytest.raises(
-            validate.ValidationError, match="missing META-INF/container.xml"
+            package_reader.ValidationError, match="missing META-INF/container.xml"
         ):
-            validate.read_package_dir(package)
+            package_reader.read_package_dir(package)
 
     def test_a_container_that_is_a_directory_is_refused(self, tmp_path):
         package = tmp_path / "Book.epub"
         (package / "META-INF" / "container.xml").mkdir(parents=True)
 
-        with pytest.raises(validate.ValidationError, match="could not read"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="could not read"):
+            package_reader.read_package_dir(package)
 
     def test_an_unparsable_container_is_refused(self, tmp_path):
         package = tmp_path / "Book.epub"
@@ -787,8 +788,8 @@ class TestMalformedPackageDirectories:
             "<not xml", encoding="utf-8"
         )
 
-        with pytest.raises(validate.ValidationError, match="not valid XML"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="not valid XML"):
+            package_reader.read_package_dir(package)
 
     def test_a_container_naming_no_rootfile_is_refused(self, tmp_path):
         package = tmp_path / "Book.epub"
@@ -799,8 +800,8 @@ class TestMalformedPackageDirectories:
             encoding="utf-8",
         )
 
-        with pytest.raises(validate.ValidationError, match="names no rootfile"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="names no rootfile"):
+            package_reader.read_package_dir(package)
 
     def test_an_unparsable_package_document_is_refused(self, tmp_path):
         package = tmp_path / "Book.epub"
@@ -809,17 +810,17 @@ class TestMalformedPackageDirectories:
         (package / "OEBPS").mkdir()
         (package / "OEBPS" / "content.opf").write_text("<not xml", encoding="utf-8")
 
-        with pytest.raises(validate.ValidationError, match="not valid XML"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="not valid XML"):
+            package_reader.read_package_dir(package)
 
     def test_an_oversized_package_document_is_refused(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(validate, "MAX_XML_BYTES", 8)
+        monkeypatch.setattr(package_reader, "MAX_XML_BYTES", 8)
         package = tmp_path / "Book.epub"
         (package / "META-INF").mkdir(parents=True)
         (package / "META-INF" / "container.xml").write_text(CONTAINER, encoding="utf-8")
 
-        with pytest.raises(validate.ValidationError, match="implausibly large"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="implausibly large"):
+            package_reader.read_package_dir(package)
 
 
 def _book_declaring(tmp_path: Path, manifest: str, spine: str) -> Path:
@@ -852,7 +853,7 @@ class TestTheCoverIsAPropertyValueNotASubstring:
         )
         path = _book_declaring(tmp_path, manifest, '<itemref idref="ch1"/>')
         with ZipFile(path) as archive:
-            return validate.read_package(archive).cover_id
+            return package_reader.read_package(archive).cover_id
 
     @pytest.mark.parametrize("properties", ["cover-image", " nav  cover-image "])
     def test_cover_image_among_the_values_is_the_cover(self, tmp_path, properties):
@@ -965,7 +966,7 @@ class TestTheValidatorRunsWhatItWasAskedFor:
 
 class TestIsbn10OfRefusesWhatIsNotAnIsbn13:
     def test_a_978_isbn13_has_an_isbn10(self):
-        assert validate.isbn10_of("9780553383041") == "0553383043"
+        assert identifiers.isbn10_of("9780553383041") == "0553383043"
 
     @pytest.mark.parametrize(
         "value", ["978", "978123", "978abcdefghij", "97805533830411", "9790553383041"]
@@ -973,4 +974,4 @@ class TestIsbn10OfRefusesWhatIsNotAnIsbn13:
     def test_anything_else_has_none(self, value):
         # A prefix test alone made "978" into "0" and raised ValueError on
         # letters; a 979 ISBN was never given an ISBN-10.
-        assert validate.isbn10_of(value) is None
+        assert identifiers.isbn10_of(value) is None

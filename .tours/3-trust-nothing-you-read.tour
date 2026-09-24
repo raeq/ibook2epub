@@ -42,13 +42,13 @@
     },
     {
       "title": "An honest bound",
-      "file": "epubconvert/collect/validate.py",
+      "file": "epubconvert/collect/package.py",
       "pattern": "#: Cap on the \\*stored\\* size of XML read from an archive",
       "description": "Note what this comment refuses to claim. It bounds the **read**, not the parse: ElementTree expands internal entities, so a small document can still expand to something far larger, and this limit does not prevent that.\n\nIt rejects implausible files early. It is not a memory bound, and saying so would be worse than not having it."
     },
     {
       "title": "A rootfile that leaves the archive",
-      "file": "epubconvert/collect/validate.py",
+      "file": "epubconvert/collect/package.py",
       "pattern": "def _checked_opf_path\\(full_path: str\\) -> str:",
       "description": "`container.xml` names the package document, and `container.xml` came from the book. Normalize the path, then refuse one that resolves outside the archive."
     },

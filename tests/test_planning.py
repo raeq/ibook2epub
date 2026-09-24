@@ -17,7 +17,7 @@ from zipfile import ZipFile
 import pytest
 
 from epubconvert.collect import source
-from epubconvert.collect.validate import read_package
+from epubconvert.collect.package import read_package
 from epubconvert.export.archive import collect_package_dirs
 from epubconvert.export.naming import (
     MetadataNaming,

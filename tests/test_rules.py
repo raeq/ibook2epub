@@ -26,6 +26,7 @@ from zipfile import ZipFile
 
 import pytest
 
+from epubconvert.collect import package as package_reader
 from epubconvert.collect import source, validate
 from epubconvert.export import archive, inspect_output, naming
 from epubconvert.export.naming import (
@@ -746,7 +747,7 @@ class TestOneReaderRulePerRule:
     @staticmethod
     def _tree() -> ast.Module:
         root = Path(__file__).resolve().parent.parent
-        module = root / "epubconvert" / "collect" / "validate.py"
+        module = root / "epubconvert" / "collect" / "package.py"
         return ast.parse(module.read_text(encoding="utf-8"))
 
     def test_only_one_function_walks_the_container_rootfiles(self):
@@ -805,26 +806,26 @@ class TestBothReadersReportTheSameFault:
             )
         }
 
-        with pytest.raises(validate.ValidationError) as from_dir:
-            validate.read_package_dir(self._as_directory(tmp_path, members))
+        with pytest.raises(package_reader.ValidationError) as from_dir:
+            package_reader.read_package_dir(self._as_directory(tmp_path, members))
         with (
             ZipFile(self._as_archive(tmp_path, members)) as zipped,
-            pytest.raises(validate.ValidationError) as from_zip,
+            pytest.raises(package_reader.ValidationError) as from_zip,
         ):
-            validate.read_package(zipped)
+            package_reader.read_package(zipped)
 
         assert str(from_dir.value) == str(from_zip.value)
 
     def test_an_unparsable_container(self, tmp_path):
         members = {"META-INF/container.xml": "<not xml"}
 
-        with pytest.raises(validate.ValidationError) as from_dir:
-            validate.read_package_dir(self._as_directory(tmp_path, members))
+        with pytest.raises(package_reader.ValidationError) as from_dir:
+            package_reader.read_package_dir(self._as_directory(tmp_path, members))
         with (
             ZipFile(self._as_archive(tmp_path, members)) as zipped,
-            pytest.raises(validate.ValidationError) as from_zip,
+            pytest.raises(package_reader.ValidationError) as from_zip,
         ):
-            validate.read_package(zipped)
+            package_reader.read_package(zipped)
 
         assert str(from_dir.value) == str(from_zip.value)
 
@@ -832,8 +833,8 @@ class TestBothReadersReportTheSameFault:
         package = tmp_path / "dir" / "Book.epub"
         (package / "META-INF").mkdir(parents=True)
 
-        with pytest.raises(validate.ValidationError) as raised:
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError) as raised:
+            package_reader.read_package_dir(package)
 
         assert "META-INF/container.xml" in str(raised.value)
 

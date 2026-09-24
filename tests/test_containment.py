@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert.collect import source, validate
+from epubconvert.collect import package as package_reader
+from epubconvert.collect import source
 from epubconvert.export import inspect_output
 from epubconvert.utils import contained
 from tests.conftest import make_package
@@ -103,8 +104,8 @@ class TestEveryReaderUsesIt:
             encoding="utf-8",
         )
 
-        with pytest.raises(validate.ValidationError):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError):
+            package_reader.read_package_dir(package)
 
     def test_the_container_cannot_be_a_symlink(self, tmp_path):
         package = make_package(tmp_path / "lib", "Book.epub")
@@ -113,8 +114,8 @@ class TestEveryReaderUsesIt:
         container.unlink()
         container.symlink_to(tmp_path / "outside.xml")
 
-        with pytest.raises(validate.ValidationError):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError):
+            package_reader.read_package_dir(package)
 
     def test_the_encryption_declaration_cannot_be_a_symlink(self, tmp_path):
         # has_drm decides whether a book is exportable at all, so a book that
@@ -152,7 +153,7 @@ class TestNoSecondImplementation:
     def test_every_package_reader_imports_the_rule(self):
         readers = [
             "export/archive.py",
-            "collect/validate.py",
+            "collect/package.py",
             "collect/source.py",
             "export/inspect_output.py",
         ]
@@ -214,8 +215,8 @@ class TestOpeningRefusesToFollow:
         container.unlink()
         container.symlink_to(outside)
 
-        with pytest.raises(validate.ValidationError):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError):
+            package_reader.read_package_dir(package)
 
 
 class TestTheRuleFailsClosed:

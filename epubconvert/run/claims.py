@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..collect.validate import usable_identifier
+from ..collect.identifiers import usable_identifier
 from ..export.naming import encode_name, filesystem_key, split_extension, truncate_bytes
 
 if TYPE_CHECKING:  # pragma: no cover - typing only

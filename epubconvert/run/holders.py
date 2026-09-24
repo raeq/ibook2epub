@@ -41,7 +41,8 @@ from functools import lru_cache
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
-from ..collect.validate import ValidationError, read_package, usable_identifier
+from ..collect.identifiers import usable_identifier
+from ..collect.package import ValidationError, read_package
 
 
 def same_identity(first: str, second: str) -> bool:

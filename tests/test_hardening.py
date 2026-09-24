@@ -22,6 +22,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+from epubconvert.collect import package as package_reader
 from epubconvert.collect import source, validate
 from epubconvert.collect.library import read_package_once
 from epubconvert.export import archive, inspect_output
@@ -129,8 +130,8 @@ class TestAnEncodingThePackageReaderRefusesCostsOneBook:
             _declaring(encoding, "<container/>")
         )
 
-        with pytest.raises(validate.ValidationError, match="not valid XML"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="not valid XML"):
+            package_reader.read_package_dir(package)
 
 
 class TestUntrustedXmlIsBounded:
@@ -144,12 +145,12 @@ class TestUntrustedXmlIsBounded:
         (package / "META-INF" / "container.xml").write_text(
             "<container>" + "<pad/>" * 10, encoding="utf-8"
         )
-        oversized = validate.MAX_XML_BYTES + 1
+        oversized = package_reader.MAX_XML_BYTES + 1
         with (package / "META-INF" / "container.xml").open("wb") as handle:
             handle.write(b"<container>" + b" " * oversized + b"</container>")
 
-        with pytest.raises(validate.ValidationError, match="implausibly large"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="implausibly large"):
+            package_reader.read_package_dir(package)
 
 
 def _within(seconds: float, fifo: Path, call: Callable[[], object]) -> object:
@@ -165,7 +166,7 @@ def _within(seconds: float, fifo: Path, call: Callable[[], object]) -> object:
     def run_it() -> None:
         try:
             outcome.append(call())
-        except (validate.ValidationError, OSError) as exc:
+        except (package_reader.ValidationError, OSError) as exc:
             outcome.append(exc)
 
     worker = threading.Thread(target=run_it, daemon=True)
@@ -193,9 +194,9 @@ class TestAMemberThatIsNotAFileIsNotOpened:
         container.unlink()
         os.mkfifo(container)
 
-        raised = _within(5, container, lambda: validate.read_package_dir(package))
+        raised = _within(5, container, lambda: package_reader.read_package_dir(package))
 
-        assert isinstance(raised, validate.ValidationError)
+        assert isinstance(raised, package_reader.ValidationError)
 
     def test_the_rule_refuses_a_fifo_at_the_descriptor(self, tmp_path):
         # The check-time test can be raced: a file swapped for a FIFO between
@@ -214,12 +215,14 @@ class TestAMemberThatIsNotAFileIsNotOpened:
         fifo = tmp_path / "swapped"
         os.mkfifo(fifo)
         monkeypatch.setattr(
-            validate, "open_contained", lambda _path: contained.open_contained(fifo)
+            package_reader,
+            "open_contained",
+            lambda _path: contained.open_contained(fifo),
         )
 
-        raised = _within(5, fifo, lambda: validate.read_package_dir(package))
+        raised = _within(5, fifo, lambda: package_reader.read_package_dir(package))
 
-        assert isinstance(raised, validate.ValidationError)
+        assert isinstance(raised, package_reader.ValidationError)
         assert "could not read" in str(raised)
 
 
@@ -286,13 +289,13 @@ class TestAMemberThatGrowsWhileReadIsStillBounded:
         # The size is measured before the open, so a file that grows in
         # between used to be read whole, however large it had become.
         package = make_package(tmp_path / "lib", "Growing.epub")
-        monkeypatch.setattr(validate, "MAX_XML_BYTES", 64)
+        monkeypatch.setattr(package_reader, "MAX_XML_BYTES", 64)
         monkeypatch.setattr(
-            validate, "open_contained", lambda _path: io.BytesIO(b" " * 1000)
+            package_reader, "open_contained", lambda _path: io.BytesIO(b" " * 1000)
         )
 
-        with pytest.raises(validate.ValidationError, match="grew while read"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="grew while read"):
+            package_reader.read_package_dir(package)
 
 
 def _symlink_loop(parent: Path, name: str) -> Path:
@@ -316,8 +319,8 @@ class TestASymlinkLoopCostsOneBook:
     def test_a_looped_package_is_an_unreadable_package(self, tmp_path):
         loop = _symlink_loop(tmp_path, "Loop.epub")
 
-        with pytest.raises(validate.ValidationError):
-            validate.read_package_dir(loop)
+        with pytest.raises(package_reader.ValidationError):
+            package_reader.read_package_dir(loop)
 
     def test_the_library_reads_a_looped_package_as_nothing(self, tmp_path):
         loop = _symlink_loop(tmp_path, "Loop.epub")
@@ -629,8 +632,8 @@ class TestEntityDeclarationsAreRefused:
             "<dc:title>&b;</dc:title></metadata><manifest/><spine/></package>"
         )
 
-        with pytest.raises(validate.ValidationError, match="entities"):
-            validate.read_package_dir(self._package(tmp_path, opf))
+        with pytest.raises(package_reader.ValidationError, match="entities"):
+            package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_parameter_entity_is_refused(self, tmp_path):
         opf = (
@@ -639,8 +642,8 @@ class TestEntityDeclarationsAreRefused:
             "<manifest/><spine/></package>"
         )
 
-        with pytest.raises(validate.ValidationError, match="entities"):
-            validate.read_package_dir(self._package(tmp_path, opf))
+        with pytest.raises(package_reader.ValidationError, match="entities"):
+            package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_quoted_angle_bracket_does_not_end_the_scan(self, tmp_path):
         # A SYSTEM identifier may contain ">". Walking to the first unbracketed
@@ -654,8 +657,8 @@ class TestEntityDeclarationsAreRefused:
             "<dc:title>&x;</dc:title></metadata><manifest/><spine/></package>"
         )
 
-        with pytest.raises(validate.ValidationError, match="entities"):
-            validate.read_package_dir(self._package(tmp_path, opf))
+        with pytest.raises(package_reader.ValidationError, match="entities"):
+            package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_single_quoted_angle_bracket_is_handled_too(self, tmp_path):
         opf = (
@@ -665,8 +668,8 @@ class TestEntityDeclarationsAreRefused:
             "<manifest/><spine/></package>"
         )
 
-        with pytest.raises(validate.ValidationError, match="entities"):
-            validate.read_package_dir(self._package(tmp_path, opf))
+        with pytest.raises(package_reader.ValidationError, match="entities"):
+            package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_doctype_without_entities_is_allowed(self, tmp_path):
         # One real book in a 2,804-package library has a bare DOCTYPE.
@@ -679,7 +682,7 @@ class TestEntityDeclarationsAreRefused:
             '<spine><itemref idref="t"/></spine></package>'
         )
 
-        assert validate.read_package_dir(self._package(tmp_path, opf)).title == (
+        assert package_reader.read_package_dir(self._package(tmp_path, opf)).title == (
             "Real Book"
         )
 
@@ -695,7 +698,7 @@ class TestEntityDeclarationsAreRefused:
             '<spine><itemref idref="t"/></spine></package>'
         )
 
-        assert validate.read_package_dir(self._package(tmp_path, opf)).title == (
+        assert package_reader.read_package_dir(self._package(tmp_path, opf)).title == (
             "On <!ENTITY a> and other XML"
         )
 
@@ -709,8 +712,8 @@ class TestEntityDeclarationsAreRefused:
             encoding="utf-8",
         )
 
-        with pytest.raises(validate.ValidationError, match="entities"):
-            validate.read_package_dir(package)
+        with pytest.raises(package_reader.ValidationError, match="entities"):
+            package_reader.read_package_dir(package)
 
     def test_an_archive_is_guarded_the_same_way(self, tmp_path):
         # Both readers go through the same member-reading path, so the guard
@@ -732,9 +735,9 @@ class TestEntityDeclarationsAreRefused:
 
         with (
             ZipFile(path) as archive_file,
-            pytest.raises(validate.ValidationError, match="entities"),
+            pytest.raises(package_reader.ValidationError, match="entities"),
         ):
-            validate.read_package(archive_file)
+            package_reader.read_package(archive_file)
 
     def test_a_comment_holding_a_decoy_doctype_does_not_hide_a_declaration(
         self, tmp_path
@@ -750,8 +753,8 @@ class TestEntityDeclarationsAreRefused:
             "<dc:title>&x;</dc:title></metadata><manifest/><spine/></package>"
         )
 
-        with pytest.raises(validate.ValidationError, match="entities"):
-            validate.read_package_dir(self._package(tmp_path, opf))
+        with pytest.raises(package_reader.ValidationError, match="entities"):
+            package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_an_external_entity_is_refused_as_a_declaration(self, tmp_path):
         opf = (
@@ -760,5 +763,5 @@ class TestEntityDeclarationsAreRefused:
             "<manifest/><spine/></package>"
         )
 
-        with pytest.raises(validate.ValidationError, match="entities"):
-            validate.read_package_dir(self._package(tmp_path, opf))
+        with pytest.raises(package_reader.ValidationError, match="entities"):
+            package_reader.read_package_dir(self._package(tmp_path, opf))

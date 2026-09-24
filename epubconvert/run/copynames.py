@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import NamedTuple
 from zipfile import BadZipFile, ZipFile
 
-from ..collect.validate import ValidationError, read_package, usable_identifier
+from ..collect.identifiers import usable_identifier
+from ..collect.package import ValidationError, read_package
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX

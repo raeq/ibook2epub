@@ -19,7 +19,8 @@ from typing import Any
 
 import pytest
 
-from epubconvert.collect import annotations, coredata, library, validate
+from epubconvert.collect import annotations, coredata, library
+from epubconvert.collect import package as package_reader
 from epubconvert.utils.opf import Package
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -84,8 +85,8 @@ class TestANulInThePathCostsOnlyTheBook:
         assert [entry["title"] for entry in found] == ["Leviathan Wakes"]
 
     def test_reading_such_a_package_is_a_validation_error(self):
-        with pytest.raises(validate.ValidationError, match="cannot be resolved"):
-            validate.read_package_dir(Path(NUL_PATH))
+        with pytest.raises(package_reader.ValidationError, match="cannot be resolved"):
+            package_reader.read_package_dir(Path(NUL_PATH))
 
     def test_a_value_error_from_a_package_is_unreadable_metadata(self, monkeypatch):
         # The backstop: whatever else a path can raise ValueError for is still

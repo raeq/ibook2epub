@@ -19,7 +19,7 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 from epubconvert.collect.annotations import EMBEDDED_PATH
-from epubconvert.collect.validate import ValidationError, read_package_dir
+from epubconvert.collect.package import ValidationError, read_package_dir
 from epubconvert.export import inspect_output
 from epubconvert.export.archive import (
     ARCHIVE_TIMESTAMP,

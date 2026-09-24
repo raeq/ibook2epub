@@ -20,8 +20,8 @@ from typing import Any, Literal
 
 from .. import __version__
 from ..collect.coredata import now
+from ..collect.identifiers import isbn10_of, isbn13_of
 from ..collect.library import READ
-from ..collect.validate import isbn10_of, isbn13_of
 from ..utils import schema
 from ..utils.display import collapse, printable
 

@@ -22,7 +22,7 @@ from xml.etree import ElementTree
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained, resolve
 from ..utils.display import printable
-from .validate import parse_xml
+from .package import parse_xml
 
 ENCRYPTION_PATH = "META-INF/encryption.xml"
 SINF_PATH = "META-INF/sinf.xml"

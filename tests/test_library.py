@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from epubconvert.collect import annotations, coredata, library, validate
+from epubconvert.collect import annotations, coredata, identifiers, library
 from epubconvert.export import catalogue
 from epubconvert.export.naming import MetadataNaming, PassthroughNaming, StripNaming
 from epubconvert.utils.opf import Package
@@ -599,7 +599,7 @@ class TestTheCsvIsWhatGoodreadsWrites:
         ],
     )
     def test_the_isbn_10_is_the_same_book(self, isbn13, isbn10):
-        assert validate.isbn10_of(isbn13) == isbn10
+        assert identifiers.isbn10_of(isbn13) == isbn10
 
     def test_lines_end_in_newline_only(self):
         # write_text translates newlines, so "\\r\\n" would become "\\r\\r\\n"

@@ -19,7 +19,8 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from ..collect.validate import ValidationError, ValidationOptions, read_package_dir
+from ..collect.package import ValidationError, read_package_dir
+from ..collect.validate import ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import is_free, open_contained, resolve
 from ..utils.display import printable
