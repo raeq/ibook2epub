@@ -28,6 +28,7 @@ from ..collect.annotations import SCHEMA_PATH, STDOUT
 from ..collect.annotations import build_document as build_annotation_document
 from ..collect.annotations import merge as merge_annotations
 from ..collect.coredata import ContainerUnavailableError
+from ..collect.library import asset_sources
 from ..collect.library import collect as collect_library
 from ..utils import exits, schema
 from ..utils.app_logger import logger
@@ -67,12 +68,15 @@ def write_export(
     :return: A process exit code.
     """
     if args.annotations_format == "markdown":
+        # Every book in the library, not only the highlighted ones: a note
+        # tagged for a book with no highlights today is still that book's.
         return notes.write_vault(
             found,
             destination,
             named,
             copyable=copyable,
             suffix=args.on_collision == "suffix",
+            assets=asset_sources(),
         )
     return _write_detached(found, destination)
 

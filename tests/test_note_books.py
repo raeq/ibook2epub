@@ -128,8 +128,13 @@ class TestANoteTaggedForAnotherBook:
         (vault / "Dune.md").write_text(notes.compose([_highlight("A", "A TEXT")]))
         named = [Assignment(Path("Dune.epub"), "Dune.epub", "dune.epub")]
 
+        # A is another book in the library, with no highlights of its own.
         code = notes.write_vault(
-            [_highlight("B", "B TEXT")], str(vault), named, copyable=()
+            [_highlight("B", "B TEXT")],
+            str(vault),
+            named,
+            copyable=(),
+            assets={"A": "Dune Messiah.epub", "B": "Dune.epub"},
         )
 
         reported = capsys.readouterr().err

@@ -267,5 +267,6 @@ class TestReadingTheVault:
 
         held = notenames.Vault(tmp_path).held("Dune.md")
 
-        assert notenames.holding(held, found) is notenames.Holding.MINE
+        book = notenames.claimant(found)
+        assert notenames.holding(held, book, None) is notenames.Holding.MINE
         assert held.quoted == {"firstlinesecondline"}

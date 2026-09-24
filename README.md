@@ -760,6 +760,14 @@ note. Notes written before the marker named its book are still recognised:
 each stays with the book whose highlights it holds, and is tagged the next
 time it changes.
 
+A note is another book's only when the book it names is one Books still
+knows — in your library, highlighted or not — or when its frontmatter names
+another edition's identifier. Such a note is left alone: without
+`--on-collision suffix` the run names it and exits `1`, and with it the book
+gets a numbered note of its own. A book you remove from Books and add again
+gets a new id from Apple; its note is still its own, and is re-tagged the
+next time it changes.
+
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
 One consequence worth knowing: the frontmatter is written once and never

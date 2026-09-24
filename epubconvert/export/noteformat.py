@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from ..utils.display import collapse
 from .naming import disambiguator, encode_name
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
@@ -210,10 +211,10 @@ def wrote_it(existing: str) -> bool:
     :return: True when it carries this tool's start marker, wherever the
         reader's head leaves it.
     """
-    return start_marker_of(existing) is not None
+    return _start_marker_of(existing) is not None
 
 
-def start_marker_of(existing: str) -> re.Match[str] | None:
+def _start_marker_of(existing: str) -> re.Match[str] | None:
     """
     Find the start marker of a note this tool wrote.
 
@@ -272,3 +273,39 @@ def is_ours(existing: str) -> bool:
     """
     held = split(existing)
     return held is not None and digest_of(held.generated) == held.digest
+
+
+def quoted(value: object) -> str:
+    """
+    Render a value as a double-quoted YAML scalar.
+
+    Quoted always, never conditionally. 433 of 5,531 title and author values in
+    a surveyed library break or change unquoted, 298 of them because they carry
+    ``": "``, which starts a mapping and makes Obsidian show the note as having
+    no properties at all -- silently, which is the worst way for it to fail.
+
+    Characters YAML will not carry unescaped are escaped too. U+0092, which is
+    what CP1252 mojibake leaves of an apostrophe, was written raw, and a
+    single one made the whole frontmatter invalid: Obsidian dropped every
+    property of the note, silently again.
+
+    :param value: The value, which came from the book.
+
+    :return: The quoted scalar.
+    """
+    escaped = collapse(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{UNPRINTABLE.sub(_yaml_escape, escaped)}"'
+
+
+#: What YAML 1.2 (5.1) will not carry unescaped in a stream: C0 but for the
+#: white space ``collapse`` has already turned into spaces, DEL, C1 but for
+#: NEL, the surrogates a filename can hand back, and the two non-characters.
+UNPRINTABLE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ud800-\udfff\ufffe\uffff]"
+)
+
+
+def _yaml_escape(match: re.Match[str]) -> str:
+    """Render one character as a double-quoted YAML escape: ``\\x92``."""
+    code = ord(match.group())
+    return f"\\x{code:02X}" if code <= 0xFF else f"\\u{code:04X}"

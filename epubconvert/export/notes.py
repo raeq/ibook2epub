@@ -25,9 +25,9 @@ otherwise forge the marker that ends the generated region.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from ..collect.annotations import for_book
 from ..collect.identifiers import isbn13_of
@@ -50,13 +50,13 @@ from .noteformat import (
     digest_of,
     is_ours,
     normalise,
+    quoted,
     readable,
     split,
     start_marker,
-    start_marker_of,
     wrote_it,
 )
-from .notenames import Vault, note_names
+from .notenames import Claimant, Holding, Vault, claimant, holding, note_names, parse
 
 #: Suffix for the copy written when a reader has edited the note itself. Not
 #: ``.new.md``: a book titled "Foo.new" is named ``Foo.new.md``, which was
@@ -208,42 +208,6 @@ def _lines(value: object) -> list[str]:
     return [_escape(line) for line in _raw_lines(value)]
 
 
-def _quoted(value: object) -> str:
-    """
-    Render a value as a double-quoted YAML scalar.
-
-    Quoted always, never conditionally. 433 of 5,531 title and author values in
-    a surveyed library break or change unquoted, 298 of them because they carry
-    ``": "``, which starts a mapping and makes Obsidian show the note as having
-    no properties at all -- silently, which is the worst way for it to fail.
-
-    Characters YAML will not carry unescaped are escaped too. U+0092, which is
-    what CP1252 mojibake leaves of an apostrophe, was written raw, and a
-    single one made the whole frontmatter invalid: Obsidian dropped every
-    property of the note, silently again.
-
-    :param value: The value, which came from the book.
-
-    :return: The quoted scalar.
-    """
-    escaped = collapse(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{UNPRINTABLE.sub(_yaml_escape, escaped)}"'
-
-
-#: What YAML 1.2 (5.1) will not carry unescaped in a stream: C0 but for the
-#: white space ``collapse`` has already turned into spaces, DEL, C1 but for
-#: NEL, the surrogates a filename can hand back, and the two non-characters.
-UNPRINTABLE = re.compile(
-    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ud800-\udfff\ufffe\uffff]"
-)
-
-
-def _yaml_escape(match: re.Match[str]) -> str:
-    """Render one character as a double-quoted YAML escape: ``\\x92``."""
-    code = ord(match.group())
-    return f"\\x{code:02X}" if code <= 0xFF else f"\\u{code:04X}"
-
-
 def frontmatter(book: dict[str, Any]) -> str:
     """
     Render the YAML block that heads a note.
@@ -265,12 +229,12 @@ def frontmatter(book: dict[str, Any]) -> str:
     lines = ["---"]
     for key in ("title", "author", "identifier"):
         if book.get(key):
-            lines.append(f"{key}: {_quoted(book[key])}")
+            lines.append(f"{key}: {quoted(book[key])}")
     isbn = isbn13_of(book.get("identifier"))
     if isbn:
-        lines.append(f"isbn: {_quoted(isbn)}")
+        lines.append(f"isbn: {quoted(isbn)}")
     if book.get("language"):
-        lines.append(f"language: {_quoted(book['language'])}")
+        lines.append(f"language: {quoted(book['language'])}")
     if "year" in book:
         year = book["year"]
         if not isinstance(year, int) or isinstance(year, bool):
@@ -363,25 +327,6 @@ def _present(target: Path) -> bool:
     return True
 
 
-def of_another_book(existing: str, found: list[dict[str, Any]]) -> bool:
-    """
-    Whether a note is tagged for a book other than the one being written.
-
-    A note written before notes were tagged, or annotations that name no
-    asset, say nothing either way, and the note is taken as this book's, as
-    it always was.
-
-    :param existing: The note as it stands.
-    :param found: The annotations about to be written into it.
-
-    :return: True when the note's tag names another book.
-    """
-    marker = start_marker_of(existing)
-    held = marker.group(2) if marker is not None else None
-    tags = book_tags(found)
-    return held is not None and bool(tags) and held not in tags
-
-
 def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
     """
     Render a whole note.
@@ -398,17 +343,24 @@ def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
     return f"{frontmatter(book)}{marker}\n{generated}{below}"
 
 
-def rewrite(existing: str, found: list[dict[str, Any]]) -> str:
+def rewrite(
+    existing: str, found: list[dict[str, Any]], tags: Collection[str] = ()
+) -> str:
     """
     Re-render a note this tool wrote, keeping both of the reader's regions.
 
     A note whose region would come out the same is returned as it stands, so
     a rerun with nothing new writes nothing and a vault under version control
     stays quiet. A note written before notes were tagged is therefore tagged
-    only when its region is rewritten anyway.
+    only when its region is rewritten anyway, and so is one tagged for an
+    asset id the book no longer answers to -- the old one of a book removed
+    from Books and added again.
 
     :param existing: The note as it stands.
     :param found: This book's annotations, in reading order.
+    :param tags: Every tag the book answers to besides its highlights':
+        the library's other asset ids for the same package. A note tagged
+        for any of them keeps its tag.
 
     :return: The note with only the generated region replaced.
     """
@@ -418,7 +370,10 @@ def rewrite(existing: str, found: list[dict[str, Any]]) -> str:
     generated = body(found)
     if generated == held.generated and digest_of(generated) == held.digest:
         return normalise(existing)
-    book = held.book if held.book is not None else min(book_tags(found), default=None)
+    own = book_tags(found)
+    book = held.book
+    if book is None or (own and book not in own | set(tags)):
+        book = min(own, default=book)
     return f"{held.head}{start_marker(generated, book)}\n{generated}{held.tail}"
 
 
@@ -429,6 +384,7 @@ def write_vault(
     *,
     copyable: Sequence[Path],
     suffix: bool = False,
+    assets: Mapping[str, str | None] | None = None,
 ) -> int:
     """
     Write one Markdown note per annotated book, into a vault.
@@ -453,6 +409,11 @@ def write_vault(
         ``--on-collision suffix`` asks. Two books can hold distinct names and
         still want one note -- ``Dune.epub`` and ``Dune.pdf`` -- and under it
         the second is numbered rather than left without one.
+    :param assets: Every book in Apple's library, highlighted or not: its
+        asset id, and the package name it is read from. A note tagged for
+        one of them is that book's; one tagged for an id neither the library
+        nor any highlight knows is taken as the book's whose name it has,
+        which is what a book removed from Books and added again looks like.
 
     :return: A process exit code.
     """
@@ -475,6 +436,7 @@ def write_vault(
         directory,
         [(item, for_book(item.package.name, index)) for item in named],
         suffix=suffix,
+        known=_known(assets or {}, found),
     )
 
     logger.info(
@@ -519,11 +481,42 @@ def write_vault(
     return exits.FAILED if unsaved else exits.SUCCESS
 
 
+class Known(NamedTuple):
+    """The books a run knows of, by the tags their notes carry."""
+
+    #: Every book's: in Apple's library, or with a highlight this run read.
+    tags: frozenset[str]
+    #: Each package name's, from the library, highlighted or not.
+    of_package: dict[str, set[str]]
+
+
+def _known(assets: Mapping[str, str | None], found: list[dict[str, Any]]) -> Known:
+    """
+    Name the books a run knows of, which a note's tag may be another's.
+
+    Both halves: the library lists every book, highlighted or not, and a
+    highlight can name a book the library has forgotten, or one this run
+    does not name.
+
+    :param assets: Every book in Apple's library, by asset id.
+    :param found: Every annotation this run read.
+
+    :return: The books.
+    """
+    of_package: dict[str, set[str]] = {}
+    for asset, source in assets.items():
+        if source is not None:
+            of_package.setdefault(source, set()).add(disambiguator(asset))
+    tags = frozenset(disambiguator(asset) for asset in assets) | book_tags(found)
+    return Known(tags, of_package)
+
+
 def _write_notes(
     directory: Path,
     wanted: list[tuple[Assignment, list[dict[str, Any]]]],
     *,
     suffix: bool,
+    known: Known,
 ) -> tuple[dict[str, list[str]], list[str]]:
     """
     Write each book's note, and name the books that have none to write.
@@ -536,15 +529,22 @@ def _write_notes(
     :param directory: The vault.
     :param wanted: Every book of the run, and its highlights, if any.
     :param suffix: Whether a book that loses its note's name is numbered.
+    :param known: The books this run knows of.
 
     :return: The notes by outcome, and the books that lost a name collision.
     """
     tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
+    books = {
+        item.package: claimant(mine, known.of_package.get(item.package.name, ()))
+        for item, mine in wanted
+        if mine
+    }
     names = note_names(
         [item for item, _ in wanted if item.filename],
         suffix=suffix,
-        highlights={item.package: mine for item, mine in wanted if mine},
+        claimants=books,
         vault=Vault(directory),
+        known=known.tags,
     )
     collided: list[str] = []
     for item, mine in wanted:
@@ -558,7 +558,10 @@ def _write_notes(
             # another book's file has the same stem.
             collided.append(item.package.name)
             continue
-        tally[_write_one(directory / name, mine)].append(name)
+        written = _write_one(
+            directory / name, mine, book=books[item.package], known=known.tags
+        )
+        tally[written].append(name)
     return tally, collided
 
 
@@ -598,9 +601,9 @@ REPORTS = {
     "books' highlights were not written; see the errors above: %s",
     "foreign": "%d file(s) were not written by ibook2epub and were left alone, "
     "so their books' highlights were not written; move them aside and rerun: %s",
-    "another": "%d note(s) hold another book's highlights and were left alone, "
-    "so these books' highlights were not written; two books want one note, so "
-    "rerun with --on-collision suffix, or move the note aside: %s",
+    "another": "%d note(s) are another book's and were left alone, so these "
+    "books' highlights were not written; rerun with --on-collision suffix to "
+    "give each book a note of its own, or move the note aside: %s",
     "failed": "%d note(s) could not be written: %s",
 }
 
@@ -622,7 +625,11 @@ def _naming(names: list[str]) -> str:
 
 
 def _write_one(  # pylint: disable=too-many-return-statements
-    target: Path, mine: list[dict[str, Any]]
+    target: Path,
+    mine: list[dict[str, Any]],
+    *,
+    book: Claimant | None = None,
+    known: Collection[str] | None = None,
 ) -> str:
     """
     Put one book's note in place, without touching what the reader wrote.
@@ -633,6 +640,10 @@ def _write_one(  # pylint: disable=too-many-return-statements
 
     :param target: The note's path.
     :param mine: This book's annotations, in reading order.
+    :param book: The book, as a note is judged against it; by default as
+        its highlights describe it.
+    :param known: The tags of every book the run knows of, or None to take
+        any tag as a known book's (:func:`~.notenames.holding`).
 
     Each branch returns rather than threading one variable through, because
     every one of them is a different thing to tell the reader and collapsing
@@ -670,7 +681,8 @@ def _write_one(  # pylint: disable=too-many-return-statements
 
     if not wrote_it(existing):
         return "foreign"
-    if of_another_book(existing, mine):
+    book = book if book is not None else claimant(mine)
+    if holding(parse(existing), book, known) is Holding.ANOTHER:
         # A name is worked out afresh each run, and a note tagged for another
         # book is that book's whatever this run named it. Checked before the
         # sidecar, which would carry this book's highlights beside it.
@@ -681,13 +693,14 @@ def _write_one(  # pylint: disable=too-many-return-statements
         # and the new highlights go beside it. The sidecar is a note like any
         # other and gets the same treatment one level down, so one the reader
         # has partly merged into survives too.
-        if _write_one(sidecar_for(target), mine) in ("written", "unchanged"):
+        beside = _write_one(sidecar_for(target), mine, book=book, known=known)
+        if beside in ("written", "unchanged"):
             return "kept"
         # The sidecar could not be written either, so nothing was saved and
         # the reader must not be told otherwise.
         return "blocked"
 
-    rewritten = rewrite(existing, mine)
+    rewritten = rewrite(existing, mine, book.tags)
     if rewritten == normalise(existing):
         return "unchanged"
     return _put(target, rewritten)

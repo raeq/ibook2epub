@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -25,7 +25,14 @@ from typing import Any
 
 from ..utils.policy import Assignment
 from .naming import MAX_FILENAME_BYTES, encode_name, filesystem_key, truncate_bytes
-from .noteformat import END_PATTERN, book_tags, first_start, normalise, readable
+from .noteformat import (
+    END_PATTERN,
+    book_tags,
+    first_start,
+    normalise,
+    quoted,
+    readable,
+)
 
 #: Highest ``" (n)"`` a note is numbered with before its book is reported as
 #: a collision. The planner's own limit, ``claims.MAX_SUFFIX``, which this
@@ -46,10 +53,12 @@ class Holding(Enum):
     ABSENT = "absent"
     #: A note of this book's: tagged for it, or holding its highlights.
     MINE = "mine"
-    #: A note tagged for another book.
+    #: A note of another book's: tagged for one this run knows, or naming
+    #: another edition in its frontmatter.
     ANOTHER = "another"
-    #: A note that says nothing either way: untagged, and holding none of
-    #: this book's highlights.
+    #: A note that says nothing either way: tagged for no book this run
+    #: knows, or not tagged at all, and holding none of this book's
+    #: highlights.
     UNCLAIMED = "unclaimed"
     #: A file this tool did not write.
     FOREIGN = "foreign"
@@ -69,6 +78,45 @@ class Held:
     tag: str | None = None
     #: Each quoted block of the generated region, as :func:`_words` has it.
     quoted: frozenset[str] = frozenset()
+    #: The ``identifier:`` lines of the frontmatter above the marker.
+    identifiers: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class Claimant:
+    """A book that wants a note, as a note already there is judged against."""
+
+    #: Every tag this book's note may carry: one for each of its asset ids.
+    tags: frozenset[str]
+    #: Its highlights, as :func:`_words` has them.
+    words: frozenset[str]
+    #: Its ``identifier:`` line, as :func:`~.noteformat.quoted` writes it,
+    #: in each form an older version could have written.
+    identifiers: frozenset[str]
+
+
+def claimant(found: list[dict[str, Any]], also: Iterable[str] = ()) -> Claimant:
+    """
+    Describe a book by its highlights, for judging the notes it may write.
+
+    :param found: The book's highlights.
+    :param also: More tags the book answers to: the library's other asset
+        ids for the same package, which have no highlights to say so.
+
+    :return: The book.
+    """
+    identifiers = set()
+    for item in found:
+        book = item.get("book")
+        for key in ("identifier", "declaredIdentifier"):
+            value = book.get(key) if isinstance(book, dict) else None
+            if value:
+                identifiers.add(f"identifier: {quoted(value)}")
+    return Claimant(
+        frozenset(book_tags(found)) | frozenset(also),
+        frozenset(_words(str(item.get("text", ""))) for item in found),
+        frozenset(identifiers),
+    )
 
 
 class Vault:
@@ -113,9 +161,19 @@ def _read(target: Path) -> Held:
     if not readable(target):
         return Held(Holding.UNREADABLE)
     try:
-        text = target.read_text(encoding="utf-8-sig")
+        return parse(target.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeDecodeError):
         return Held(Holding.UNREADABLE)
+
+
+def parse(text: str) -> Held:
+    """
+    Read a file's contents for whose note it is.
+
+    :param text: The file, decoded.
+
+    :return: What it says: FOREIGN when it carries no start marker.
+    """
     lines = normalise(text).split("\n")
     start = first_start(lines)
     if start is None:
@@ -129,8 +187,14 @@ def _read(target: Path) -> Held:
             if not lines[position - 1].startswith(">"):
                 blocks.append([])
             blocks[-1].append(line)
-    quoted = (_words("\n".join(block)) for block in blocks)
-    return Held(Holding.UNCLAIMED, marker.group(2), frozenset(filter(None, quoted)))
+    quoted_blocks = (_words("\n".join(block)) for block in blocks)
+    identifiers = (line.rstrip() for line in lines[:index])
+    return Held(
+        Holding.UNCLAIMED,
+        marker.group(2),
+        frozenset(filter(None, quoted_blocks)),
+        frozenset(line for line in identifiers if line.startswith("identifier: ")),
+    )
 
 
 def _words(text: str) -> str:
@@ -138,28 +202,43 @@ def _words(text: str) -> str:
     return UNQUOTED.sub("", text)
 
 
-def holding(held: Held, found: list[dict[str, Any]]) -> Holding:
+def holding(held: Held, book: Claimant, known: Collection[str] | None) -> Holding:
     """
-    Judge whose the file is, to the book whose highlights are *found*.
+    Judge whose the file is, to a book that wants its name.
 
-    The tag decides when there is one and the book's highlights name their
-    asset. A note an older version wrote carries none, and the only evidence
-    of whose it is is the highlights in it: it is the book's whose
-    highlights it holds. Holding none -- every one of them deleted in
-    Books -- it says nothing, and goes with its name, as it always did.
+    A tag says whose a note is only when it names a book this run knows of:
+    every book in Apple's library, highlighted or not, and every book with
+    highlights. Removing a book from Books and adding it again gives it a
+    new asset id, and its note, tagged for the old one, was refused on every
+    later run as another book's. A tag no book answers to says nothing,
+    and neither does a note an older version wrote with no tag at all.
+
+    Then the other evidence. A frontmatter naming another identifier is
+    another edition's note. A note holding the book's highlights is its
+    own. Holding none -- every one of them deleted in Books -- it says
+    nothing, and goes with its name, as it always did.
 
     :param held: The file, as :class:`Vault` read it.
-    :param found: The highlights of the book that wants its name.
+    :param book: The book that wants its name.
+    :param known: The tags of every book this run knows of, or None to take
+        every tag as a known book's.
 
     :return: What the file is, to that book.
     """
     if held.kind is not Holding.UNCLAIMED:
         return held.kind
-    tags = book_tags(found)
-    if held.tag is not None and tags:
-        return Holding.MINE if held.tag in tags else Holding.ANOTHER
-    words = {_words(str(item.get("text", ""))) for item in found}
-    return Holding.MINE if held.quoted & words else Holding.UNCLAIMED
+    if held.tag is not None and book.tags:
+        if held.tag in book.tags:
+            return Holding.MINE
+        if known is None or held.tag in known:
+            return Holding.ANOTHER
+    if (
+        held.identifiers
+        and book.identifiers
+        and not held.identifiers & book.identifiers
+    ):
+        return Holding.ANOTHER
+    return Holding.MINE if held.quoted & book.words else Holding.UNCLAIMED
 
 
 class _Names:
@@ -183,8 +262,9 @@ def note_names(
     named: Sequence[Assignment],
     *,
     suffix: bool,
-    highlights: Mapping[Path, list[dict[str, Any]]],
+    claimants: Mapping[Path, Claimant],
     vault: Vault,
+    known: Collection[str] | None,
 ) -> dict[Path, str | None]:
     """
     Give each book a note that no other book of the run writes.
@@ -213,13 +293,16 @@ def note_names(
     :param named: Every book of the run with a name, in the run's order,
         whether or not it has highlights.
     :param suffix: Whether a book that loses is numbered, rather than left out.
-    :param highlights: Each book's highlights; a book left out has none.
+    :param claimants: Each book with highlights; a book left out has none,
+        and writes nothing.
     :param vault: The notes already there.
+    :param known: The tags of every book this run knows of; see
+        :func:`holding`.
 
     :return: Each package's note name, or None when it has none.
     """
     names = _Names()
-    _reserve(named, highlights, vault, names, suffix=suffix)
+    _reserve(named, claimants, vault, names, suffix=suffix, known=known)
     for item in named:
         if item.package in names.given:
             continue
@@ -227,8 +310,8 @@ def note_names(
         own = Path(item.filename).stem + ".md"
         if not names.free(own):
             continue
-        found = highlights.get(item.package)
-        if suffix and found and _not_its(vault, own, found):
+        book = claimants.get(item.package)
+        if suffix and book is not None and _not_its(vault.held(own), book, known):
             continue
         names.give(item, own)
     for item in named:
@@ -245,11 +328,12 @@ def note_names(
 
 def _reserve(
     named: Sequence[Assignment],
-    mine: Mapping[Path, list[dict[str, Any]]],
+    claimants: Mapping[Path, Claimant],
     vault: Vault,
     names: _Names,
     *,
     suffix: bool,
+    known: Collection[str] | None,
 ) -> None:
     """
     Give each book with highlights the note already its own, if one is.
@@ -260,15 +344,16 @@ def _reserve(
     never goes to one book while another's tagged note is still to be found.
 
     :param named: Every book of the run with a name, in the run's order.
-    :param mine: Each book's highlights.
+    :param claimants: Each book with highlights.
     :param vault: The notes already there.
     :param names: The names given so far, added to in place.
     :param suffix: Whether a book's numbered names are its too.
+    :param known: The tags of every book this run knows of.
     """
     for tagged in (True, False):
         for item in named:
-            found = mine.get(item.package)
-            if not found or item.package in names.given:
+            book = claimants.get(item.package)
+            if book is None or item.package in names.given:
                 continue
             for name in _candidates(item, suffix=suffix):
                 listed = vault.spelling(name)
@@ -276,15 +361,15 @@ def _reserve(
                     continue
                 held = vault.held(listed)
                 if (held.tag is not None) == tagged and (
-                    holding(held, found) is Holding.MINE
+                    holding(held, book, known) is Holding.MINE
                 ):
                     names.give(item, listed)
                     break
 
 
-def _not_its(vault: Vault, name: str, found: list[dict[str, Any]]) -> bool:
-    """Whether the file at *name* is another book's note, or not a note."""
-    return holding(vault.held(name), found) in (Holding.ANOTHER, Holding.FOREIGN)
+def _not_its(held: Held, book: Claimant, known: Collection[str] | None) -> bool:
+    """Whether a file is another book's note, or not a note at all."""
+    return holding(held, book, known) in (Holding.ANOTHER, Holding.FOREIGN)
 
 
 def _candidates(item: Assignment, *, suffix: bool) -> list[str]:
