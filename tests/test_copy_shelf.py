@@ -98,6 +98,42 @@ class TestSuffixModeKeepsACopyAtItsFile:
         assert "orphan" not in again.out
         assert "collision" not in again.out
 
+    def test_a_copy_keeps_a_numbered_file(self, tmp_path, output_dir, capsys):
+        # A run narrowed to the second of two editions copied it as "(2)";
+        # a package of their name then took the plain name, and the first
+        # edition, claiming the next free name, took the second's file.
+        # formal/RerunPlanner.tla found it.
+        library = tmp_path / "lib"
+        for folder, identifier in (("a", "urn:uuid:1965"), ("b", "urn:uuid:ACE")):
+            zipped_book(
+                tmp_path, library / folder / f"Dune {folder}.epub", identifier, "Dune"
+            )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", *SUFFIX]
+        argv += ["--name-by", "author-title"]
+        run.main([*argv, "-q", "--match", "dune b"])
+        make_metadata_package(
+            library / "c",
+            "Dune c.epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier="urn:uuid:PKG",
+        )
+        run.main([*argv, "-q"])
+        capsys.readouterr()
+
+        run.main(argv)
+        again = capsys.readouterr()
+
+        held = {path.name: identifier_of(path) for path in output_dir.glob("*.epub")}
+        assert held["Frank Herbert - Dune (2).epub"] == "urn:uuid:ACE"
+        assert sorted(held.values()) == [
+            "urn:uuid:1965",
+            "urn:uuid:ACE",
+            "urn:uuid:PKG",
+        ]
+        assert "orphan" not in again.out
+        assert "Exported 0" in again.out
+
 
 class TestNoCopyThroughStillSeesTheCopies:
     """

@@ -8,6 +8,7 @@ the files that are taken along rather than converted.
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field, replace
@@ -22,6 +23,10 @@ from ..utils.policy import Assignment, NamingPolicy
 from .claims import Claims, claim_order, lost_to, shelf_names
 from .holders import identifier_on_shelf
 from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
+
+#: A name numbered by claims.suffixed, as a filesystem key: its stem, the
+#: number, and the extension.
+_NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
 
 
 class Names(NamedTuple):
@@ -100,12 +105,13 @@ def claim_copies(
             claiming.holders[filesystem_key(item.identity)] = item.filename
 
     # A copy whose name is on the shelf claims first, as a package does, and
-    # before it one whose own bytes are that file: two PDFs of one name have
-    # no identifier to tell them apart, and the first in sorted order took the
-    # other's file for its own copy and was never copied.
+    # before it one whose own bytes are on the shelf under its name or one of
+    # its numbers: two PDFs of one name have no identifier to tell them
+    # apart, and the first in sorted order took the other's file for its own
+    # copy and was never copied.
     order = sorted(
         claim_order([name for _, name in wanting], shelf_names(output_dir)),
-        key=lambda index: not claiming.owns(*wanting[index], policy),
+        key=lambda index: claiming.kept(*wanting[index]) is None,
     )
     claimed = {
         index: claiming.name(*wanting[index], policy.identity(wanting[index][1]))
@@ -132,20 +138,48 @@ class _Claiming:
     holders: dict[str, str] = field(default_factory=dict)
     #: Each copy's identifier, once read.
     read: dict[Path, str | None] = field(default_factory=dict)
+    #: The shelf's files by the key of their name less any " (n)", with n.
+    numbered: dict[str, list[tuple[int, Path]]] = field(default_factory=dict)
 
-    def owns(self, source: Path, name: str, policy: NamingPolicy) -> bool:
+    def __post_init__(self) -> None:
+        for key, found in self.existing.items():
+            numbered = _NUMBERED.fullmatch(key)
+            if numbered is None:
+                self.numbered.setdefault(key, []).append((1, found))
+            else:
+                plain = numbered["stem"] + (numbered["extension"] or "")
+                position = int(numbered["position"])
+                self.numbered.setdefault(plain, []).append((position, found))
+
+    def kept(self, source: Path, name: str) -> tuple[Path, str, str | None] | None:
         """
-        Report whether the shelf's file under *name* is *source*'s copy.
+        Find *source*'s own copy on the shelf, under its name or one of its numbers.
+
+        A copy already on the shelf keeps its file, and not only under the
+        plain name: in suffix mode the copy numbered " (2)" was pushed to
+        " (3)" by a package or an earlier copy arriving, found another
+        book's file under the next free number, or none, and was copied
+        again. formal/RerunPlanner.tla found it. Only the files under the
+        name's numbers are looked at, from an index of the shelf.
 
         :param source: The file to copy.
         :param name: The name it wants.
-        :param policy: The naming policy in force.
 
-        :return: True if a file is there and :meth:`_own` says it is its.
+        :return: The file, its identity and *source*'s identifier when it was
+            read; None when no file there is *source*'s.
         """
-        key = filesystem_key(policy.identity(name))
-        found = self.existing.get(key)
-        return found is not None and self._own(source, found, key)[0]
+        policy = self.setup.policy
+        wanted = filesystem_key(policy.identity(name))
+        numbers = self.numbered.get(wanted, [])
+        if self.setup.on_collision != SUFFIX:
+            numbers = [entry for entry in numbers if entry[0] == 1]
+        for _position, found in sorted(numbers):
+            # Whether another book wants it is a question about the name,
+            # not the number.
+            own, identifier = self._own(source, found, wanted)
+            if own:
+                return found, policy.identity(found.name), identifier
+        return None
 
     def name(self, source: Path, name: str, group: str) -> Assignment:
         """
@@ -157,18 +191,18 @@ class _Claiming:
 
         :return: Its assignment.
         """
-        key = filesystem_key(group)
-        found = self.existing.get(key)
-        if found is not None and key in self.holders:
-            own, identifier = self._own(source, found, key)
-            if own:
-                # Copied before the book now holding the name arrived: the
-                # copy keeps its file, whatever the mode, and that book moves
-                # on (placing.place) or is a collision. Settled only in _lost,
-                # this never ran under --on-collision suffix, where a free
-                # " (n)" always exists: the copy was written again under one
-                # and its file listed as an orphan.
-                return Assignment(source, found.name, group, identifier=identifier)
+        kept = self.kept(source, name)
+        if kept is not None:
+            # Copied before the book now holding the name arrived: the copy
+            # keeps its file, whatever the mode, and that book moves on
+            # (placing.place) or is a collision. Settled only in _lost, this
+            # never ran under --on-collision suffix, where a free " (n)"
+            # always exists: the copy was written again under one and its file
+            # listed as an orphan.
+            mine, identity, identifier = kept
+            self.claims.take(identity, 1, identity, mine.name)
+            self.holders.setdefault(filesystem_key(identity), mine.name)
+            return Assignment(source, mine.name, identity, identifier=identifier)
         taken = _claim(self.claims, name, group, setup=self.setup)
         if taken is None:
             return self._lost(source, group)
@@ -193,20 +227,18 @@ class _Claiming:
 
     def _lost(self, source: Path, group: str) -> Assignment:
         """
-        Settle a copy that lost its name: its own file under it, or a collision.
+        Settle a copy that lost its name, which is a collision.
 
         :param source: The file to copy.
         :param group: The identity of the name it wanted.
 
-        :return: The copy at its own file, or nameless with the reason.
+        :return: The copy, nameless, with the reason.
         """
         key = filesystem_key(group)
         found = self.existing.get(key)
-        identifier = None
-        if found is not None:
-            own, identifier = self._own(source, found, key)
-            if own:
-                return Assignment(source, found.name, group, identifier=identifier)
+        # The file under the name is not its own (kept): read what this book
+        # is, for the reason.
+        identifier = None if found is None else self._own(source, found, key)[1]
         return Assignment(
             source,
             "",
