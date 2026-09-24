@@ -96,7 +96,9 @@ def _declaration(package: Path) -> bytes | None:
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
+        raise UnreadableEncryptionError(
+            f"could not read {ENCRYPTION_PATH}: {printable(exc.strerror or str(exc))}"
+        ) from exc
     # Only absence answers "no declaration". A directory or a FIFO here was
     # taken for no file, and so for no protection, where the symlink was
     # refused: every state but a plain file fails closed, as that one does.
@@ -113,7 +115,9 @@ def _declaration(package: Path) -> bytes | None:
             # same gap.
             data = handle.read(MAX_ENCRYPTION_BYTES + 1)
     except OSError as exc:
-        raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
+        raise UnreadableEncryptionError(
+            f"could not read {ENCRYPTION_PATH}: {printable(exc.strerror or str(exc))}"
+        ) from exc
     if len(data) > MAX_ENCRYPTION_BYTES:
         raise UnreadableEncryptionError(
             f"{ENCRYPTION_PATH} is implausibly large (grew while read)"
@@ -217,8 +221,10 @@ def has_drm(package: Path) -> tuple[bool, str | None]:
         sinf.lstat()
     except FileNotFoundError:
         pass
-    except OSError:
-        return True, f"{SINF_PATH} could not be read"
+    except OSError as exc:
+        return True, (
+            f"{SINF_PATH} could not be read: {printable(exc.strerror or str(exc))}"
+        )
     else:
         return True, "FairPlay protected (META-INF/sinf.xml)"
 

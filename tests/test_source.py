@@ -191,10 +191,24 @@ class TestAMarkerThatIsNotAFileFailsClosed:
 
         with pytest.raises(source.UnreadableEncryptionError):
             source.encryption_algorithms(package)
-        assert source.has_drm(package) == (
-            True,
-            f"{source.SINF_PATH} could not be read",
-        )
+        drm, reason = source.has_drm(package)
+        assert drm and reason is not None
+        assert reason.startswith(f"{source.SINF_PATH} could not be read")
+
+    def test_the_reason_it_could_not_be_looked_at_is_given(self, tmp_path, monkeypatch):
+        # "could not read" alone left a permission or I/O problem undiagnosable.
+        package = make_package(tmp_path, "Odd.epub")
+        meta_inf = package / "META-INF"
+        for child in meta_inf.iterdir():
+            child.unlink()
+        meta_inf.rmdir()
+        meta_inf.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setattr(source, "resolve", lambda root, relative: root / relative)
+
+        with pytest.raises(source.UnreadableEncryptionError, match="Not a directory"):
+            source.encryption_algorithms(package)
+        drm, reason = source.has_drm(package)
+        assert drm and reason is not None and "Not a directory" in reason
 
     @pytest.mark.parametrize("marker", [source.ENCRYPTION_PATH, source.SINF_PATH])
     def test_the_book_is_not_exported(self, tmp_path, output_dir, marker):
