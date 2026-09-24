@@ -199,8 +199,8 @@ class TestACoverThatIsNotWrittenIsNamedEscaped:
     """
 
     @staticmethod
-    def _hostile(library: Path, cover_href: str | None) -> Path:
-        package = make_metadata_package(library, f"{ERASE}Evil.epub", title="x")
+    def _hostile(source: Path, cover_href: str | None) -> Path:
+        package = make_metadata_package(source, f"{ERASE}Evil.epub", title="x")
         if cover_href is not None:
             opf = package / "OEBPS" / "content.opf"
             item = (
