@@ -7,11 +7,15 @@ the same ``--min-free`` floor, and a book it could not refresh is a failure
 the exit code reports, as a book that could not convert is. It skipped the
 floor and exited 0 whatever went wrong, so a scheduled refresh on a full SD
 card rebuilt books onto it and reported success after ``ENOSPC``.
+
+A dry refresh reads what the real one reads, so it predicts the real one's
+exit code rather than promising success before looking.
 """
 
 # Test names describe the behaviour under test; separate docstrings would only
 # restate them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
+# pylint: disable=too-few-public-methods
 
 import errno
 from pathlib import Path
@@ -20,6 +24,7 @@ from zipfile import ZipFile
 import pytest
 
 from epubconvert.collect import annotations
+from epubconvert.collect.coredata import ContainerPermissionError
 from epubconvert.run import annotating, convert, run
 from epubconvert.utils import exits
 from tests.conftest import make_package
@@ -123,3 +128,26 @@ class TestARefreshThatFailsSaysSo:
 
         assert code == exits.FAILED
         assert detached.is_file()
+
+
+class TestADryRefreshPredictsTheRealOne:
+    def test_a_container_it_may_not_read_is_reported(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # The dry run returned before reading anything and exited 0, saying
+        # the annotations "were read"; the real run read them and exited 8.
+        make_package(tmp_path / "lib", "Old.epub")
+        attempts = []
+
+        def refused(**_kwargs):
+            attempts.append(1)
+            raise ContainerPermissionError("Operation not permitted")
+
+        monkeypatch.setattr(annotating, "collect_annotations", refused)
+        argv = ["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-ae", "-ar"]
+
+        dry = run.main([*argv, "-d"])
+        real = run.main(argv)
+
+        assert dry == real == exits.NO_PERMISSION
+        assert len(attempts) == 2

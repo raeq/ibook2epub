@@ -240,13 +240,6 @@ def apply_annotations(
 
     :return: A process exit code.
     """
-    # Guarded here rather than at the call sites. It was checked on the route
-    # through annotations_after_export and not on the -ar route, so
-    # "--dry-run -ae -ar" rewrote every archive on the shelf.
-    if args.dry_run:
-        logger.info("Dry run: annotations were read but nothing was written.")
-        return exits.SUCCESS
-
     try:
         found = gather_annotations(args, policy, required=not converted)
     except ContainerUnavailableError as exc:
@@ -260,6 +253,16 @@ def apply_annotations(
         # NO_SOURCE here told a scheduled run the source directory was missing
         # when it had been found and used.
         return exits.SUCCESS if converted else exits.NO_SOURCE
+
+    # Guarded here rather than at the call sites. It was checked on the route
+    # through annotations_after_export and not on the -ar route, so
+    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
+    # read rather than before it: returning first, the dry run said the
+    # annotations "were read" having read nothing, and exited 0 where the
+    # real run was refused the container and exited 8. -ao -d reads first.
+    if args.dry_run:
+        logger.info("Dry run: annotations were read but nothing was written.")
+        return exits.SUCCESS
 
     # Named once, here, and passed to everything that needs it. Under a
     # metadata policy naming re-parses every package document, and computing it
