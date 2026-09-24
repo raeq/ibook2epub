@@ -169,11 +169,63 @@ def digest_of(generated: str) -> str:
     lone surrogates an undecodable name carries. A second encoder here would
     grow the rule's exception list, which is what makes such a rule rot.
 
+    Each line's trailing spaces and tabs are left out. Most editors trim
+    them on save, so a digest over them made a note the reader had only
+    opened and written beneath look edited, and every later highlight went
+    into a sidecar.
+
     :param generated: The region between the markers.
 
     :return: The digest, truncated.
     """
-    return hashlib.sha256(encode_name(generated)).hexdigest()[:DIGEST_LENGTH]
+    return _sha(trimmed(generated))
+
+
+def _sha(text: str) -> str:
+    """Digest a string, truncated to :data:`DIGEST_LENGTH`."""
+    return hashlib.sha256(encode_name(text)).hexdigest()[:DIGEST_LENGTH]
+
+
+def trimmed(text: str) -> str:
+    """Strip the trailing spaces and tabs of every line, as an editor does."""
+    return "\n".join(line.rstrip(TRAILING) for line in text.split("\n"))
+
+
+#: What an editor trims from the end of a line, and so what the digest and
+#: the generated region leave out.
+TRAILING = " \t"
+
+#: The lines an older version ended in a space of its own: a blank line in a
+#: highlight, ``"> "``, and a note's blank first line, ``"**Note:** "``. Put
+#: back to check that version's digest once an editor has trimmed them.
+WIDENED = (
+    (re.compile(r"^>$", re.MULTILINE), "> "),
+    (re.compile(r"^\*\*Note:\*\*$", re.MULTILINE), "**Note:** "),
+)
+
+
+def untouched(generated: str, digest: str) -> bool:
+    """
+    Whether a region is as its digest says it was written.
+
+    By this version, whose digest leaves out trailing white space, or by an
+    older one, whose digest covered it: as the region stands, or with the
+    spaces that version wrote itself put back, since an editor may since
+    have trimmed them. Spaces that came with a highlight's own text cannot
+    be put back, so an older note holding some, once trimmed, still reads
+    as edited.
+
+    :param generated: The region between the markers.
+    :param digest: The digest the start marker carries.
+
+    :return: True when no reader has changed the region.
+    """
+    if digest in (digest_of(generated), _sha(generated)):
+        return True
+    widened = trimmed(generated)
+    for pattern, spaced in WIDENED:
+        widened = pattern.sub(spaced, widened)
+    return digest == _sha(widened)
 
 
 def readable(target: Path) -> bool:
@@ -272,7 +324,7 @@ def is_ours(existing: str) -> bool:
     :return: True when the generated region is exactly as it was written.
     """
     held = split(existing)
-    return held is not None and digest_of(held.generated) == held.digest
+    return held is not None and untouched(held.generated, held.digest)
 
 
 def quoted(value: object) -> str:

@@ -47,13 +47,14 @@ from .noteformat import (
     END_PATTERN,
     START_PATTERN,
     book_tags,
-    digest_of,
     is_ours,
     normalise,
     quoted,
     readable,
     split,
     start_marker,
+    trimmed,
+    untouched,
     wrote_it,
 )
 from .notenames import Claimant, Holding, Vault, claimant, holding, note_names, parse
@@ -281,7 +282,10 @@ def body(found: list[dict[str, Any]]) -> str:
             # sits, so that one still applies.
             lines.append(f"**Note:** {_unforged(first)}")
             lines.extend(_escape(line) for line in rest)
-    return "\n".join(lines) + "\n"
+    # No line ends in white space, so an editor that trims it on save leaves
+    # the region as written: "> " for a blank line in a highlight and
+    # "**Note:** " before a note's blank first line each did.
+    return trimmed("\n".join(lines)) + "\n"
 
 
 def sidecar_for(target: Path) -> Path:
@@ -368,7 +372,11 @@ def rewrite(
     if held is None:
         raise ValueError("not a note this tool wrote")
     generated = body(found)
-    if generated == held.generated and digest_of(generated) == held.digest:
+    # Compared as an editor may have left it: a note an older version wrote
+    # with trailing spaces is unchanged when only those spaces differ.
+    if trimmed(generated) == trimmed(held.generated) and untouched(
+        held.generated, held.digest
+    ):
         return normalise(existing)
     own = book_tags(found)
     book = held.book

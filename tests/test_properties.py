@@ -188,6 +188,33 @@ def test_indentation_that_opens_code_is_kept_as_columns_of_text(lead, rest):
         assert escaped.startswith(lead)
 
 
+# ---------------------------------------------------------------- notes.compose
+
+#: Highlights and notes of any text, blank lines and trailing spaces included.
+HIGHLIGHTS = st.lists(
+    st.fixed_dictionaries(
+        {"id": st.just("x"), "text": ANY_TEXT, "book": st.just({"assetId": "A"})},
+        optional={"note": ANY_TEXT, "chapter": ANY_TEXT},
+    ),
+    min_size=1,
+    max_size=4,
+)
+
+
+@given(HIGHLIGHTS)
+def test_a_note_survives_an_editor_trimming_trailing_white_space(found):
+    note = notes.compose(found)
+    trimmed = "\n".join(line.rstrip(" \t") for line in note.split("\n"))
+
+    held = noteformat.split(note)
+    assert held is not None
+    assert held.generated == notes.body(found)
+    assert noteformat.is_ours(note) is True
+    assert notes.rewrite(note, found) == noteformat.normalise(note)
+    assert noteformat.is_ours(trimmed) is True
+    assert notes.rewrite(trimmed, found) == noteformat.normalise(trimmed)
+
+
 # ------------------------------------------------------------- noteformat.quoted
 
 
