@@ -405,6 +405,10 @@ Dry run — list what *would* happen without writing any files:
 ibook2epub -s "$HOME/iBooks/" -o "$HOME/Downloads/epubs/" -d
 ```
 
+A dry run refuses what the real run would refuse, with the same exit code: a
+shelf it cannot write, a volume below `--min-free`, a highlights file it
+cannot write.
+
 Verbose run, also written to a log file:
 
 ```bash
@@ -690,9 +694,14 @@ zipped book iCloud has evicted, and it takes `--skip-incomplete` and `-w` as a
 conversion does.
 
 `-ad` and `-ao` write to standard output when given no filename, so
-`ibook2epub -ao \| jq '.annotations[].text'` works. Everything else then goes to
+`ibook2epub -ao | jq '.annotations[].text'` works. Everything else then goes to
 standard error, because a run summary in the middle of the JSON would make it
 unparsable.
+
+A file given to `-ad` or `-ao` is judged before anything is read or
+converted, in a dry run too. A directory that is not there or cannot be
+written, or a file already there that is not an annotation export, stops the
+run with exit code 5 and says why, rather than after every book is converted.
 
 **On macOS this needs Full Disk Access.** The databases live inside Apple's
 container. Without it, `-ao` and `-ar`, where the highlights are the whole run,
@@ -1138,10 +1147,14 @@ not let this run look. Every failure prints its reason on stderr as well.
 `5` also covers a report that could not be written. When `--list`, `--verify`
 or a run's summary cannot be written to standard output — a full disk behind
 `> report.txt`, say — the run says so on stderr and exits `5` rather than `0`,
-so a script does not take a lost report for a clean run. A reader that closes
-the pipe early, as `| head` does, has seen what it wanted and changes no exit
-code. Any other code a run has earned leads: `--verify` still exits `7` for a
-damaged shelf.
+so a script does not take a lost report for a clean run. The same goes for a
+standard output closed before the run started (`>&-`), and for the document
+`-ao -` or `--library-export -` writes there. A reader that closes the pipe
+early, as `| head` does, has seen what it wanted and changes no exit code, and
+so does a standard error that is closed. Any other code a run has earned
+leads: `--verify` still exits `7` for a damaged shelf. A `--log-file` that
+cannot be opened, or stops taking writes partway, is said once on stderr and
+changes no exit code: it is a copy of what the console shows.
 
 `1` also covers a run that could not proceed at all — for example when the
 output volume is below `--min-free`. Nothing is counted as *failed* in that
