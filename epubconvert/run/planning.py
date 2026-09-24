@@ -46,7 +46,7 @@ if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
 #: comparison from passing the type checker.
 Status = Literal["pending", "exported", "collision", "drm", "incomplete", "orphan"]
 
-#: The :class:`~epubconvert.convert.Report` fields the outcome table may bump.
+#: The :class:`~epubconvert.run.convert.Report` fields the outcome table may bump.
 ReportField = Literal["skipped", "collisions", "drm", "incomplete"]
 
 #: Decision statuses. Each constant's value is what a user sees.
@@ -836,7 +836,7 @@ def _source_is_newer(package: Path, exported: Path) -> bool:
 class _Outcome:
     """How one non-pending status is counted and reported."""
 
-    #: Name of the :class:`~epubconvert.convert.Report` field to increment.
+    #: Name of the :class:`~epubconvert.run.convert.Report` field to increment.
     #: Narrowed to a Literal because the table drives a setattr, which turned a
     #: type-checked ``report.drm += 1`` into a string the checker cannot see:
     #: renaming a Report field would have broken this at runtime with mypy,

@@ -536,13 +536,18 @@ def _resolve(base: str, href: str) -> str:
     in place produces a path no archive member ever matches, which would make
     ``--validate`` reject a perfectly good book.
 
+    A query is not part of the path either. Left on, ``ch1.xhtml?x=1`` was
+    looked for as a member of that name and reported missing. It is split off
+    before percent-decoding, so a member whose name holds a ``?`` -- written
+    ``%3F`` in the href -- is still found.
+
     :param base: Archive path of the package document.
     :param href: The href to resolve.
 
     :return: The archive path the href points at.
     """
     target, _ = urldefrag(href)
-    target = unquote(target)
+    target = unquote(target.partition("?")[0])
     if not target:
         return target
     directory = posixpath.dirname(base)

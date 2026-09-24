@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import posixpath
+import re
 import stat
 from pathlib import Path
 from typing import BinaryIO
@@ -37,7 +38,8 @@ from typing import BinaryIO
 #: Prefixes that name a resource outside the archive rather than a member of
 #: it. The epub specification allows a remote manifest item, and resolving one
 #: as an archive path would report a perfectly good book as missing a file.
-REMOTE_PREFIXES = ("http://", "https://", "ftp://", "ftps://", "data:", "mailto:")
+#: A URL scheme and its colon (RFC 3986, section 3.1).
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 
 
 def is_remote(href: str) -> bool:
@@ -47,11 +49,19 @@ def is_remote(href: str) -> bool:
     A remote resource is legitimate. It simply is not expected to be inside the
     archive, so it must not be looked for there.
 
+    Any scheme makes an href absolute, not only the handful once listed here:
+    a relative reference's first segment cannot contain ":" (RFC 3986, section
+    4.2), which is why a member named ``a:b`` has to be written ``./a:b``. The
+    list missed ``kindle:embed:0002?mime=image/jpg``, ``tel:`` and ``urn:``,
+    each of which was joined onto the package directory as a member name, so
+    --validate rejected a sound book and it was never written. An href
+    starting ``//`` names another host.
+
     :param href: The manifest href to test.
 
-    :return: True if the href is a remote or inline URL.
+    :return: True if the href is a URL rather than a path inside the archive.
     """
-    return href.lower().startswith(REMOTE_PREFIXES)
+    return href.startswith("//") or _SCHEME.match(href) is not None
 
 
 def escapes(path: str) -> bool:
