@@ -720,6 +720,7 @@ def _gather(
             reason, advice = _occupied(target, old.name, theirs=theirs)
         elif len(strays) > 1:
             reason = "another note is the same book's"
+            advice = f"Merge them into {printable(name)} yourself and rerun."
         elif filesystem_key(old.name) in others:
             reason = "another book is given that name"
         elif _present(sidecar):

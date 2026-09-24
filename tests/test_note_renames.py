@@ -239,7 +239,9 @@ class TestANoteThatCannotBeMoved:
         assert _write(vault, RENAMED, "x", "y") == exits.FAILED
 
         assert _names(vault) == ["Dune Again.md", "Dune.md"]
-        assert "Dune Again.md, Dune.md alone" in self._reported(capsys)
+        reported = self._reported(capsys)
+        assert "Dune Again.md, Dune.md alone" in reported
+        assert f"Merge them into {RENAMED}.md yourself" in reported
 
     def test_nor_when_the_move_fails(
         self,
