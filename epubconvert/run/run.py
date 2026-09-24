@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import glob
 import shlex
 import sys
 from collections.abc import Sequence
@@ -43,6 +44,7 @@ from ..export.naming import (
 from ..utils import app_logger, exits
 from ..utils.app_logger import logger
 from ..utils.defaults import SOURCE_CANDIDATES
+from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
 from .annotating import (
     annotations_after_export,
@@ -61,6 +63,7 @@ from .convert import (
     export_planned,
     filter_packages,
     format_summary,
+    matches_pattern,
     output_lock,
     sweep_partials,
 )
@@ -225,16 +228,82 @@ def _run_verify(args: argparse.Namespace) -> int:
         return 0
     print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
     if damaged:
-        # Naming them matters: --force alone re-exports the whole library, and
-        # the default cap then picks its subset at random, so following that
-        # advice literally could leave every damaged book untouched and still
-        # report success.
-        print("Re-export each damaged book, for example:")
-        for name in broken[:3]:
-            print(f"  ibook2epub --match {shlex.quote(Path(name).stem)} --force")
-        if len(broken) > 3:
-            print(f"  ...and {len(broken) - 3} more")
+        _advise_repair(args, broken)
     return exits.DAMAGED if damaged else exits.SUCCESS
+
+
+def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
+    """
+    Tell the reader how to replace each damaged archive, in words that work.
+
+    Naming them matters: ``--force`` alone re-exports the whole library, and
+    the default cap then picks its subset at random, so following that advice
+    literally could leave every damaged book untouched and still report
+    success.
+
+    Only an archive named exactly as a package in the library is sent to
+    ``--match``, with a pattern checked against the rule that will read it.
+    The stem used to be printed for every file, and ``--match`` reads ``?``,
+    ``[`` and ``*`` as a glob against the whole package name, so ``Who Moved
+    My Cheese?`` and ``Foundation [Asimov]`` matched nothing and the run it
+    advised exited 0 having repaired nothing. A file copied through from the
+    library, or named by a suffix or a naming option, is no package's name,
+    and ``--force`` does not copy a file again: it is moved aside instead,
+    and any run puts back a book missing from the shelf.
+
+    :param args: Parsed command line arguments.
+    :param broken: The damaged archives' names.
+    """
+    # Read only now, and only if it is there: --verify checks a shelf on a
+    # machine that may never have had a library.
+    packages = collect_package_dirs(args.source_dir) if args.source_dir.is_dir() else []
+    patterns = {name: _repair_pattern(name, packages) for name in broken}
+    forced = [name for name in broken if patterns[name] is not None]
+    aside = [name for name in broken if patterns[name] is None]
+    # Through printable as well as shlex.quote: quoting makes a name one shell
+    # word, and does nothing about the ESC and CR that rewrite the line.
+    if forced:
+        print("Re-export each damaged book, for example:")
+        for name in forced[:3]:
+            quoted = printable(shlex.quote(patterns[name] or ""))
+            print(f"  ibook2epub --match {quoted} --force")
+        if len(forced) > 3:
+            print(f"  ...and {len(forced) - 3} more")
+    if aside:
+        print(
+            f"Move each of these out of {args.output_dir} and rerun as before: "
+            "no package in the library has its name, so --force cannot reach "
+            "it, and a run puts back a book missing from the shelf."
+        )
+        for name in aside[:3]:
+            print(f"  {printable(name)}")
+        if len(aside) > 3:
+            print(f"  ...and {len(aside) - 3} more")
+
+
+def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
+    """
+    Find a ``--match`` pattern that selects exactly the packages named *name*.
+
+    :param name: A damaged archive's name on the shelf.
+    :param packages: Every package in the library.
+
+    :return: The plainest pattern that selects them and nothing else, or None
+        when no package has that name.
+    """
+    wanted = {package for package in packages if package.name.lower() == name.lower()}
+    if not wanted:
+        return None
+    stem, suffix = Path(name).stem, Path(name).suffix
+    # The stem reads best but matches anywhere, so "Plain" finds Complain too.
+    # The escaped name is anchored only if escaping gave it a bracket.
+    for pattern in (stem, glob.escape(name)):
+        chosen = {p for p in packages if matches_pattern(p.name, pattern)}
+        if chosen == wanted:
+            return pattern
+    # The bracketed dot makes it a glob, which matches the whole name, and
+    # every other character stands for itself: this selects exactly *wanted*.
+    return f"{glob.escape(stem)}[.]{suffix[1:]}"
 
 
 def _plan_options(args: argparse.Namespace) -> PlanOptions:
@@ -348,21 +417,24 @@ def _run_export(
         ),
     )
 
-    # A dry run writes nothing, so it needs no lock and must not create one.
-    lock = nullcontext(False) if args.dry_run else output_lock(args.output_dir)
-    with lock as locked:
-        # Only with real exclusivity. Unlocked, another run's in-flight
-        # temporary looks exactly like an abandoned one, and deleting it makes
-        # that run's closing replace fail.
-        if locked and not args.dry_run:
-            sweep_partials(args.output_dir)
-
-        # Planned exactly once, and inside the lock. Both the work list and
-        # the count of what is left come from this one plan, so they cannot
-        # describe different libraries; planning outside the lock would let a
-        # concurrent run move the output directory underneath the decisions.
-        pending_before = 0
-        try:
+    # Planned exactly once, and inside the lock. Both the work list and the
+    # count of what is left come from this one plan, so they cannot describe
+    # different libraries; planning outside the lock would let a concurrent
+    # run move the output directory underneath the decisions.
+    pending_before = 0
+    # The guard covers taking the lock and the sweep too. They were outside
+    # it, and a Ctrl-C there escaped to main's last resort: 130, but no
+    # summary, and nothing on stdout at all under -q.
+    try:
+        # A dry run writes nothing, so it needs no lock and must not create
+        # one.
+        lock = nullcontext(False) if args.dry_run else output_lock(args.output_dir)
+        with lock as locked:
+            # Only with real exclusivity. Unlocked, another run's in-flight
+            # temporary looks exactly like an abandoned one, and deleting it
+            # makes that run's closing replace fail.
+            if locked and not args.dry_run:
+                sweep_partials(args.output_dir)
             if not args.dry_run:
                 copy_through_all(
                     copies,
@@ -395,14 +467,14 @@ def _run_export(
                     options=options,
                 )
             )
-        except KeyboardInterrupt:
-            # Stopping is a normal way to end a long run: every finished book
-            # is already complete and atomically in place, so a rerun simply
-            # continues.
-            report.interrupted = True
-            logger.warning(
-                "Interrupted; %d book(s) exported before stopping.", report.exported
-            )
+    except KeyboardInterrupt:
+        # Stopping is a normal way to end a long run: every finished book is
+        # already complete and atomically in place, so a rerun simply
+        # continues.
+        report.interrupted = True
+        logger.warning(
+            "Interrupted; %d book(s) exported before stopping.", report.exported
+        )
 
     # A dry run exports nothing, so what it would export is what it takes
     # off: counting only exports said "-m 0 -d" would leave every book it
@@ -613,16 +685,27 @@ def _after_export(
     :param copyable: The library's already-zipped books and PDFs.
 
     :return: What :func:`~epubconvert.run.annotating.annotations_after_export`
-        returns, or None when the run was stopped.
+        returns, or None when the run was stopped, before this or during it.
+        Stopped during it, *report* is marked interrupted, so the summary
+        still says what the run finished and the run still exits 130.
     """
     if not report.interrupted:
-        return annotations_after_export(args, policy, named, found, copyable=copyable)
+        try:
+            return annotations_after_export(
+                args, policy, named, found, copyable=copyable
+            )
+        except KeyboardInterrupt:
+            # A Ctrl-C while the detached file or the vault was written
+            # escaped to main's last resort, which prints no summary: the
+            # books this run had finished went unreported, on stdout and in
+            # the log file. Each write is atomic, so nothing is half-written.
+            report.interrupted = True
     # Said only when there was somewhere else for them to go. Under -ae alone
     # every book converted before the Ctrl-C already carries its own.
     elsewhere = args.annotations_detached or args.annotations_refresh
     if found is not None and elsewhere and not args.dry_run:
         logger.warning(
-            "Your highlights were not written: the run was interrupted first. "
+            "Your highlights were not written: the run was interrupted. "
             "Rerun to write them."
         )
     return None

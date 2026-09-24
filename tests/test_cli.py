@@ -360,6 +360,9 @@ class TestAReportIgnoresNoTypedFlag:
             ["--portable-names", "romanize"],
             ["--name-by", "author-title"],
             ["--on-collision", "suffix"],
+            # It writes nothing either way, and it reads no annotations.
+            ["-d"],
+            ["-an"],
         ],
     )
     def test_verify_refuses_what_it_never_consults(self, other):
@@ -384,6 +387,8 @@ class TestAReportIgnoresNoTypedFlag:
             ["-m", "1"],
             ["--min-free", "1"],
             ["--no-shuffle"],
+            ["-d"],
+            ["-an"],
         ],
     )
     def test_list_refuses_what_it_never_consults(self, other):

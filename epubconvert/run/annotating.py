@@ -261,15 +261,9 @@ def apply_annotations(
         # when it had been found and used.
         return exits.SUCCESS if converted else exits.NO_SOURCE
 
-    # Guarded here rather than at the call sites. It was checked on the route
-    # through annotations_after_export and not on the -ar route, so
-    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
-    # read rather than before it: returning first, the dry run said the
-    # annotations "were read" having read nothing, and exited 0 where the
-    # real run was refused the container and exited 8. -ao -d reads first.
-    if args.dry_run:
-        logger.info("Dry run: annotations were read but nothing was written.")
-        return exits.SUCCESS
+    stopped = _before_writing(args)
+    if stopped is not None:
+        return stopped
 
     # Named once, here, and passed to everything that needs it. Under a
     # metadata policy naming re-parses every package document, and computing it
@@ -303,6 +297,35 @@ def apply_annotations(
         # conversion run uses too: see run._outcome.
         return code if code != exits.SUCCESS else written
     return code
+
+
+def _before_writing(args: argparse.Namespace) -> int | None:
+    """
+    Decide whether a refresh that has read its annotations stops short.
+
+    :param args: Parsed command line arguments.
+
+    :return: The exit code to stop with, or None to go on and write.
+    """
+    # A glob over a missing directory yields nothing, which read as a clean
+    # run over an empty shelf: -ar with a typo in -o said it had refreshed
+    # every book it found, having looked at none. Checked before the dry run
+    # returns, for the same reason as the read: it returned first, and "-d"
+    # exited 0 over the typo the real run exited 5 for.
+    if args.annotations_embedded and not args.output_dir.is_dir():
+        logger.critical("Output directory does not exist: %s", args.output_dir)
+        return exits.NO_OUTPUT
+
+    # Guarded here rather than at the call sites. It was checked on the route
+    # through annotations_after_export and not on the -ar route, so
+    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
+    # read rather than before it: returning first, the dry run said the
+    # annotations "were read" having read nothing, and exited 0 where the
+    # real run was refused the container and exited 8. -ao -d reads first.
+    if args.dry_run:
+        logger.info("Dry run: annotations were read but nothing was written.")
+        return exits.SUCCESS
+    return None
 
 
 def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
@@ -347,13 +370,6 @@ def _embed_in_shelf(
 
     :return: A process exit code.
     """
-    # A glob over a missing directory yields nothing, which read as a clean
-    # run over an empty shelf: -ar with a typo in -o said it had refreshed
-    # every book it found, having looked at none.
-    if not args.output_dir.is_dir():
-        logger.critical("Output directory does not exist: %s", args.output_dir)
-        return exits.NO_OUTPUT
-
     # Quiet after a conversion, which embedded from the same index and has
     # already said which annotations it could not place.
     index = index_by_package(

@@ -12,10 +12,13 @@ source directory can go unmentioned.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import shlex
+from pathlib import Path
+
 import pytest
 
 from epubconvert.run import cli, run
-from tests.conftest import make_package
+from tests.conftest import make_metadata_package, make_package
 
 
 class TestAdviceThatWorks:
@@ -53,6 +56,100 @@ class TestAdviceThatWorks:
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "2", "-f"])
 
         assert "--force" in capsys.readouterr().err
+
+
+class TestVerifyAdviceRepairsTheBook:
+    """
+    Following ``--verify``'s advice as printed has to leave the shelf sound.
+
+    It printed ``--match <stem> --force`` for every damaged file. ``--match``
+    reads ``?``, ``[`` and ``*`` as a glob against the whole package name, so
+    ``Who Moved My Cheese?`` and ``Foundation [Asimov]`` matched nothing and
+    the run exited 0 having repaired nothing. A file copied through from the
+    library, or named with a suffix, is no package's name at all: ``--match``
+    finds nothing, and the copy is skipped because its name is taken.
+    """
+
+    @staticmethod
+    def _damage_and_verify(
+        library: Path,
+        output_dir: Path,
+        damaged: str,
+        capsys: pytest.CaptureFixture[str],
+        *flags: str,
+    ) -> tuple[list[str], str]:
+        base = ["-s", str(library), "-o", str(output_dir)]
+        run.main([*base, *flags, "-m", "0", "-q"])
+        (output_dir / damaged).write_bytes(b"CORRUPTED")
+        capsys.readouterr()
+        assert run.main([*base, "--verify", "-q"]) == 7
+        return base, capsys.readouterr().out
+
+    @staticmethod
+    def _book(library: Path, name: str) -> Path:
+        return make_metadata_package(library, name, title="Title")
+
+    @pytest.mark.parametrize(
+        "title",
+        ["Who Moved My Cheese?.epub", "Foundation [Asimov].epub", "Plain.epub"],
+    )
+    def test_the_printed_command_re_exports_that_book_alone(
+        self, tmp_path, output_dir, capsys, title
+    ):
+        library = tmp_path / "lib"
+        # Complain.epub holds "Plain" and "Plain.epub": a substring pattern
+        # would re-export it too.
+        for name in (title, "Complain.epub", "Other [Asimov].epub"):
+            self._book(library, name)
+        base, advice = self._damage_and_verify(library, output_dir, title, capsys)
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        capsys.readouterr()
+        run.main([*shlex.split(command)[1:], *base[:4], "-q"])
+
+        assert "Exported 1 epub file(s)" in capsys.readouterr().out
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_a_book_copied_through_is_moved_aside_not_forced(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        self._book(library, "Book.epub")
+        # A sound zipped book, made the way the tool makes one.
+        staging = tmp_path / "staging"
+        self._book(staging / "lib", "Zipped.epub")
+        run.main(["-s", str(staging / "lib"), "-o", str(staging / "out"), "-q"])
+        (staging / "out" / "Zipped.epub").rename(library / "Zipped.epub")
+        base, advice = self._damage_and_verify(
+            library, output_dir, "Zipped.epub", capsys
+        )
+
+        assert "--match" not in advice
+        assert "\n  Zipped.epub\n" in advice
+        (output_dir / "Zipped.epub").unlink()
+        run.main([*base, "-q"])
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_a_suffixed_name_is_moved_aside_not_forced(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        self._book(library / "one", "Dune.epub")
+        self._book(library / "two", "Dune.epub")
+        flags = ("--on-collision", "suffix")
+        base, advice = self._damage_and_verify(
+            library, output_dir, "Dune (2).epub", capsys, *flags
+        )
+
+        assert "--match" not in advice
+        assert "\n  Dune (2).epub\n" in advice
+        (output_dir / "Dune (2).epub").unlink()
+        run.main([*base, *flags, "-q"])
+        assert run.main([*base, "--verify", "-q"]) == 0
 
 
 class TestTheCapTeachesTheWayOut:

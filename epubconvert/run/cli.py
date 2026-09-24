@@ -67,6 +67,17 @@ CONVERSION_ONLY = (
 #: output volume, and refusing --min-free there left it rebuilding onto a
 #: volume already below the floor with no way to say otherwise.
 REFRESH_WRITES = frozenset({"min_free"})
+#: What neither report consults, since both only read. ``--dry-run`` made
+#: each announce a dry-run mode and changed nothing else; ``--annotations-none``
+#: states the default of a conversion, and neither converts --
+#: ``--library-export`` already refused it for the same reason. Refused rather
+#: than let through as harmless: a typed flag the run ignores reads as a
+#: choice that changed something.
+READ_ONLY_IGNORES = (
+    ("dry_run", "--dry-run"),
+    ("annotations_none", "--annotations-none"),
+)
+
 #: What ``--verify`` never consults. It checks every archive in the output
 #: directory, running ``--epubcheck`` when asked (``--validate`` is what it
 #: always does, so that one is accepted as saying so). ``--match`` is refused
@@ -86,6 +97,7 @@ VERIFY_IGNORES = tuple(
     ("portable_names", "--portable-names"),
     ("name_by", "--name-by"),
     ("on_collision", "--on-collision"),
+    *READ_ONLY_IGNORES,
 )
 
 #: What ``--list`` never consults. It renders the plan, so what shapes a
@@ -94,11 +106,12 @@ VERIFY_IGNORES = tuple(
 #: ``--workers`` sizes the pool that names the files copied through. What
 #: only happens once a book is written, and the cap on how many are, is not:
 #: the listing shows every book whatever ``-m`` says.
-LIST_IGNORES = tuple(
-    (held, spelled)
-    for held, spelled in CONVERSION_ONLY
-    if held
-    in ("covers", "epubcheck", "validate", "max_export_files", "min_free", "no_shuffle")
+_WRITING_ONLY = frozenset(
+    {"covers", "epubcheck", "validate", "max_export_files", "min_free", "no_shuffle"}
+)
+LIST_IGNORES = (
+    *((held, spelled) for held, spelled in CONVERSION_ONLY if held in _WRITING_ONLY),
+    *READ_ONLY_IGNORES,
 )
 
 #: How each report is described when it refuses a flag.

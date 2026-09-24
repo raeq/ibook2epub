@@ -21,6 +21,7 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 from epubconvert.collect import annotations, validate
+from epubconvert.export import inspect_output
 from epubconvert.run import run
 from tests.conftest import CONTAINER, make_metadata_package
 from tests.test_annotations import highlight, make_databases
@@ -152,6 +153,20 @@ class TestTheCommandsPrintNoControlCharacters:
         assert "Hostile.epub is damaged" in err
         _assert_escaped(err)
 
+    def test_verify_advice_names_a_hostile_archive_escaped(
+        self, tmp_path, output_dir, capsys
+    ):
+        # shlex.quote makes a name one shell word; it does nothing about ESC
+        # and CR, which reached the terminal inside the repair advice.
+        (output_dir / f"{ERASE}All fine.epub").write_bytes(b"not a zip")
+        make_metadata_package(tmp_path / "lib", f"{ERASE}All fine.epub", title="x")
+
+        run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "--verify"])
+
+        out = capsys.readouterr().out
+        assert "All fine" in out
+        _assert_escaped(out)
+
     def test_validate_reports_a_hostile_href_escaped(
         self, tmp_path, output_dir, capsys
     ):
@@ -172,6 +187,73 @@ class TestTheCommandsPrintNoControlCharacters:
         captured = capsys.readouterr()
         assert "sound.xhtml" in captured.err
         _assert_escaped(captured.out + captured.err)
+
+
+class TestACoverThatIsNotWrittenIsNamedEscaped:
+    """
+    ``--covers`` logs why a book got no cover at debug level, naming the
+    archive and quoting the reason. Neither went through ``printable``: the
+    package's name reached the terminal raw, and so did a rootfile path in
+    the reason, which XML can carry as a C1 ``CSI`` and a CR.
+    """
+
+    @staticmethod
+    def _hostile(library: Path, cover_href: str | None) -> Path:
+        package = make_metadata_package(library, f"{ERASE}Evil.epub", title="x")
+        if cover_href is not None:
+            opf = package / "OEBPS" / "content.opf"
+            item = (
+                f'<item id="cv" href="{cover_href}" media-type="image/jpeg"'
+                ' properties="cover-image"/></manifest>'
+            )
+            opf.write_text(
+                opf.read_text(encoding="utf-8").replace("</manifest>", item),
+                encoding="utf-8",
+            )
+            (package / "OEBPS" / "cover.jpg").write_bytes(b"jpeg")
+        return package
+
+    def test_when_the_package_document_cannot_be_read(
+        self, tmp_path, output_dir, capsys
+    ):
+        package = self._hostile(tmp_path / "lib", None)
+        (package / "META-INF" / "container.xml").write_text(
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            f'<rootfiles><rootfile full-path="{ERASE_IN_XML}gone.opf"/>'
+            "</rootfiles></container>",
+            encoding="utf-8",
+        )
+
+        run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-v", "--covers"])
+
+        err = capsys.readouterr().err
+        assert "No cover for" in err
+        _assert_escaped(err)
+
+    @pytest.mark.parametrize("href", ["missing.jpg", "cover.jpg"])
+    def test_when_there_is_no_cover_or_its_name_is_taken(
+        self, tmp_path, output_dir, capsys, href
+    ):
+        self._hostile(tmp_path / "lib", href)
+        (output_dir / f"{ERASE}Evil.jpg").write_bytes(b"somebody else's")
+
+        run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-v", "--covers"])
+
+        err = capsys.readouterr().err
+        assert "cover for" in err
+        _assert_escaped(err)
+
+    def test_when_its_name_is_taken_while_copying(
+        self, tmp_path, output_dir, capsys, monkeypatch
+    ):
+        self._hostile(tmp_path / "lib", "cover.jpg")
+        monkeypatch.setattr(inspect_output, "_write_new", lambda *_args: False)
+
+        run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-v", "--covers"])
+
+        err = capsys.readouterr().err
+        assert "was taken while copying" in err
+        _assert_escaped(err)
 
 
 class TestASkippedAnnotationIsNamedEscaped:

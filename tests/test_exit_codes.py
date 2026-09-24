@@ -456,6 +456,45 @@ class TestAnInterruptedRunLeavesTheHighlightsAlone:
         assert "reached no file" not in capsys.readouterr().err
 
 
+class TestAnInterruptAfterTheBooksStillReportsThem:
+    """
+    "An interrupted run reports what it finished." A Ctrl-C while the
+    highlights were written after the books, or while the lock was taken and
+    the shelf swept, escaped to main's last-resort handler: exit 130 with no
+    summary, nothing on stdout under -q, no word that the highlights were not
+    written, and no summary in the log file.
+    """
+
+    def test_ctrl_c_while_the_highlights_are_written(
+        self, annotated, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(annotating, "write_export", _interrupt)
+        log = tmp_path / "run.log"
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-q"]
+
+        code = run.main(
+            [*argv, "-ad", str(tmp_path / "h.json"), "--log-file", str(log)]
+        )
+
+        captured = capsys.readouterr()
+        assert code == exits.INTERRUPTED
+        assert captured.out.startswith("Interrupted. Exported 2 epub file(s)")
+        assert "highlights were not written" in captured.err
+        assert "Exported 2 epub file(s)" in log.read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("phase", ["output_lock", "sweep_partials"])
+    def test_ctrl_c_while_the_shelf_is_locked_or_swept(
+        self, tmp_path, output_dir, monkeypatch, capsys, phase
+    ):
+        make_package(tmp_path / "lib", "Book.epub")
+        monkeypatch.setattr(run, phase, _interrupt)
+
+        code = run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-q"])
+
+        assert code == exits.INTERRUPTED
+        assert capsys.readouterr().out.startswith("Interrupted. Exported 0")
+
+
 class TestTheExitCodeAgreesWithTheSummary:
     """
     An annotation destination's error replaced the run's own code, so a run

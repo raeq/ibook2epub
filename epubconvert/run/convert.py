@@ -442,6 +442,25 @@ async def export_planned(
     return report
 
 
+def matches_pattern(name: str, pattern: str) -> bool:
+    """
+    Whether one package name answers to a ``--match`` pattern.
+
+    Apart from :func:`filter_packages` so the advice ``--verify`` prints can
+    be checked against the very rule that will read it, without logging a
+    match count for a run that is not happening.
+
+    :param name: A package directory's name, suffix included.
+    :param pattern: The user's pattern.
+
+    :return: True when :func:`filter_packages` would keep the package.
+    """
+    needle = pattern.lower()
+    if not any(char in needle for char in "*?["):
+        needle = f"*{needle}*"
+    return fnmatch.fnmatch(name.lower(), needle)
+
+
 def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]:
     """
     Narrow the package list to those matching a user pattern.
@@ -458,11 +477,7 @@ def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]
     if pattern is None:
         return list(packages)
 
-    needle = pattern.lower()
-    if not any(char in needle for char in "*?["):
-        needle = f"*{needle}*"
-
-    matched = [p for p in packages if fnmatch.fnmatch(p.name.lower(), needle)]
+    matched = [p for p in packages if matches_pattern(p.name, pattern)]
     logger.info(
         "Matched %d of %d package(s) against %r", len(matched), len(packages), pattern
     )
