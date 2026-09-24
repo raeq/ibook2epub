@@ -340,8 +340,10 @@ def _reserve(
 
     Looked for among the names the book could be given: its own, and under
     suffix its numbered ones. A note tagged for the book first, over every
-    book, and only then one that holds its highlights, so an untagged note
-    never goes to one book while another's tagged note is still to be found.
+    book, and only then one the other evidence gives it -- untagged, or
+    tagged for no book the run knows, and holding its highlights -- so such
+    a note never goes to one book while another's tagged note is still to
+    be found.
 
     :param named: Every book of the run with a name, in the run's order.
     :param claimants: Each book with highlights.
@@ -350,7 +352,7 @@ def _reserve(
     :param suffix: Whether a book's numbered names are its too.
     :param known: The tags of every book this run knows of.
     """
-    for tagged in (True, False):
+    for by_tag in (True, False):
         for item in named:
             book = claimants.get(item.package)
             if book is None or item.package in names.given:
@@ -360,9 +362,9 @@ def _reserve(
                 if listed is None or not names.free(listed):
                     continue
                 held = vault.held(listed)
-                if (held.tag is not None) == tagged and (
-                    holding(held, book, known) is Holding.MINE
-                ):
+                if by_tag and held.tag not in book.tags:
+                    continue
+                if holding(held, book, known) is Holding.MINE:
                     names.give(item, listed)
                     break
 

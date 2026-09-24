@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from epubconvert.export import noteformat, notenames, notes
+from epubconvert.export.naming import disambiguator
 from epubconvert.utils import app_logger, exits
 from epubconvert.utils.policy import Assignment
 
@@ -201,6 +202,33 @@ class TestANoteWrittenBeforeNotesWereTagged:
         assert MINE in text
         if suffix:
             assert "epub highlight" in (vault / "Dune (2).md").read_text()
+
+    @pytest.mark.parametrize("tagged_for_a_book_gone", [False, True])
+    def test_a_books_tagged_note_comes_before_one_its_highlights_give_it(
+        self, tmp_path: Path, tagged_for_a_book_gone: bool
+    ):
+        # Both books highlighted the same passage, and a note that names no
+        # book of the run holds it. The PDF, first in the run, already has a
+        # note tagged for it, and keeps that rather than taking the other.
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        shared = [_highlight(EPUB, "shared"), _highlight(PDF, "shared")]
+        if tagged_for_a_book_gone:
+            gone = {"title": "Dune", "assetId": "GONE"}
+            other = notes.compose([{**shared[0], "book": gone}])
+        else:
+            other = noteformat.BOOK_TAG.sub("", notes.compose(shared[:1]), count=1)
+        (vault / "Dune.md").write_text(other + MINE, encoding="utf-8")
+        (vault / "Dune (2).md").write_text(notes.compose(shared[1:]))
+
+        code = _write(vault, shared, suffix=True, library=(PDF, EPUB))
+
+        assert code == exits.SUCCESS
+        assert sorted(_notes(vault)) == ["Dune (2).md", "Dune.md"]
+        held = noteformat.split(_notes(vault)["Dune (2).md"])
+        assert held is not None
+        assert held.book == disambiguator("PDFASSET")
+        assert MINE in _notes(vault)["Dune.md"]
 
     def test_holding_no_ones_highlights_it_goes_with_its_name(self, tmp_path: Path):
         # Nothing says whose it is, so it is the note of the book that
