@@ -396,6 +396,32 @@ class TestHighlightsOfABookCopiedThrough:
             capsys.readouterr().err
         )
 
+    def test_a_long_list_is_cut_short(self, tmp_path, output_dir, monkeypatch, capsys):
+        library, container = tmp_path / "lib", tmp_path / "container"
+        library.mkdir()
+        papers = []
+        for index in range(5):
+            papers.append(library / f"Paper {index}.pdf")
+            papers[-1].write_bytes(b"%PDF-1.4 " + bytes([48 + index]))
+        make_databases(
+            container,
+            rows=[highlight(asset=f"P{i}", uuid=f"U{i}") for i in range(5)],
+            books=[
+                library_row(asset=f"P{i}", path=str(paper))
+                for i, paper in enumerate(papers)
+            ],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(container, policy),
+        )
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-ae"])
+
+        assert (
+            "Paper 0.pdf, Paper 1.pdf, Paper 2.pdf, and 2 more. Use -ad FILE"
+        ) in capsys.readouterr().err
+
     def test_a_book_not_copied_says_why(
         self, tmp_path, output_dir, monkeypatch, capsys
     ):

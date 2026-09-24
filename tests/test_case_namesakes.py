@@ -13,6 +13,7 @@ in skip mode both were collisions, on every run.
 # Test names describe the behaviour under test; separate docstrings would only
 # restate them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
+# pylint: disable=too-few-public-methods
 
 import json
 from pathlib import Path
@@ -262,6 +263,19 @@ class TestForeign:
     @staticmethod
     def _archive(tmp_path: Path, identifier: str) -> Path:
         return zipped_book(tmp_path, tmp_path / "out" / "dune.epub", identifier)
+
+    def test_without_the_source_it_is_another_books(self, tmp_path):
+        found = self._archive(tmp_path, "urn:other")
+
+        assert holders.foreign(found, "dune.epub", "Dune.epub", None) == (
+            "dune.epub already holds this name"
+        )
+
+    def test_a_pdf_declares_no_identifier(self, tmp_path):
+        paper = tmp_path / "Paper.pdf"
+        paper.write_bytes(b"%PDF-1.4 fake")
+
+        assert holders.source_identifier(paper) is None
 
     def test_another_books_archive_is_foreign(self, tmp_path):
         found = self._archive(tmp_path, "urn:other")
