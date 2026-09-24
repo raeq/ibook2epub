@@ -383,4 +383,9 @@ What the model does not describe, and why:
   file on the shelf ahead of the rest -- whatever put the file there: a
   namesake by case, the book's own archive or another's, or a title that
   looks like a number -- and the model's packages claim in sorted order. The
-  copies claim in its order.
+  copies claim in its order. A book titled like a number and renamed by
+  case, `c/Dune (2).epub` to `c/dune (2).epub`, no longer claims first, and
+  the second of two books `Dune` added since took its file as a number;
+  `claims.kept_numbers` now reads the identifiers where a book's own name
+  looks like a number of a name another book wants, and the book the file
+  declares keeps it (`tests/test_numbered_names.py`).

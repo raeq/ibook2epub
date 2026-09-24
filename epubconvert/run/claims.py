@@ -331,7 +331,12 @@ def kept_numbers(
     declare the file's identifier, since nobody read its own: it keeps the
     file, as before.
     A file under a name another book wants is never kept, as for a title
-    that looks like a number (``Dune (2)``).
+    that looks like a number (``Dune (2)``). The book of that title keeps
+    it, as its own name, where its identifier is the file's: renamed by
+    case to ``dune (2)``, it was never looked for there, and no longer
+    claimed first by its exact name (:func:`claim_order`), so the second of
+    two books ``Dune`` added since took the file as its number and was
+    reported exported from it on every run.
 
     Two books whose names are one file on the shelf ask the same, numbered
     files or not: ``b/Cafe.epub``, exported and renamed by case to
@@ -360,7 +365,8 @@ def kept_numbers(
     under the plain name and its archive listed as an orphan.
 
     Identifiers are read only for a name with numbered files on the shelf,
-    a marked name with any, or a name two books want with a file: under a
+    a marked name with any, a name two books want with a file, or one with
+    a file that looks like a number of a name a book wants: under a
     policy that names from the folder, the book's own too, unless the run
     leaves it unopened. A rerun over a shelf with none of these reads
     nothing. A copy's own bytes are its own whatever an
@@ -386,9 +392,17 @@ def kept_numbers(
     refused: set[int] = set()
 
     def forms(name: str) -> list[tuple[int, str]]:
+        key = filesystem_key(policy.identity(name))
+        # A name that looks numbered is filed as a number of its plain name:
+        # its own file too, where another book wants that plain name.
+        itself = [
+            (1, found)
+            for _, found in index.get(_wanted_plain(key, sharing) or "", [])
+            if filesystem_key(policy.identity(found)) == key
+        ]
         return sorted(
             (number, found)
-            for number, found in index.get(filesystem_key(policy.identity(name)), [])
+            for number, found in [*index.get(key, []), *itself]
             if found not in kept.values()
             and (number == 1 or filesystem_key(policy.identity(found)) not in sharing)
         )
@@ -399,9 +413,10 @@ def kept_numbers(
         if directory is None or (
             all(n == 1 for n, _ in numbers)
             and not marked_forms
-            # Nor shared: no other book wants the file.
+            # Nor shared: no other book wants the file, as its name or as a
+            # number of its own.
             and not (
-                numbers and sharing[filesystem_key(policy.identity(book.base))] > 1
+                numbers and _shared(filesystem_key(policy.identity(book.base)), sharing)
             )
         ):
             continue
@@ -411,6 +426,39 @@ def kept_numbers(
         if found[1]:
             refused.add(position)
     return Kept(kept, frozenset(refused))
+
+
+def _wanted_plain(key: str, sharing: Container[str]) -> str | None:
+    """
+    Return the plain name *key* is a number of, if a book wants that name.
+
+    :param key: A book's name, as a filesystem key.
+    :param sharing: The filesystem keys of the names the books want.
+
+    :return: The plain name's key, or None when *key* looks numbered by
+        nothing a book wants.
+    """
+    numbered = NUMBERED.fullmatch(key)
+    if numbered is None:
+        return None
+    plain = numbered["stem"] + (numbered["extension"] or "")
+    return plain if plain in sharing else None
+
+
+def _shared(key: str, sharing: Counter[str]) -> bool:
+    """
+    Say whether another book may claim the file of the name *key*.
+
+    Two books want the name, or one wants the plain name *key* looks like a
+    number of: ``Dune (2).epub``, the name of a book titled like a number,
+    is the second ``Dune``'s number too.
+
+    :param key: A book's name, as a filesystem key.
+    :param sharing: How many books want each name, by filesystem key.
+
+    :return: True when another book may claim it.
+    """
+    return sharing[key] > 1 or _wanted_plain(key, sharing) is not None
 
 
 def _keeps(

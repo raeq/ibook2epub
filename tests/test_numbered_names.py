@@ -436,6 +436,64 @@ class TestAnEvictedNumberedBook:
         assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
 
 
+class TestATitleThatLooksNumberedRenamedByCase:
+    """
+    ``c/Dune (2).epub`` is exported and renamed by case to
+    ``c/dune (2).epub``, and two books ``Dune`` are added. The shelf's
+    ``Dune (2).epub`` was indexed only as a number of ``Dune``, which the
+    renamed book's own name was never looked up under, and its exact name
+    is no longer on the shelf to claim first: the second ``Dune`` took the
+    file as its number and was reported exported from it on every run, and
+    the renamed book was written again under ``dune (2) (2).epub``.
+    """
+
+    def test_it_keeps_its_file(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir)
+        make_metadata_package(
+            library / "c", "Dune (2).epub", title="Dune", identifier="urn:c"
+        )
+        run.main([*argv, "-q"])
+        (library / "c" / "Dune (2).epub").rename(library / "c" / "moving")
+        (library / "c" / "moving").rename(library / "c" / "dune (2).epub")
+        for folder in ("a", "b"):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier=f"urn:{folder}"
+            )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-d"])
+        dry = capsys.readouterr()
+        run.main(argv)
+        ran = capsys.readouterr()
+        run.main(argv)
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["source"]).parent.name, Path(row["target"]).name)
+            for row in rows
+        ) == [
+            ("exported", "c", "Dune (2).epub"),
+            ("pending", "a", "Dune.epub"),
+            ("pending", "b", "Dune (3).epub"),
+        ]
+        assert "Dry run: would export 2 epub file(s)" in dry.out
+        assert "skipped 1 already present" in dry.out
+        assert "Exported 2 epub file(s)" in ran.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in dry.out + ran.out + again.out
+        written = {path.name: identifier_of(path) for path in output_dir.glob("*.epub")}
+        assert written == {
+            "Dune.epub": "urn:a",
+            "Dune (2).epub": "urn:c",
+            "Dune (3).epub": "urn:b",
+        }
+
+
 def len_then_name(path: Path) -> tuple[int, str]:
     """Order ``X.epub``, ``X (2).epub``, ``X (3).epub`` by their number."""
     return len(path.name), path.name
