@@ -23,7 +23,7 @@ import pytest
 from epubconvert.collect import annotations
 from epubconvert.collect import library as library_module
 from epubconvert.collect.coredata import ContainerPermissionError
-from epubconvert.export import naming
+from epubconvert.export import archive, naming
 from epubconvert.run import annotating, convert, run
 from epubconvert.utils import exits
 from tests.conftest import make_package, needs_permissions
@@ -736,6 +736,57 @@ class TestAnInterruptAfterTheBooksStillReportsThem:
 
         assert code == exits.INTERRUPTED
         assert capsys.readouterr().out.startswith("Interrupted. Exported 0")
+
+
+class TestAnInterruptedRefreshSaysWhatItDid:
+    """
+    A Ctrl-C during --annotations-refresh escaped to main's last resort:
+    exit 130, but nothing said how many books already had their highlights
+    rewritten. --list and --verify have no summary to finish; they end with
+    130 and no traceback.
+    """
+
+    def test_the_books_already_refreshed_are_counted(
+        self, annotated, output_dir, monkeypatch, capsys
+    ):
+        argv = ["-s", str(annotated), "-o", str(output_dir)]
+        run.main([*argv, "-m", "0", "-q"])
+        refreshed: list[Path] = []
+        real = archive.replace_annotations
+
+        def second_interrupts(target, *args, **kwargs):
+            refreshed.append(target)
+            if len(refreshed) == 2:
+                raise KeyboardInterrupt
+            return real(target, *args, **kwargs)
+
+        monkeypatch.setattr(annotating, "replace_annotations", second_interrupts)
+        capsys.readouterr()
+
+        code = run.main([*argv, "-ae", "-ar", "-q"])
+
+        err = capsys.readouterr().err
+        assert code == exits.INTERRUPTED
+        assert (
+            "Refreshed annotations in 1 book(s); interrupted before the rest; "
+            "converted nothing."
+        ) in err
+
+    @pytest.mark.parametrize(
+        ("mode", "phase"),
+        [("--list", "render_listing"), ("--verify", "verify_output")],
+    )
+    def test_a_report_ends_with_130(self, tmp_path, monkeypatch, capsys, mode, phase):
+        make_package(tmp_path / "lib", "Book.epub")
+        (tmp_path / "out").mkdir()
+        monkeypatch.setattr(run, phase, _interrupt)
+
+        code = run.main(
+            ["-s", str(tmp_path / "lib"), "-o", str(tmp_path / "out"), mode]
+        )
+
+        assert code == exits.INTERRUPTED
+        assert "Interrupted" in capsys.readouterr().err
 
 
 class TestTheExitCodeAgreesWithTheSummary:

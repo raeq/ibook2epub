@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Collection, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -581,6 +581,7 @@ def _embed_in_shelf(
     # tell one of those from an abandoned one. Refused on this route, the
     # error escaped main -- which maps it only around the export -- as a
     # traceback and exit 1.
+    tally = _Tally()
     try:
         with output_lock(args.output_dir):
             # Read under the lock, and as before a write: a policy that names
@@ -597,30 +598,62 @@ def _embed_in_shelf(
                     if annotations_for_book(item.package.name, index)
                 },
             )
-            changed, failed, stopped = _refresh_each(args, assignments, index, places)
+            _refresh_each(args, assignments, index, places, tally)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
-    if not args.annotations_detached:
+    except KeyboardInterrupt:
+        # Escaped to main's last resort, which said 130 and nothing about the
+        # books already rewritten. Each rewrite is an atomic replace, so the
+        # count is exact and a rerun carries on.
+        tally.interrupted = True
+    if not args.annotations_detached and not tally.interrupted:
         # Rewritten are the packages' archives; a copy is not rebuilt.
         _warn_about_copies(index, copyable, copied=True)
+    return _refresh_outcome(tally, converted=converted)
 
-    # Every book it could not refresh is a failure, and so is a refresh the
-    # floor stopped, as for a conversion. Both were logged and the run exited
-    # 0, so a scheduled refresh that hit ENOSPC on every book reported success.
-    parts = [f"Refreshed annotations in {changed} book(s)"]
-    if failed:
-        parts.append(f"could not refresh {failed}")
-    if stopped:
+
+def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
+    """
+    Say what a refresh did, and choose its exit code.
+
+    Every book it could not refresh is a failure, and so is a refresh the
+    floor stopped, as for a conversion. Both were logged and the run exited 0,
+    so a scheduled refresh that hit ENOSPC on every book reported success.
+
+    :param tally: What the refresh did.
+    :param converted: Whether this run also converted books.
+
+    :return: 130 if interrupted, 1 if a book was left behind, otherwise 0.
+    """
+    parts = [f"Refreshed annotations in {tally.changed} book(s)"]
+    if tally.failed:
+        parts.append(f"could not refresh {tally.failed}")
+    if tally.stopped:
         parts.append("stopped at the --min-free floor before the rest")
+    if tally.interrupted:
+        parts.append("interrupted before the rest")
     if not converted:
         parts.append("converted nothing")
     summary = "; ".join(parts) + "."
-    if failed or stopped:
+    if tally.interrupted:
+        logger.warning("%s", summary)
+        return exits.INTERRUPTED
+    if tally.failed or tally.stopped:
         logger.error("%s", summary)
         return exits.FAILED
     logger.info("%s", summary)
     return exits.SUCCESS
+
+
+@dataclass
+class _Tally:
+    """What a refresh has done so far, kept where an interrupt cannot lose it."""
+
+    changed: int = 0  # Archives rewritten.
+    failed: int = 0  # Archives that could not be.
+    stopped: bool = False  # The --min-free floor stopped the rest.
+    interrupted: bool = False  # Ctrl-C stopped the rest.
 
 
 def _refresh_each(
@@ -628,7 +661,8 @@ def _refresh_each(
     assignments: Sequence[Assignment],
     index: dict[str, list[dict[str, Any]]],
     places: dict[Path, Path | None],
-) -> tuple[int, int, bool]:
+    tally: _Tally,
+) -> None:
     """
     Rebuild every archive on the shelf whose annotations changed.
 
@@ -642,11 +676,10 @@ def _refresh_each(
     :param assignments: The names every package was given.
     :param index: The annotations, by book.
     :param places: Each book's own archive on the shelf, or None.
-
-    :return: How many archives were rewritten, how many could not be, and
+    :param tally: Counted into as each book is done, so a Ctrl-C leaves it
+        saying how many archives were rewritten, how many could not be, and
         whether the floor stopped the refresh before the rest.
     """
-    changed = failed = 0
     # An interval of one: rebuilds run one at a time, so every one is
     # measured, one statvfs per book that is actually rewritten.
     progress = progress_for(len(assignments), 1)
@@ -664,7 +697,7 @@ def _refresh_each(
             continue
         try:
             if replace_annotations(target, mine, room=room):
-                changed += 1
+                tally.changed += 1
                 logger.info(
                     "%s Refreshed %d annotation(s) in %s",
                     marker,
@@ -674,7 +707,8 @@ def _refresh_each(
         except NoRoomError:
             # Sticky, like the conversions' floor: the volume does not get
             # emptier by asking again, so every book after this one stops too.
-            return changed, failed, True
+            tally.stopped = True
+            return
         except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
             # BadZipFile is not an OSError, so one damaged archive used to
             # abort the whole refresh and every book after it went untouched;
@@ -682,9 +716,8 @@ def _refresh_each(
             # same until #21. A damaged archive is an expected state: --verify
             # exists to find them. Counted as well as logged, so the run's
             # exit code says a book was left behind.
-            failed += 1
+            tally.failed += 1
             logger.error("Could not refresh %s: %s", printable(target.name), exc)
-    return changed, failed, False
 
 
 def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:

@@ -383,8 +383,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   process id in the lock file.
 
 - Ctrl-C while the library is being read and named, or during
-  `--annotations-refresh`, `--list` or `--verify`, exits 130 with a summary
-  instead of a traceback.
+  `--annotations-refresh`, exits 130 with a summary instead of a traceback;
+  the refresh's says how many books it had already refreshed. Ctrl-C during
+  `--list` or `--verify`, which have no summary to give, exits 130 without a
+  traceback.
 
 - A dry run no longer counts the books it would export as remaining, and
   says when `--max-export-files` held books back.
