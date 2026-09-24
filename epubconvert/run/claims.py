@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..collect.identifiers import usable_identifier
+from ..collect.source import is_evicted
 from ..export.archive import COPYABLE_SUFFIXES, PARTIAL_PREFIX
 from ..export.naming import encode_name, filesystem_key, split_extension, truncate_bytes
-from .holders import identifier_on_shelf
+from .holders import identifier_on_shelf, source_identifier
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..utils.opf import Package
@@ -268,7 +269,7 @@ def numbered_names(
 
 
 def kept_numbers(
-    books: Sequence[tuple[str, str | None, bool]],
+    books: Sequence[tuple[str, str | None, bool, Path | None]],
     shelf: Collection[str],
     policy: NamingPolicy,
 ) -> dict[int, str]:
@@ -281,46 +282,51 @@ def kept_numbers(
     listed as an orphan. Before any name is claimed, each book whose name
     has numbered files on the shelf keeps one of them: where it has a
     usable identifier, the lowest-numbered one declaring that identifier;
-    where it has none, as under a policy that names from the folder, the
-    one numbered file, when no other book wants its name and no file has
-    the plain name. Nothing else can say whose it is. A file under a name
-    another book wants is never kept, as for a title that looks like a
-    number (``Dune (2)``).
+    where it has none, the one numbered file, when no other book wants its
+    name and no file has the plain name. Nothing else can say whose it is.
+    A file under a name another book wants is never kept, as for a title
+    that looks like a number (``Dune (2)``).
 
-    Identifiers are read only for a name with numbered files on the shelf,
-    and only where the book's own was read, so a policy that names from the
-    folder reads nothing.
+    Identifiers are read only for a name with numbered files on the shelf:
+    under a policy that names from the folder, the book's own too, unless
+    iCloud has evicted it. A rerun over a shelf with no numbered name reads
+    nothing. A copy's own bytes are its own whatever an identifier says, so
+    a copy that keeps the file sends the package back to claim a name
+    (copynames._Claiming.reclaim).
 
-    :param books: Each package's first name, usable identifier, and whether
-        no other package wants its name, in sorted order.
+    :param books: Each package's first name, usable identifier when naming
+        read one, whether no other package wants its name, and the package
+        to read its identifier from when naming did not, in sorted order.
     :param shelf: The shelf's names, from :func:`shelf_names`.
     :param policy: The naming policy in force.
 
     :return: The file kept, by index into *books*.
     """
     index = numbered_names(shelf, policy)
-    wanted = {filesystem_key(policy.identity(base)) for base, _, _ in books}
+    wanted = {filesystem_key(policy.identity(book[0])) for book in books}
     directory = getattr(shelf, "directory", None)
     kept: dict[int, str] = {}
-    for position, (base, identifier, alone) in enumerate(books):
+    for position, (base, identifier, alone, unread) in enumerate(books):
         numbers = sorted(
             (number, name)
             for number, name in index.get(filesystem_key(policy.identity(base)), [])
             if name not in kept.values()
             and (number == 1 or filesystem_key(policy.identity(name)) not in wanted)
         )
-        if all(number == 1 for number, _ in numbers):
+        if directory is None or all(number == 1 for number, _ in numbers):
             continue
-        if identifier is not None and directory is not None:
+        if identifier is None and unread is not None and not is_evicted(unread):
+            identifier = source_identifier(unread)
+        if identifier is not None:
             found = [
                 name
                 for _, name in numbers
                 if identifier_on_shelf(directory / name) == identifier
             ]
-        else:
-            found = [name for _, name in numbers] if alone else []
-        if len(found) == 1 or (found and identifier is not None):
-            kept[position] = found[0]
+            if found:
+                kept[position] = found[0]
+        elif alone and len(numbers) == 1:
+            kept[position] = numbers[0][1]
     return kept
 
 

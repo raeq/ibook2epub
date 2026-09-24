@@ -205,15 +205,17 @@ class _Claiming:
         """
         Name a package again that kept a numbered file a copy keeps.
 
-        A package with no identifier to go by keeps the one numbered file of
-        its name when no other package wants the name and nothing holds the
-        plain one (claims.kept_numbers). The copies were not asked, and the
-        file can be a copy's: the package kept it and moved on past it, a
-        copy claimed the plain name the package had left, and a later run
-        found two numbered files where the package had one, kept neither,
-        and listed the package's only archive as an orphan.
-        formal/RerunPlanner.tla found it. The file stays the copy's; the
-        package claims the first free name of its own, as before it kept any.
+        A package keeps a numbered file of its name (claims.kept_numbers):
+        one declaring its identifier, or with none to go by, the one
+        numbered file when no other package wants the name and nothing holds
+        the plain one. The copies were not asked, and the file can be a
+        copy's own bytes, whatever an identifier says: the package kept it
+        and moved on past it, a copy claimed the plain name the package had
+        left, and a later run found two numbered files where the package had
+        one, kept neither, and listed the package's only archive as an
+        orphan. formal/RerunPlanner.tla found it. The file stays the copy's;
+        the package claims the first free name of its own, as before it kept
+        any.
 
         :param item: A package's assignment.
 

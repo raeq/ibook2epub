@@ -135,10 +135,10 @@ a copy whose own bytes are there keeps them before a copy that goes by
 identifier, and a file under a name a package was given is that package's
 unless the identifiers say otherwise. `KeepNumbered` switches on
 `claims.kept_numbers`: in suffix mode a package keeps the numbered file of its
-name that declares its identifier, or, where naming read none, the one
-numbered file when no other package wants the name and nothing holds the
-plain name; a copy that keeps that file sends the package back to claim a name
-(`_Claiming.reclaim`).
+name that declares its identifier, which is read for this whatever the
+policy, or, with no usable identifier, the one numbered file when no other
+package wants the name and nothing holds the plain name; a copy that keeps
+that file sends the package back to claim a name (`_Claiming.reclaim`).
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
@@ -159,9 +159,10 @@ plain name; a copy that keeps that file sends the package back to claim a name
 | `CopiesSharedIdLoose` | the same, without `KeepOne` | books added | all | the same | **ExportedMeansTheBooksOwnFile violated** |
 | `CopiesOneIdentifier` | as `CopiesSuffix`, all three of one identifier | books added | all | the same | SuffixKeepsEveryIdentifiableBook and NoArchiveOfTheLibraryIsAnOrphan hold |
 | `CopiesOneIdentifierLoose` | the same, without `KeepOne` | books added | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
-| `CopiesRemovals` | as `CopiesSuffix`, every identifier read | books added and removed | all | on | all four hold |
+| `CopiesRemovals` | as `CopiesSuffix` | books added and removed | all | the same | NoArchiveOfTheLibraryIsAnOrphan holds |
+| `CopiesRemovalsStuck` | the same, without `KeepNumbered` | books added and removed | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `CopiesRemovalsRead` | the same, every identifier read | books added and removed | all | on | all four hold |
 | `CopiesRemovalsDeleted` | the same, each book removed with its archive | books added and removed | all | on | **NoArchiveOfTheLibraryIsAnOrphan violated** |
-| `CopiesRemovalsFolderNamed` | as `CopiesSuffix` | books added, and removed with their archives | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 | `NumberedRemovals` | `--match`, `--refresh`, suffix mode, named from the folder, two packages | removed with their archives | none | before a write | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `NumberedRemovalsStuck` | the same, without `KeepNumbered` | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 
@@ -237,9 +238,10 @@ What the configurations that fail show:
   narrowed with `--match` took ` (3)` once a package arrived, and was copied
   again, until a copy kept its own file under any of its numbers.
 
-  With removals too, `CopiesRemovals` holds all four where naming reads
-  every identifier. Named from the folder it does not, for the reasons in
-  the next entries.
+  With removals too, `CopiesRemovals` holds NoArchiveOfTheLibraryIsAnOrphan
+  named from the folder, and `CopiesRemovalsRead` all four where naming
+  reads every identifier. Named from the folder, ExportedMeansTheBooksOwnFile
+  still fails as in `FolderNamedReports`.
 
 - **`CopiesSharedIdLoose` and `CopiesOneIdentifierLoose`** are the claim
   pass before `KeepOne`. It asked of each copy only whether a file under its
@@ -253,24 +255,24 @@ What the configurations that fail show:
   three share one identifier, ExportedMeansTheBooksOwnFile and
   NeverWritesOverAnotherBook still do not hold: the `Unidentifiable` limit.
 
-- **`NumberedRemovalsStuck`** is suffix mode before `claims.kept_numbers`. A
-  book with no digest marker is numbered by its place, so when the book
-  holding the plain name left the library with its archive, the numbered
-  book took the plain name, was written again, and its own archive was
-  listed as an orphan. `NumberedRemovals` holds with the fix, and
-  `tests/test_numbered_names.py` replays it. With three packages of one name
-  it does not: two books want the plain name, and without an identifier
-  nothing says which numbered file is whose.
+- **`CopiesRemovalsStuck` and `NumberedRemovalsStuck`** are suffix mode
+  before `claims.kept_numbers`. A book with no digest marker is numbered by
+  its place, or moved on past another book's file to the first free
+  number, and when that book left the library it took the name it had
+  given up: reported exported from the other book's file where that
+  stayed, written again where it went with its book, and its own archive
+  listed as an orphan either way. A package's identifier is now read for a
+  name with numbered files on the shelf, and it keeps the one declaring
+  it. `NumberedRemovals` is the rule for books with no usable identifier:
+  two packages of one name, the numbered one alone once the other leaves
+  with its archive. With three it does not hold: two books want the plain
+  name, and nothing says which numbered file is whose.
+  `tests/test_numbered_names.py` replays these against the CLI.
 
-- **`CopiesRemovalsFolderNamed`** is the limit of that rule beside copies.
-  A package named from the folder has nothing but its place to go by, and
-  its place moves: numbered past the other packages, or moved on past a
-  copy's file to the first position no book is named, it takes the number a
-  book that leaves frees, and its archive under the old number is an orphan.
-  The model found a case the fix had made worse, now closed: a package
-  alone among the packages kept a numbered file that was a copy's, moved on
-  past it, and left the plain name to another copy
-  (`_Claiming.reclaim`, `tests/test_numbered_names.py`).
+  The model found a case the rule had made worse, now closed: a package
+  alone among the packages kept a numbered file that was a copy's own
+  bytes, moved on past it, and left the plain name to another copy, and a
+  later run listed its archive as an orphan (`_Claiming.reclaim`).
 
 - **`CopiesRemovalsDeleted`** is the limit of the marker. A book that moved
   on to its marked name because another book's archive held its plain name

@@ -58,10 +58,10 @@
  * also gives a package with no digest marker somewhere to move on to in
  * suffix mode, its own name numbered, as a copy has. KeepNumbered is
  * claims.kept_numbers: in suffix mode a package keeps the numbered file of
- * its name that declares its identifier, or, where naming read none, the
- * one numbered file when no other package wants its name and nothing holds
- * the plain name; one that kept a file a copy keeps claims a name again
- * (_Claiming.reclaim). TakesArchive stands for a person deleting a book's
+ * its name that declares its identifier, which is read for this whatever
+ * the policy, or, with no usable identifier, the one numbered file when no
+ * other package wants its name and nothing holds the plain name; one that
+ * kept a file a copy keeps claims a name again (_Claiming.reclaim). TakesArchive stands for a person deleting a book's
  * archive with the book: nothing in the tool deletes one.
  *
  * find_orphans is modelled too: an archive on the shelf is an orphan when no
@@ -168,10 +168,11 @@ Sorted(S) ==
 
 (* kept_numbers, in suffix mode with KeepNumbered: the numbered file of its
    name each package keeps, in sorted order, never one another kept or one
-   under a name another package wants. Where naming read its identifier,
-   the lowest-numbered file declaring it; where it read none, the one
-   numbered file, when no other package wants the name and nothing holds
-   the plain name. "" for a package that keeps none. *)
+   under a name another package wants. Where it has a usable identifier,
+   read for this even where naming read none, the lowest-numbered file
+   declaring it; where it has none, the one numbered file, when no other
+   package wants the name and nothing holds the plain name. "" for a
+   package that keeps none. *)
 RECURSIVE Numbered(_, _, _)
 Numbered(S, order, taken) ==
     IF order = <<>> THEN [b \in {} |-> ""]
@@ -183,13 +184,13 @@ Numbered(S, order, taken) ==
                          IN /\ shelf[n] # 0
                             /\ n \notin taken
                             /\ (k = 1 \/ n \notin wants)}
-             found == IF Digested(b)
+             found == IF b \in Usable
                         THEN {k \in there : Mate(shelf[Suffixed(base, k)], b)}
                         ELSE IF Crowd(S, Wanted[b]) = 1 THEN there ELSE {}
              keep  == /\ KeepNumbered
                       /\ OnCollision = "suffix"
                       /\ \E k \in there : k > 1
-                      /\ IF Digested(b) THEN found # {} ELSE Cardinality(found) = 1
+                      /\ IF b \in Usable THEN found # {} ELSE Cardinality(found) = 1
              name  == IF keep THEN Suffixed(base, Min(found)) ELSE ""
              rest  == Numbered(S, Tail(order),
                                IF keep THEN taken \cup {name} ELSE taken)
@@ -287,16 +288,14 @@ Kept(C, pkgs) ==
          ELSE KeepPass(Sorted(C), pkgs, FALSE, none)
 
 (* Every book's name: the packages', then the copies keep their files,
-   then _Claiming.reclaim names again a package with no identifier read
-   that kept a numbered file a copy keeps, and the other copies claim names
-   after them all. *)
+   then _Claiming.reclaim names again a package that kept a numbered file a
+   copy keeps, and the other copies claim names after them all. *)
 Assigned(L) ==
     LET P      == Packages(L)
         first  == PackageClaim(P)
         kept   == Kept(CopiesOf(L), first)
         held   == {kept[c] : c \in DOMAIN kept}
-        again  == {b \in P : /\ ~Digested(b)
-                             /\ first[b] \in held
+        again  == {b \in P : /\ first[b] \in held
                              /\ Numbered(P, Sorted(P), {})[b] # ""}
         redo   == Claim(P, Sorted(again),
                         ({first[b] : b \in P \ again} \ {""}) \cup held)

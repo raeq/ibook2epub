@@ -84,16 +84,16 @@ EXPECTED = {
     "RerunPlanner.CopiesOneIdentifierLoose": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
     ),
-    # Books removed: every identifier read, it holds; the limits of the
-    # marker and of a folder name, where it cannot.
+    # Books removed: a numbered book keeps its number when the book before
+    # it leaves; the limit of the marker, where an archive is deleted.
     "RerunPlanner.CopiesRemovals": HOLDS,
+    "RerunPlanner.CopiesRemovalsStuck": (
+        "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
+    ),
+    "RerunPlanner.CopiesRemovalsRead": HOLDS,
     "RerunPlanner.CopiesRemovalsDeleted": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
     ),
-    "RerunPlanner.CopiesRemovalsFolderNamed": (
-        "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
-    ),
-    # A numbered book keeps its number when the book before it leaves.
     "RerunPlanner.NumberedRemovals": HOLDS,
     "RerunPlanner.NumberedRemovalsStuck": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."

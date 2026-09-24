@@ -13,6 +13,7 @@ written again, and its own archive was listed as an orphan.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import json
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -116,21 +117,32 @@ class TestNamedFromTheFolder:
         assert identifier_of(output_dir / "Dune (2).epub") == "urn:uuid:A"
         assert "orphan" not in ran.out
 
-    def test_a_rerun_reads_nothing(self, tmp_path, output_dir, monkeypatch):
+    def test_a_rerun_reads_only_for_the_numbered_name(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # Named from the folder, a book's identifier is read to tell which
+        # numbered file is its own, and only for a name with numbered files
+        # on the shelf: nothing is read for the rest of the library.
         library = tmp_path / "lib"
-        for folder in ("a", "b", "c"):
-            make_package(library / folder, "Dune.epub")
+        for folder in ("a", "b"):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier=f"urn:{folder}"
+            )
+        for index in range(3):
+            make_metadata_package(
+                library, f"Other {index}.epub", title="Other", identifier=f"urn:{index}"
+            )
         run.main([*_argv(library, output_dir), "-q"])
         opened: Counter[str] = Counter()
         original_zip = ZipFile.__init__
         original_read = package_reader.read_package_dir
 
         def zip_counting(self, file, *args, **kwargs):
-            opened[str(file)] += 1
+            opened[Path(str(file)).name] += 1
             original_zip(self, file, *args, **kwargs)
 
         def read_counting(package: Path):
-            opened[str(package)] += 1
+            opened[package.relative_to(library).as_posix()] += 1
             return original_read(package)
 
         monkeypatch.setattr(ZipFile, "__init__", zip_counting)
@@ -141,7 +153,40 @@ class TestNamedFromTheFolder:
 
         run.main([*_argv(library, output_dir), "-q"])
 
-        assert opened == Counter()
+        assert set(opened) <= {
+            "a/Dune.epub",
+            "b/Dune.epub",
+            "Dune.epub",
+            "Dune (2).epub",
+        }
+        assert set(opened.values()) <= {1}
+
+
+class TestAPackageMovedOnPastACopy:
+    def test_it_keeps_its_file_when_the_copy_leaves(self, tmp_path, output_dir, capsys):
+        # Moved on to "Dune (2)" past a zipped book's file, it took the plain
+        # name back once that book left the library: reported exported from
+        # the other book's file, and its own listed as an orphan.
+        library = tmp_path / "lib"
+        zipped = zipped_book(tmp_path, library / "a" / "Dune.epub", "urn:uuid:Z")
+        run.main([*_argv(library, output_dir), "-q"])
+        make_metadata_package(
+            library / "b", "Dune.epub", title="Dune", identifier="urn:uuid:P"
+        )
+        run.main([*_argv(library, output_dir), "-q"])
+        assert identifier_of(output_dir / "Dune (2).epub") == "urn:uuid:P"
+        zipped.unlink()
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "--list", "--json"] + SUFFIX
+        )
+        rows = json.loads(capsys.readouterr().out)
+
+        assert sorted((row["status"], Path(row["target"]).name) for row in rows) == [
+            ("exported", "Dune (2).epub"),
+            ("orphan", "Dune.epub"),
+        ]
 
 
 class TestSharingOneIdentifier:

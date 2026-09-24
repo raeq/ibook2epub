@@ -255,15 +255,17 @@ def assign_names(
     claims = Claims()
 
     first = [_bases(name, metadata, setup, crowded)[0] for _, name, metadata in wanted]
+    read = getattr(policy, "needs_metadata", False)
     kept = (
         kept_numbers(
             [
                 (
                     base,
-                    usable_identifier(item[2]),
-                    crowded[policy.identity(item[1])] == 1,
+                    usable_identifier(metadata),
+                    crowded[policy.identity(name)] == 1,
+                    None if read else package,
                 )
-                for base, item in zip(first, wanted, strict=True)
+                for base, (package, name, metadata) in zip(first, wanted, strict=True)
             ],
             shelf,
             policy,
@@ -373,7 +375,7 @@ def _assign_one(
         # the shelf keeps its file (copynames.claim_copies), and a package
         # with nowhere to go was a collision on every run in suffix mode.
         stable if setup.on_collision == SUFFIX else None,
-        kept_number=filename == kept and usable_identifier(metadata) is None,
+        kept_number=filename == kept,
     )
 
 
