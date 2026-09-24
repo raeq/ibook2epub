@@ -590,7 +590,7 @@ def merge(
 
     - An annotation Apple no longer has is **kept**. Taking them with you is
       the point; losing one because Books lost it would defeat that.
-    - One whose modification date has moved is regenerated.
+    - One whose modification date or whose book has moved is regenerated.
     - Every annotation in a file written by a **different version** is
       regenerated, whether or not it changed. The locator here is ahead of a
       W3C draft that is still moving, so an entry written by an older version
@@ -643,10 +643,15 @@ def _says_the_same(was: dict[str, Any], item: dict[str, Any]) -> bool:
     """
     Whether a kept entry still says what a fresh reading would say.
 
-    Apple's modification date settles the parts that come from Apple. It says
-    nothing about the parts that come from *this run*: ``book.filename`` is
-    computed from the naming policy, so after a ``--name-by`` change the old
-    entry was stale and was still being reported as unchanged.
+    Apple's modification date settles the annotation itself. It says nothing
+    about the book the annotation is in: ``book.filename`` is computed from the
+    naming policy, the author and sort name are filled from a package document
+    that may be readable on one run and not the last, and the title, language
+    and year are read from Apple's library row, which a book retitled in Books
+    changes without moving any annotation's date. Only some of those fields
+    were compared, so a merged file kept a book's old title for ever. The whole
+    book is compared instead: every field of it is worked out afresh on every
+    run, so a difference in any of them is a change.
 
     :param was: The entry already in the file.
     :param item: The entry just read.
@@ -661,19 +666,7 @@ def _says_the_same(was: dict[str, Any], item: dict[str, Any]) -> bool:
         # written that way differs from what this version would write and is
         # regenerated whether or not the version changed.
         return False
-    held = was.get("book")
-    fresh = item.get("book")
-    old: dict[str, Any] = held if isinstance(held, dict) else {}
-    new: dict[str, Any] = fresh if isinstance(fresh, dict) else {}
-    return all(old.get(field) == new.get(field) for field in RUN_DEPENDENT_FIELDS)
-
-
-#: Fields of ``book`` that this run works out rather than reads from Apple, so
-#: a change to them is a change even when Apple says nothing moved. The author
-#: and sort name are here because the package document fills them in when
-#: Apple's row lacks them, and a package unreadable on one run is readable on
-#: the next.
-RUN_DEPENDENT_FIELDS = ("filename", "source", "identifier", "author", "authorSort")
+    return bool(was.get("book") == item.get("book"))
 
 
 #: Where the W3C work says an embedded annotation set lives. It needs no entry
