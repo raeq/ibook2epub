@@ -32,7 +32,7 @@ from ..collect.annotations import for_book as annotations_for_book
 from ..collect.validate import ValidationOptions
 from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from ..export.inspect_output import extract_cover, free_megabytes
-from ..export.naming import PassthroughNaming
+from ..export.naming import PassthroughNaming, encode_name
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
@@ -549,16 +549,38 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
         # kernel when the holder dies, even on SIGKILL, so a leftover lock
         # file is inert. Checking liveness by PID would add a PID-reuse race
         # to solve a problem that does not exist.
-        handle.seek(0)
-        handle.truncate()
-        handle.write(f"pid={os.getpid()} host={socket.gethostname()}\n")
-        handle.flush()
+        _record_holder(handle, path)
         try:
             yield True
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
     finally:
         handle.close()
+
+
+def _record_holder(handle: TextIO, path: Path) -> None:
+    """
+    Note this run's pid and host in the lock file, for a refused run to quote.
+
+    Diagnostic, so a failure is logged and passed over. It was unguarded: on a
+    full volume the write raised ENOSPC, the buffered handle raised it again as
+    it closed, and the run died with two tracebacks and exit 1 before
+    ``--min-free`` could stop it cleanly. Written to the descriptor rather than
+    through the handle, so nothing is left buffered for ``close()`` to retry.
+
+    :param handle: The open, locked lock file.
+    :param path: Its path, for the log.
+    """
+    # Through the surrogate-safe encoder: a host name is decoded from bytes
+    # the operating system chose, and a plain encode() raises on an escape.
+    line = encode_name(f"pid={os.getpid()} host={socket.gethostname()}\n")
+    try:
+        descriptor = handle.fileno()
+        os.ftruncate(descriptor, 0)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.write(descriptor, line)
+    except OSError as exc:
+        logger.debug("Could not record the lock holder in %s: %s", path, exc)
 
 
 def _read_lock_holder(handle: TextIO) -> str:
