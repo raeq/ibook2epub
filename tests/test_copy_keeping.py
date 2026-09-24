@@ -152,3 +152,52 @@ class TestTwoPdfsOfOneSize:
 
         assert sorted(listed) == [("Paper.pdf", "collision"), ("Paper.pdf", "copied")]
         assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4 AAAA"
+
+
+class TestAPdfOfAnotherSizeUnderItsName:
+    """
+    A PDF copied, then deleted from the library, and a different PDF of its
+    name added: the claim pass saw the sizes differ, but placing trusted the
+    name, so the newcomer was listed as copied and never copied, and the
+    deleted book's file was not listed as an orphan.
+    """
+
+    @staticmethod
+    def _replaced(tmp_path: Path, output_dir: Path, mode: str) -> list[str]:
+        library = tmp_path / "lib"
+        (library / "a").mkdir(parents=True)
+        (library / "a" / "Paper.pdf").write_bytes(b"%PDF-1.4 the old paper")
+        argv = [*_argv(library, output_dir, mode), "-m", "0"]
+        run.main([*argv, "-q"])
+        (library / "a" / "Paper.pdf").unlink()
+        (library / "b").mkdir()
+        (library / "b" / "Paper.pdf").write_bytes(b"%PDF-1.4 a longer, newer paper")
+        return argv
+
+    def test_skip_mode_reports_a_collision(self, tmp_path, output_dir, capsys):
+        argv = self._replaced(tmp_path, output_dir, "skip")
+        capsys.readouterr()
+
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert "Name collision, skipping: Paper.pdf" in ran.err
+        assert "1 orphaned" in ran.out
+        assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4 the old paper"
+
+    def test_suffix_mode_copies_it_beside_the_old_file(
+        self, tmp_path, output_dir, capsys
+    ):
+        argv = self._replaced(tmp_path, output_dir, "suffix")
+        library = Path(argv[1])
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, *SUFFIX)
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert sorted(listed) == [("Paper.pdf", "copy"), ("Paper.pdf", "orphan")]
+        assert "1 copied" in ran.out
+        assert (output_dir / "Paper (2).pdf").read_bytes() == (
+            b"%PDF-1.4 a longer, newer paper"
+        )

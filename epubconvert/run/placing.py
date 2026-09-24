@@ -132,7 +132,7 @@ def _foreign_to(
     """Say why *clash* is not this book's archive; None if free or its own."""
     if clash is None:
         return None
-    return foreign(
+    reason = foreign(
         clash.path,
         clash.identity,
         identity,
@@ -140,6 +140,11 @@ def _foreign_to(
         source=assignment.package,
         live=shelf.live,
     )
+    if reason is None and assignment.not_own:
+        # Settled by the claim pass, which read the sizes: a PDF has no
+        # identifier for foreign to go by.
+        return f"{clash.path.name} already holds this name"
+    return reason
 
 
 def settled(

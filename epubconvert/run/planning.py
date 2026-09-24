@@ -512,11 +512,16 @@ def _held_by_loser(item: Assignment, shelf: Shelf) -> Existing | None:
     :param shelf: The archives already present.
 
     :return: The archive under that name when it can be this book's, as the
-        plan would judge a book of that name: of its identity, and not
-        holding another book by identifier.
+        plan would judge a book of that name: of its identity, not holding
+        another book by identifier, and not a file the claim pass found is
+        not a copy's own.
     """
     found = shelf.existing.get(filesystem_key(item.identity))
-    if found is None or not same_identity(found.identity, item.identity):
+    if (
+        found is None
+        or item.not_own
+        or not same_identity(found.identity, item.identity)
+    ):
         return None
     return found if holds_another_book(found.path, item.identifier) is None else None
 

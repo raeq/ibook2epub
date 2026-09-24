@@ -262,20 +262,26 @@ class _Claiming:
         filename, key = taken
         self.holders[filesystem_key(key)] = filename
         found = self.existing.get(filesystem_key(key))
+        # Read where the file there may be another book's, so the plan can
+        # tell (placing.place). Whether another book wants it is a question
+        # about the name it wanted, as in kept.
+        own, identifier = (
+            self._own(source, found, filesystem_key(group))
+            if found is not None
+            else (True, None)
+        )
         return Assignment(
             source,
             filename,
             key,
-            # Read where the file there may be another book's, so the plan
-            # can tell (placing.place).
-            identifier=(
-                self._own(source, found, filesystem_key(key))[1]
-                if found is not None
-                else None
-            ),
+            identifier=identifier,
             # Positional, from the name it wanted: a copy has no digest of its
             # own identifier to move on to. See placing.place.
             marked=name if self.setup.on_collision == SUFFIX else None,
+            # Its size says so where no identifier can: a PDF of another size
+            # under its name, once the book copied there left the library,
+            # was placed at that file and never copied.
+            not_own=not own,
         )
 
     def _lost(self, source: Path, group: str) -> Assignment:
