@@ -9,6 +9,36 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--min-free` stops every book not yet started once any check finds the
+  volume below the floor; only the sampled book used to stop while the rest
+  kept writing. Those books are reported as not attempted, not failed, and
+  the floor now applies to files copied through (PDFs and already-zipped
+  books) as well.
+
+- A copy-through that fails is counted as a failure, so the run exits 1 and
+  says so, where it exited 0 with a clean summary.
+
+- `--annotations-refresh` exits 3 when another run holds the output lock and
+  5 when the lock file cannot be opened, instead of crashing; and which of
+  the two a run gets no longer depends on the text of the output path.
+
+- A full output volume no longer crashes the run while it records its
+  process id in the lock file.
+
+- Ctrl-C while the library is being read and named, or during
+  `--annotations-refresh`, `--list` or `--verify`, exits 130 with a summary
+  instead of a traceback.
+
+- A dry run no longer counts the books it would export as remaining, and
+  says when `--max-export-files` held books back.
+
+- `--dry-run` and `--list` exit 5 when `-o` names a file, as a real run does.
+
+- A highlight that two same-named packages in different folders could both
+  own is embedded in neither book and written to neither note, with a
+  warning. Only `--annotations-refresh` checked for this before; the
+  conversion and the notes vault gave each book the other's highlights.
+
 - One unusual value in Apple's databases no longer costs the whole
   annotation export or library catalogue. A BLOB where a note, chapter or id
   belongs, or TEXT that is not valid UTF-8, made the export crash or fail
