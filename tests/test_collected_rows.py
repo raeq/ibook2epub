@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from epubconvert.collect import annotations, library, validate
+from epubconvert.collect import annotations, coredata, library, validate
 from epubconvert.utils.opf import Package
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -49,12 +49,10 @@ class TestAnInfiniteNumberCostsOneRowAtMost:
     def test_any_arithmetic_error_costs_only_its_own_row(self, tmp_path, monkeypatch):
         # The backstop: the next numeric column to overflow is caught by the
         # guard even if the conversion that meets it forgets to be careful.
-        moment = annotations.moment
-
         def overflowing(value: object) -> str | None:
             if value == 1.0:
                 raise OverflowError("date value out of range")
-            return moment(value)
+            return coredata.moment(value)
 
         monkeypatch.setattr(annotations, "moment", overflowing)
 
