@@ -9,6 +9,62 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- One unusual value in Apple's databases no longer costs the whole
+  annotation export or library catalogue. A BLOB where a note, chapter or id
+  belongs, or TEXT that is not valid UTF-8, made the export crash or fail
+  outright; now the bad value is left out or its bytes replaced.
+
+- A FIFO inside a package no longer hangs the library or annotation export,
+  metadata naming or cover extraction. Package members must be regular files,
+  checked on the open descriptor, and reads are bounded.
+
+- An `encryption.xml` or package document declaring an encoding the XML
+  parser refuses (Shift_JIS, EUC-JP, UTF-32, or an unknown one) no longer
+  crashes the run: encryption fails closed as protected, and the package is
+  treated as unreadable. A package directory that is a symlink loop is
+  unreadable too, rather than a crash on Python 3.10 to 3.12.
+
+- `encryption.xml` is read in linear time. Deeply nested blocks could take
+  close to a minute per book.
+
+- A 13-digit identifier counts as an ISBN only under the book prefixes 978
+  and 979. Other EAN-13 barcodes were exported as `urn:isbn` and as the
+  Goodreads ISBN13.
+
+- Text-fragment locators percent-encode `-`, so a highlight that starts or
+  ends with a dash is no longer read as a prefix or suffix.
+
+- `--validate` and `--verify` require `mimetype` to be physically first in
+  the archive, not only first in its index.
+
+- Exported dates always carry a four-digit year.
+
+- A package already carrying `META-INF/annotations.json` no longer produces
+  an archive with two members of that name when annotations are embedded.
+
+- A book with a member larger than 2 GiB can be exported; ZIP64 headers are
+  written when needed, and every other book exports byte for byte as before.
+
+- A cover is written to a temporary file and published only when complete,
+  so a failed copy no longer leaves a truncated cover no later run replaces.
+  Its extension is lower-cased and limited to image types, so a book can no
+  longer write `Book.EPUB` beside `Book.epub`, or a non-image file.
+
+- `--portable-names` escapes Windows device names followed by any extension
+  (`NUL.tar.epub`), the superscript `COM¹` to `LPT³` forms and
+  `CONIN$`/`CONOUT$`, and replaces undecodable bytes rather than writing
+  invalid UTF-8.
+
+- Rewriting the detached annotation export or a note keeps the file's
+  permission bits, writes through a symlink instead of replacing it, and
+  flushes the new contents to disk before the rename.
+
+- Refreshing the annotations in an exported book streams its members rather
+  than holding the whole book in memory.
+
+- Names from the library are escaped in log lines, so control characters in
+  a file name no longer reach the terminal.
+
 - `--list` and `--verify` refuse a flag that would write: `-ae -ar` used to
   run the refresh instead, rewriting every archive on the shelf and neither
   listing nor verifying anything, and `-ae` or `-ad` wrote nothing and
