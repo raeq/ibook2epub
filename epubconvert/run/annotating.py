@@ -491,7 +491,10 @@ def _claimed(
         policy,
         max_workers=args.workers,
         skip_incomplete=args.skip_incomplete,
-        copied=not args.no_copy_through,
+        # A refresh copies nothing, so an evicted file is left unopened, as
+        # under --no-copy-through: named as a copy, every zipped book was
+        # opened, and so downloaded, to refresh the other books' highlights.
+        copied=not args.annotations_refresh,
     )
     return claim_copies(
         assignments,

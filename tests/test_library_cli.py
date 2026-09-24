@@ -735,10 +735,8 @@ class TestARefreshConvertsNothing:
             ["--validate"],
             ["--epubcheck"],
             ["--refresh"],
-            ["--skip-incomplete"],
             ["--match", "hobbit"],
             ["-m", "0"],
-            ["--workers", "3"],
             ["--no-copy-through"],
             ["--no-shuffle"],
             ["--force"],
@@ -762,6 +760,10 @@ class TestARefreshConvertsNothing:
             ["-ad", "h.json"],
             # It rebuilds archives on the shelf's volume, so the floor applies.
             ["--min-free", "0"],
+            # It names the library as the shelf does: an evicted package is
+            # read for its identifier unless told not to, in a pool.
+            ["--skip-incomplete"],
+            ["--workers", "3"],
         ],
     )
     def test_what_shapes_the_refresh_is_still_accepted(self, shaping):

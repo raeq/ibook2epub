@@ -47,7 +47,8 @@ from .planning import COLLISION_MODES, SKIP, STATUSES
 #: own destination and say where they wrote it. --min-free is accepted by
 #: --annotations-refresh alone, which rebuilds every archive it refreshes on
 #: the shelf's own volume; see REFRESH_WRITES. --skip-incomplete and --workers
-#: are accepted by any of them that writes a vault; see VAULT_NAMES.
+#: are accepted by it too, and by any of them that writes a vault; see
+#: VAULT_NAMES.
 CONVERSION_ONLY = (
     ("list_only", "--list"),
     ("verify", "--verify"),
@@ -67,8 +68,12 @@ CONVERSION_ONLY = (
 #: The CONVERSION_ONLY flags --annotations-refresh still has a use for. It
 #: rebuilds each archive beside the original, a whole copy of the book on the
 #: output volume, and refusing --min-free there left it rebuilding onto a
-#: volume already below the floor with no way to say otherwise.
-REFRESH_WRITES = frozenset({"min_free"})
+#: volume already below the floor with no way to say otherwise. It also finds
+#: each book's archive as the shelf names it, the files copied through
+#: included, so it takes VAULT_NAMES's flags for VAULT_NAMES's reasons: an
+#: evicted package is read for its identifier unless --skip-incomplete says
+#: not to, and the copies are named in a pool of --workers.
+REFRESH_WRITES = frozenset({"min_free", "skip_incomplete", "workers"})
 #: The CONVERSION_ONLY flags a vault of notes still has a use for. Its notes
 #: are named as the shelf names its books, the files copied through included,
 #: in a pool of --workers; under a metadata policy that opens each zipped
@@ -665,9 +670,10 @@ def _check_convert_nothing_flags(
         mode = "--annotations-only"
     elif args.annotations_refresh:
         # A third convert-nothing mode, and it was missing here: it walks the
-        # whole shelf and consults none of these, so "-ae -ar --match Alpha"
-        # rewrote every archive rather than Alpha's. The two above cannot
-        # reach it -- each refuses -ae, which -ar requires.
+        # whole shelf and consults almost none of these, so "-ae -ar --match
+        # Alpha" rewrote every archive rather than Alpha's. What it does
+        # consult is in REFRESH_WRITES. The two above cannot reach it -- each
+        # refuses -ae, which -ar requires.
         mode = "--annotations-refresh"
         if args.force:
             parser.error(

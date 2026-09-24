@@ -685,7 +685,9 @@ that was already on the shelf is not rewritten by a run that had nothing else
 to do with it, so bringing an older shelf up to date is what `-ar` is for.
 Each book it refreshes is rebuilt beside the original, so `-ar` stops at the
 `--min-free` floor as a conversion does, and exits `1` if the floor stopped it
-or a book could not be refreshed.
+or a book could not be refreshed. It copies nothing, so it never opens a
+zipped book iCloud has evicted, and it takes `--skip-incomplete` and `-w` as a
+conversion does.
 
 `-ad` and `-ao` write to standard output when given no filename, so
 `ibook2epub -ao \| jq '.annotations[].text'` works. Everything else then goes to

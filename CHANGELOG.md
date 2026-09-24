@@ -149,9 +149,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   stdout after the books are written. A dangling symlink or a symlink loop
   under `-o` is no longer described as "a file".
 
-- `-ae -ar -ad FILE.json` (or CSV) no longer names and opens every zipped
-  book, which downloaded evicted iCloud books, for a file that never uses the
-  names.
+- `-ae -ar -ad FILE.json` (or CSV) no longer names the zipped books a second
+  time for a file that never uses the names. The refresh's own naming still
+  opened, and so downloaded, every one iCloud had evicted.
 
 - `-ae` says the highlights of books the `--min-free` floor stopped wait for a
   rerun, rather than that they reached no file. `-ae -ar` no longer says books
