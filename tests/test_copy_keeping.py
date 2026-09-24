@@ -12,6 +12,7 @@ book, a copy and a package of one book, or two files of one size.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import os
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -22,6 +23,10 @@ from tests.conftest import make_metadata_package
 from tests.test_copy_claims import SUFFIX, identifier_of, listing, shelf, zipped_book
 
 DUNE = "urn:isbn:9780441013593"
+
+#: Modification times, in nanoseconds: one long past, one after every test ran.
+EARLIER = 1_000_000_000 * 1_000_000_000
+LATER = 4_000_000_000 * 1_000_000_000
 
 
 def _argv(library: Path, output_dir: Path, mode: str) -> list[str]:
@@ -201,3 +206,82 @@ class TestAPdfOfAnotherSizeUnderItsName:
         assert (output_dir / "Paper (2).pdf").read_bytes() == (
             b"%PDF-1.4 a longer, newer paper"
         )
+
+
+class TestAZippedBookOfOneSizeReplacingAnother:
+    """
+    A zipped book copied, deleted from the library, and a different one of
+    its name and size added: with no other book wanting the name, the size
+    alone said the file on the shelf was the newcomer's, so it was listed as
+    copied and never copied. A copy now keeps its source's modification
+    time, and the pair is compared, which still downloads nothing.
+    """
+
+    @staticmethod
+    def _replaced(tmp_path: Path, output_dir: Path, mode: str) -> list[str]:
+        library = tmp_path / "lib"
+        first = zipped_book(tmp_path, library / "a" / "Book.epub", "urn:uuid:A", "A")
+        os.utime(first, ns=(EARLIER, EARLIER))
+        argv = [*_argv(library, output_dir, mode), "-m", "0"]
+        run.main([*argv, "-q"])
+        first.unlink()
+        added = zipped_book(tmp_path, library / "0" / "Book.epub", "urn:uuid:C", "C")
+        assert added.stat().st_size == (output_dir / "Book.epub").stat().st_size
+        return argv
+
+    def test_the_copy_keeps_its_sources_modification_time(self, tmp_path, output_dir):
+        self._replaced(tmp_path, output_dir, "skip")
+
+        assert (output_dir / "Book.epub").stat().st_mtime_ns == EARLIER
+
+    def test_skip_mode_reports_a_collision(self, tmp_path, output_dir, capsys):
+        argv = self._replaced(tmp_path, output_dir, "skip")
+        capsys.readouterr()
+
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert "Book.epub holds another book, urn:uuid:A" in ran.err
+        assert "1 orphaned" in ran.out
+
+    def test_suffix_mode_copies_it_beside_the_old_file(
+        self, tmp_path, output_dir, capsys
+    ):
+        argv = self._replaced(tmp_path, output_dir, "suffix")
+        capsys.readouterr()
+
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert "1 copied" in ran.out
+        assert identifier_of(output_dir / "Book.epub") == "urn:uuid:A"
+        assert identifier_of(output_dir / "Book (2).epub") == "urn:uuid:C"
+
+
+class TestACopyMadeBeforeCopiesKeptTheirTime:
+    """
+    A copy used to take the time it was written. A shelf of those is newer
+    than every source, and must not be copied again, or taken for another
+    book's, on the first run that compares the times.
+    """
+
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_it_is_still_the_books_copy(self, tmp_path, output_dir, capsys, mode):
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "a" / "Book.epub", "urn:uuid:A", "A")
+        (library / "b").mkdir()
+        (library / "b" / "Paper.pdf").write_bytes(b"%PDF-1.4 paper")
+        argv = [*_argv(library, output_dir, mode), "-m", "0"]
+        run.main([*argv, "-q"])
+        for copied in output_dir.glob("[BP]*"):
+            os.utime(copied, ns=(LATER, LATER))
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, "--on-collision", mode)
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert sorted(listed) == [("Book.epub", "copied"), ("Paper.pdf", "copied")]
+        assert " copied" not in ran.out
+        assert "collision" not in ran.out
+        assert "orphan" not in ran.out

@@ -97,6 +97,7 @@ def claim_copies(
         existing=_on_shelf(output_dir, policy),
         unopened=unopened,
         contested={key for key, count in wants.items() if count > 1},
+        stamps=frozenset(_stamp(source)[1] for source, _ in wanting),
     )
     for item in assigned:
         if item.filename:
@@ -133,6 +134,8 @@ class _Claiming:
     packaged: dict[str, Assignment] = field(default_factory=dict)
     #: The shelf's files a copy has kept as its own, each by one copy only.
     taken: set[Path] = field(default_factory=set)
+    #: The modification time of every file the pass copies, in nanoseconds.
+    stamps: frozenset[int] = frozenset()
 
     def __post_init__(self) -> None:
         for key, found in self.existing.items():
@@ -153,9 +156,9 @@ class _Claiming:
         A copy whose own bytes are on the shelf under its name or one of its
         numbers claims first: two PDFs of one name have no identifier to tell
         them apart, and the first in sorted order took the other's file for
-        its own copy and was never copied. Of those, one whose file is its
-        size before one whose file only declares its identifier, which two
-        copies of one book share. Then one whose name is on the shelf, as a
+        its own copy and was never copied. Of those, one whose file stat says
+        is its copy before one whose file only declares its identifier,
+        which two copies of one book share. Then one whose name is on the shelf, as a
         package does. Each file is kept by one copy at most, so one that
         finds its file already kept claims a name with the rest.
 
@@ -193,7 +196,8 @@ class _Claiming:
 
         :param source: The file to copy.
         :param name: The name it wants.
-        :param exact: Only a file of *source*'s size will do.
+        :param exact: Only a file :func:`_same_file` finds is *source*'s will
+            do.
 
         :return: The file, its identity and *source*'s identifier when it was
             read; None when no file there is *source*'s.
@@ -230,7 +234,8 @@ class _Claiming:
 
         :param source: The file to copy.
         :param name: The name it wants.
-        :param exact: Only a file of *source*'s size will do.
+        :param exact: Only a file :func:`_same_file` finds is *source*'s will
+            do.
 
         :return: Its assignment, or None when it has to claim a name.
         """
@@ -318,7 +323,8 @@ class _Claiming:
         copy and a package of one book declare one identifier, and the copy
         took the package's archive for its own on the next run: the size
         does not tell them apart there, since a converted archive can be the
-        size of the zipped book it was made from.
+        size of the zipped book it was made from. A file with the copy's size
+        and modification time is the copy's, whatever the identifiers say.
 
         :param source: The file to copy.
         :param found: A file on the shelf under a name it wants.
@@ -328,7 +334,7 @@ class _Claiming:
         """
         key = filesystem_key(self.setup.policy.identity(found.name))
         item = self.packaged.get(key)
-        if item is None:
+        if item is None or _stamp(found) == _stamp(source):
             return False
         identifier = item.identifier
         if identifier is None and not getattr(
@@ -339,7 +345,7 @@ class _Claiming:
         holder = identifier_on_shelf(found) if identifier is not None else None
         if holder is not None:
             return holder == identifier
-        return not _same_size(source, found)
+        return not _same_file(source, found, self.stamps)
 
     def _own(
         self, source: Path, found: Path, key: str, *, exact: bool = False
@@ -347,9 +353,10 @@ class _Claiming:
         """
         Decide whether *found* is *source*'s copy, which is written byte for byte.
 
-        Its size says so while no other book of the pass wants the name: a
-        stat each, which downloads nothing, so a rerun over a shelf of copies
-        opens none of them. Where another book wants it too, two different
+        Its size and modification time say so while no other book of the
+        pass wants the name (:func:`_same_file`): a stat each, which
+        downloads nothing, so a rerun over a shelf of copies opens none of
+        them. Where another book wants it too, two different
         zipped books of one size told apart by nothing else, and the one
         added later was never copied; there the identifiers decide. They
         decide too for a file of another size, which may be the copy's own
@@ -359,12 +366,12 @@ class _Claiming:
         :param source: The file to copy.
         :param found: The file on the shelf under the name it wants.
         :param key: That name's filesystem key.
-        :param exact: Only a file of *source*'s size will do, whatever the
-            identifiers say.
+        :param exact: Only a file :func:`_same_file` finds is *source*'s will
+            do, whatever the identifiers say.
 
         :return: Whether it is, and *source*'s identifier when it was read.
         """
-        same = _same_size(source, found)
+        same = _same_file(source, found, self.stamps)
         if same and key not in self.contested:
             return True, None
         identifier = self._identifier(source)
@@ -439,9 +446,42 @@ def _copy_identifier(source: Path) -> str | None:
         return None
 
 
-def _same_size(source: Path, found: Path) -> bool:
-    """Whether *found* is *source*'s size: a stat each, which downloads nothing."""
+def _stamp(path: Path) -> tuple[int, int]:
+    """A file's size and modification time in nanoseconds; a stat, no download."""
     try:
-        return source.stat().st_size == found.stat().st_size
+        status = path.stat()
     except OSError:  # pragma: no cover - racing removal
+        return -1, -1
+    return status.st_size, status.st_mtime_ns
+
+
+def _same_file(source: Path, found: Path, stamps: Collection[int]) -> bool:
+    """
+    Decide from a stat of each whether *found* is *source*'s copy.
+
+    A copy keeps its source's modification time
+    (:func:`~epubconvert.export.archive.copy_through`), so the size and the
+    time together say so. By size alone, a zipped book or a PDF of the same
+    size replacing a deleted one was taken as already copied, and never was.
+
+    Copies made before that took the time they were written, which is later
+    than their source's. A file newer than the source is taken as one of
+    those, by its size alone, as it always was: otherwise every copy on a
+    shelf made before the upgrade was another book's on the first run after
+    it, and copied again or reported. Unless its time is that of a file this
+    pass copies, when it is that file's copy. A file older than the source is
+    not its copy: the source changed since, or it is another file.
+
+    :param source: The file to copy.
+    :param found: A file on the shelf under a name it wants.
+    :param stamps: The modification time of every file the pass copies.
+
+    :return: True when stat says *found* is *source*'s copy.
+    """
+    size, made = _stamp(source)
+    found_size, found_made = _stamp(found)
+    if size != found_size:
         return False
+    if found_made == made:
+        return True
+    return found_made > made and found_made not in stamps

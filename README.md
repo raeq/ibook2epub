@@ -639,6 +639,15 @@ copied again: the package is reported as a collision rather than as exported
 from the other book's file, or under `--on-collision suffix` is written beside
 it, as `Book (2).epub` when it has no digest marker either.
 
+A copy is recognised on the shelf without opening it: a copy keeps its
+source's modification time, and the file under its name is its copy when the
+size and the time match. A file of another size, or older than the source, is
+another book's, so a different PDF of the same name and size replacing a
+deleted one is copied rather than taken as already there. Copies made by
+releases before this one carry the time they were written, which is later than
+their source's; such a file is still recognised by its size alone, so
+upgrading copies nothing again.
+
 ### Taking your highlights with you
 
 Apple keeps your highlights and notes in its own database, not in the books. So
