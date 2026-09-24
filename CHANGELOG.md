@@ -9,6 +9,36 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A package and an already-zipped book that want one shelf name no longer
+  shadow each other. The package gets the name; the copy is reported as a name
+  collision, or copied as `Name (2).epub` under `--on-collision suffix`.
+  Before, the copy could land first (and the package was then "exported" from
+  the zipped book's file), be dropped with no message, or be overwritten by
+  `--force`. Two zipped editions under one name are handled the same way.
+
+- A book that lost its name no longer has its own archive listed as an orphan
+  under the default policy (`b/dune.epub` beside an added `a/Dune.epub`).
+
+- With `-ae`, the run warns that highlights reached no file for a book that
+  `--force` or `--refresh` found to be a collision under a folder-named policy.
+
+- `-ae -ar` under a folder-named policy reads only the books with highlights
+  again: 2,000 books with one highlight went from 2,000 package reads and
+  2,002 archive opens to 1 and 3.
+
+- `--match` narrows the PDFs and zipped books copied through. `-m` still does
+  not cap copies, and its help now says so.
+
+- A vault note is named after the file the book is on the shelf at, so an
+  edition moved to its marked name no longer writes into another edition's
+  note.
+
+- A vault writes a note for each already-zipped book or PDF that has
+  highlights, under conversion, `-ar` and `-ao`.
+
+- A dry run reports the files it would copy ("N to copy") and the copies it
+  would skip.
+
 - A manifest href such as `" //[x#f"` (a space, tab or carriage return before
   `//[`) no longer ends the whole run with "Invalid IPv6 URL", including under
   `--dry-run` and when a zipped book is named with `--name-by author-title`;
