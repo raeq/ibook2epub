@@ -148,6 +148,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   to write its own highlights over; the run names the note and exits 1, or
   under `--on-collision suffix` numbers the namesake.
 
+- A note written by 2.3.1 or earlier that two editions both match now goes to
+  neither on every run, not just the first. Once that first run had given one
+  edition a fresh note, the next run, with nothing changed, handed the old note
+  to the other edition and wrote its highlights over what you had written for
+  the first. An edition that has another note of its own now steps aside, so
+  the PDF's old `Dune.md` beside the EPUB's `Dune (2).md` stays the PDF's. A
+  renamed edition's old note is never handed to a namesake that highlighted the
+  same passage. A rerun with nothing changed writes nothing.
+
+- When a renamed book's note cannot be moved because a file is already at its
+  new name, the error now says what that file is (a file ibook2epub did not
+  write, or another book's note) and asks you to move that file aside, instead
+  of telling you to move the note onto it, which would have replaced it. When
+  the book has two old notes, you are asked to merge them.
+
+- A renamed book's note is no longer held back, with exit 1 on every run,
+  because a namesake with no highlights (a `Dune.pdf` beside the renamed
+  `Dune.epub`) keeps the old name. The note moves to the book's new name, and
+  the namesake starts its own note once it has highlights.
+
 - A package holding a file whose name is not valid UTF-8 is reported failed
   with that file's name ("member name is not UTF-8"), instead of a bare codec
   error that named no file.
