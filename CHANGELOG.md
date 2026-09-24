@@ -20,6 +20,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `-ae -ar` writes a book's members in the order the file stores them, not
+  the order its central directory lists them. A book storing `mimetype`
+  first but listing it later passed `--verify`, was rewritten with
+  `mimetype` not first, and then failed it.
+
+- A container's rootfile media type is compared without regard to case or
+  parameters, so `application/oebps-package+xml; charset=utf-8` names the
+  package document. Without a match, the first rootfile declaring no media
+  type is taken ahead of one declaring another: a PDF listed ahead of an
+  untyped package document was parsed as the package document.
+
+- A zip member is named by its own header on every Python. Python 3.14 took
+  the name from a Unicode Path extra field (0x7075) instead, where 3.10 and
+  3.11 ignore it, so a member stored as `a.xhtml` with such a field saying
+  `b.xhtml` had a different name on each, and `--verify` and `-ae -ar` read
+  the book differently.
+
 - Under `--on-collision suffix`, a book declaring no usable identifier no
   longer keeps a numbered-looking file that declares one. A deleted
   `Dune (1965)` left `Dune (1965).epub`, and an unidentified `Dune` added
@@ -816,9 +833,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
     is found. A name stored twice, once flagged and once not, is reported as
     a duplicate.
 
-- `--verify` and `--validate` report a `mimetype` member whose local header
-  carries an extra field, which OCF forbids and epubcheck rejects. `zip`
-  run without `-X` writes one.
+- `--verify` and `--validate` warn of a `mimetype` member whose local header
+  carries an extra field, which OCF asks against and epubcheck rejects.
+  `zip` run without `-X` writes one, and readers open such a book, so it is
+  said on stderr (`Hand Made.epub: mimetype carries a 28-byte extra field;
+  OCF asks for none, readers open it`) and not counted damaged: the exit
+  code is unchanged and no repair is advised. A book copied through keeps
+  its bytes, so calling it damaged had `--verify` advise a rerun that copied
+  the same bytes back, and it never passed. Under `--epubcheck`, epubcheck's
+  own verdict still stands.
 
 - A container that lists another rendition, such as a PDF, ahead of the
   package document is read at the package document: the first rootfile whose
