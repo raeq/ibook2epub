@@ -805,6 +805,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   an `ERROR`, and both of epubcheck's output streams are read, so a JVM notice
   on one no longer hides the errors on the other.
 
+- A book zipped with Info-ZIP (`zip -X0 book.epub mimetype`, then
+  `zip -rX9 book.epub META-INF OEBPS`), whose non-ASCII member names are
+  UTF-8 but not flagged as such, is read by those names:
+  - `-ae -ar` no longer renames such a member while refreshing the book, which
+    left `OEBPS/第1章.xhtml` stored as `OEBPS/τ¼¼1τ½á.xhtml` and the book
+    broken, and reported it refreshed.
+  - `--verify` and `--validate` no longer call such a book damaged ("manifest
+    item is not in the archive"), and a package document at a non-ASCII path
+    is found. A name stored twice, once flagged and once not, is reported as
+    a duplicate.
+
+- `--verify` and `--validate` report a `mimetype` member whose local header
+  carries an extra field, which OCF forbids and epubcheck rejects. `zip`
+  run without `-X` writes one.
+
+- A container that lists another rendition, such as a PDF, ahead of the
+  package document is read at the package document: the first rootfile whose
+  media type is `application/oebps-package+xml`. The PDF was parsed as the
+  package document and a sound book called damaged.
+
+- A book retitled in Books, or whose language, year or declared identifier
+  changed, takes its new values in a merged `-ao` or `-ad` file rather than
+  keeping the old ones for as long as its highlights were not edited.
+
 ## [2.3.1] - 2026-09-11
 
 ### Changed
