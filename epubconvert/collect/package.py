@@ -130,6 +130,34 @@ def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
     return archive.open(info)
 
 
+#: What :func:`repeated_entries` says of directory entries sharing a header.
+SHARED_HEADER = "members share a local header (possible zip bomb)"
+
+
+def repeated_entries(archive: ZipFile) -> str | None:
+    """
+    Report whether the central directory lists any member more than once.
+
+    A directory may list one local header any number of times, and a name
+    more than once. zipfile 3.13 and later merely warn about a shared header,
+    and every reader that opens entries in turn -- by name or by entry --
+    inflates the same member once per listing: a 4 MiB book listing one
+    member 200 times was refreshed into 800 MiB. So an archive that repeats
+    either is read no further, whichever zipfile is reading it.
+
+    :param archive: The open archive.
+
+    :return: :data:`SHARED_HEADER` if two entries share a local header, a
+        description if two share a name, or None if neither does.
+    """
+    entries = archive.infolist()
+    if len({info.header_offset for info in entries}) < len(entries):
+        return SHARED_HEADER
+    if len({info.filename for info in entries}) < len(entries):
+        return "member names appear more than once"
+    return None
+
+
 def read_member(archive: ZipFile, info: ZipInfo, limit: int) -> bytes | None:
     """
     Decompress a member of an untrusted archive, but never more than *limit*.

@@ -22,7 +22,7 @@ from typing import Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
-from ..collect.package import open_member, read_member
+from ..collect.package import open_member, read_member, repeated_entries
 from ..collect.validate import ArchiveInvalidError, ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
@@ -764,6 +764,7 @@ def replace_annotations(
     :return: True if the archive was rewritten, False if it already said this.
 
     :raises NoRoomError: If *room* said there is no room for the copy.
+    :raises ArchiveInvalidError: If the archive lists a member more than once.
     """
     # An empty set is not an instruction to delete. A package that arrived
     # carrying its own annotations lost them silently when this run happened
@@ -775,6 +776,10 @@ def replace_annotations(
     target_archive, mode = _what_to_replace(target_archive)
     try:
         with ZipFile(target_archive) as reading:
+            # Each listing of a member would be inflated and written again.
+            repeated = repeated_entries(reading)
+            if repeated is not None:
+                raise ArchiveInvalidError(target_archive.name, [repeated])
             names = reading.namelist()
             held = (
                 read_member(reading, reading.getinfo(EMBEDDED_PATH), MAX_EMBEDDED_BYTES)

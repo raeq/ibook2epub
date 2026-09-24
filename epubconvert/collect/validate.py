@@ -31,11 +31,14 @@ from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.spec import MIMETYPE_CONTENT, MIMETYPE_NAME
 from .package import (
+    SHARED_HEADER,
     UNREADABLE_MEMBER,
     ValidationError,
     disallowed_method,
+    open_member,
     read_member,
     read_package,
+    repeated_entries,
 )
 
 EPUBCHECK = "epubcheck"
@@ -93,12 +96,16 @@ def validate_archive(path: Path) -> list[str]:
             members = set(names)
             problems.extend(_check_mimetype(archive, names))
             problems.extend(_check_unique(names))
+            repeated = repeated_entries(archive)
+            if repeated == SHARED_HEADER:
+                problems.append(repeated)
 
             # Before anything is inflated: the contents are checked only when
-            # every member can be decompressed in bounded memory.
-            problems.extend(
-                _check_methods(archive) or _check_contents(archive, members)
-            )
+            # every member can be decompressed in bounded memory, and once.
+            methods = _check_methods(archive)
+            problems.extend(methods)
+            if not methods and repeated is None:
+                problems.extend(_check_contents(archive, members))
     except BadZipFile as exc:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:
@@ -123,7 +130,7 @@ def _check_contents(archive: ZipFile, members: set[str]) -> list[str]:
     :return: A list of problems.
     """
     problems: list[str] = []
-    broken = archive.testzip()
+    broken = _first_corrupt(archive)
     if broken is not None:
         problems.append(f"corrupt member: {printable(broken)}")
 
@@ -133,6 +140,35 @@ def _check_contents(archive: ZipFile, members: set[str]) -> list[str]:
         return [*problems, printable(str(exc))]  # names the book's members
 
     return problems + _check_manifest(members, package)
+
+
+def _first_corrupt(archive: ZipFile) -> str | None:
+    """
+    Inflate every member once and check it against its recorded CRC.
+
+    What ``testzip()`` did, but by entry rather than by name: it opened each
+    entry by name, so every entry repeating a name inflated the last of them
+    again. Read in chunks, so no member is ever held whole.
+
+    :param archive: The open archive, every member stored or deflated, and
+        none listed twice.
+
+    :return: The first member whose contents do not match its CRC, or None.
+    """
+    for info in archive.infolist():
+        try:
+            with open_member(archive, info) as handle:
+                # zipfile checks the CRC itself once a stream is read to its
+                # end, and raises BadZipFile if it differs, as testzip() did.
+                while handle.read(_CHUNK_BYTES):
+                    pass
+        except BadZipFile:
+            return info.filename
+    return None
+
+
+#: How much of a member :func:`_first_corrupt` inflates at a time.
+_CHUNK_BYTES = 1024 * 1024
 
 
 def _check_unique(names: list[str]) -> list[str]:
