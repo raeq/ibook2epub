@@ -2,7 +2,8 @@
 The one line a run ends with.
 
 Kept apart from :mod:`epubconvert.run.convert`, which does the work, because
-the summary only reads what the work recorded in its :class:`~epubconvert.run.convert.Report`.
+the summary only reads what the work recorded in its
+:class:`~epubconvert.run.convert.Report`.
 """
 
 from __future__ import annotations

@@ -182,6 +182,12 @@ class _Progress:  # pylint: disable=too-few-public-methods
         #: it only the sampled book stopped, and every unsampled book after it
         #: went on writing: twelve books on four workers wrote ten.
         self.floor_crossed = False
+        #: Set while one caller measures the volume. The others wait for its
+        #: answer rather than take their unsampled turns meanwhile: on a slow
+        #: card every worker started a write during the one measurement that
+        #: would have refused them.
+        self.measuring = False
+        self._measured = threading.Condition(_REPORT_LOCK)
 
     def should_check_room(self) -> bool:
         """
@@ -201,22 +207,30 @@ class _Progress:  # pylint: disable=too-few-public-methods
         Once a sample finds the floor crossed, every later caller is refused
         without measuring: the volume does not get emptier by being asked
         again, and asking only every ``interval`` writes is what let the
-        writes in between carry on.
+        writes in between carry on. Callers arriving while a sample is being
+        taken wait for it.
 
         :param output_dir: Directory being written to.
         :param min_free_mb: Floor in MiB; 0 disables the check.
 
         :return: True when the write may go ahead.
         """
-        with _REPORT_LOCK:
+        with self._measured:
+            self._measured.wait_for(lambda: not self.measuring)
             if self.floor_crossed:
                 return False
-            measure = self.should_check_room()
-        if not measure or _has_room(output_dir, min_free_mb):
-            return True
-        with _REPORT_LOCK:
-            self.floor_crossed = True
-        return False
+            if not self.should_check_room():
+                return True
+            self.measuring = True
+        room = True
+        try:
+            room = _has_room(output_dir, min_free_mb)
+        finally:
+            with self._measured:
+                self.measuring = False
+                self.floor_crossed = not room
+                self._measured.notify_all()
+        return room
 
     def tick(self) -> str:
         """Advance the counter and render it as ``[12/240]``."""
