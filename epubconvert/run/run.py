@@ -429,10 +429,13 @@ def _survey(
     """
     discovered = collect_package_dirs(args.source_dir)
     packages = filter_packages(discovered, args.match)
-    if not packages:
+    copies = _plan_copies(args, policy)
+    # Not said when the run has files to copy: "No matching *.epub packages"
+    # and then "Copied Paper.pdf" read as having found nothing and then done
+    # something.
+    if not packages and not _to_copy(args, copies).sources:
         logger.warning("No matching *.epub packages found under %s", args.source_dir)
 
-    copies = _plan_copies(args, policy)
     report.ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     shared, copies = _shared_names(args, discovered, policy, copies)
     everything = [*shared.packages, *shared.copies]

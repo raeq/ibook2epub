@@ -62,7 +62,7 @@
     {
       "title": "Collect, then narrow",
       "file": "epubconvert/run/run.py",
-      "pattern": "packages = filter_packages\\(discovered, args\\.match\\)\\n    if not packages:",
+      "pattern": "packages = filter_packages\\(discovered, args\\.match\\)\\n    copies = _plan_copies\\(args, policy\\)",
       "description": "Find every package under the source directory, then keep the ones matching `--match`. The same pair of calls opens `_run_listing`, so `--list` describes exactly the library a real run would see."
     },
     {

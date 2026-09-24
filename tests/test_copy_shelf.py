@@ -411,3 +411,32 @@ class TestHighlightsOfABookCopiedThrough:
         assert f"1 annotation(s) from 1 book(s) {self.WARNING}" in (
             capsys.readouterr().err
         )
+
+
+class TestALibraryOfOnlyCopies:
+    """
+    "No matching *.epub packages found" and then "Copied Paper.pdf": a run
+    over a library of PDFs, or a --match naming only one, read as having
+    found nothing and then done something.
+    """
+
+    def test_it_does_not_say_it_found_nothing(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Paper.pdf").write_bytes(b"%PDF-1.4 fake")
+        make_metadata_package(library, "Dune.epub", title="Dune")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "--match", "paper"])
+        captured = capsys.readouterr()
+
+        assert "No matching" not in captured.err
+        assert "1 copied" in captured.out
+
+    def test_an_empty_selection_still_says_so(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Paper.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        run.main(["-s", str(library), "-o", str(output_dir), "--match", "nothing"])
+
+        assert "No matching" in capsys.readouterr().err
