@@ -370,6 +370,21 @@ class TestLockDiagnostics:
         assert "forged" in str(excinfo.value)
         assert not {"\x1b", "\x9b"} & set(str(excinfo.value))
 
+    def test_a_holder_that_is_not_text_is_still_a_held_lock(self, output_dir):
+        # A host name is bytes the system chose, and the lock file anyone's:
+        # reading it as UTF-8 raised UnicodeDecodeError, a traceback and exit
+        # 1 where a held lock exits 3.
+        pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
+        with convert.output_lock(output_dir):
+            (output_dir / convert.LOCK_NAME).write_bytes(b"pid=1 host=\xff\xfe\n")
+            with (
+                pytest.raises(convert.OutputLockedError) as excinfo,
+                convert.output_lock(output_dir),
+            ):
+                pass
+
+        assert "pid=1 host=\\udcff\\udcfe" in str(excinfo.value)
+
     def test_a_stale_lock_file_does_not_block(self, output_dir):
         # flock is released by the kernel when the holder dies, so a lock file
         # left behind by a killed run is inert. No PID liveness check needed.

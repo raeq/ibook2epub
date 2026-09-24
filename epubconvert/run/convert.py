@@ -620,8 +620,12 @@ def _read_lock_holder(handle: TextIO) -> str:
         anyone who can write there decides what it says.
     """
     try:
-        handle.seek(0)
-        details = handle.read().strip()
+        # Read as bytes and decoded as a filename is, with surrogate escapes.
+        # A host name is whatever bytes the system chose, and reading the file
+        # as UTF-8 text raised UnicodeDecodeError on one that is not: a
+        # traceback where a held lock exits 3. pread reads from the start
+        # without moving the handle, and no more than a holder writes.
+        details = os.fsdecode(os.pread(handle.fileno(), 4096, 0)).strip()
     except OSError:  # pragma: no cover - unreadable lock file
         return "holder unknown"
     return printable(details) if details else "holder unknown"
