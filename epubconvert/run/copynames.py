@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NamedTuple
@@ -19,6 +19,7 @@ from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package
 from ..export.naming import DISAMBIGUATOR_CHARS, disambiguator, filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
+from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
     NUMBERED,
     Claims,
@@ -54,7 +55,7 @@ def claim_copies(
     on_collision: CollisionMode,
     *,
     output_dir: Path | None,
-    unopened: Collection[Path] = frozenset(),
+    unopened: Container[Path] = frozenset(),
 ) -> Names:
     """
     Name the files copied through in the claim pass the packages were named in.
@@ -92,7 +93,9 @@ def claim_copies(
     :param output_dir: Directory holding exported files, or None to name the
         files without looking at the shelf, as a run that reads only Apple's
         container does.
-    :param unopened: Files not to open, because opening them downloads them.
+    :param unopened: Books not to open, because opening them downloads them:
+        the copies' files, and under ``--skip-incomplete`` an evicted
+        package (:class:`~epubconvert.run.holders.Unopened`).
 
     :return: The packages' names, some with an identifier read, and the copies'.
     """
@@ -119,7 +122,7 @@ def claim_copies(
         wanting, claim_order([name for _, name in wanting], shelf_names(output_dir))
     )
     wanted = {filesystem_key(policy.identity(name)) for _, name in copies if name}
-    return Names(_identified(assigned, wanted, policy), named)
+    return Names(_identified(assigned, wanted, policy, unopened), named)
 
 
 @dataclass
@@ -129,8 +132,8 @@ class _Claiming:
     setup: _Naming
     #: The shelf's archives, by filesystem key.
     existing: dict[str, Path]
-    #: Files not to open, because opening them downloads them.
-    unopened: Collection[Path]
+    #: Books not to open, because opening them downloads them.
+    unopened: Container[Path]
     #: Filesystem keys more than one book of the pass wants.
     contested: set[str] = field(default_factory=set)
     claims: Claims = field(default_factory=Claims)
@@ -329,6 +332,9 @@ class _Claiming:
             if found is not None
             else (True, None)
         )
+        # A zipped book left unopened may declare the identifier that says
+        # the file is its own; only a size that differs cannot tell.
+        doubt = source in self.unopened and source.suffix.lower() == PACKAGE_SUFFIX
         return Assignment(
             source,
             filename,
@@ -340,7 +346,7 @@ class _Claiming:
             # Its size says so where no identifier can: a PDF of another size
             # under its name, once the book copied there left the library,
             # was placed at that file and never copied.
-            not_own=not own,
+            not_own=not (own or doubt),
         )
 
     def _lost(self, source: Path, group: str) -> Assignment:
@@ -395,7 +401,7 @@ class _Claiming:
             self.setup.policy, "needs_metadata", False
         ):
             # Named from the folder, so the package document was not read.
-            identifier = usable_identifier(_metadata_of(item.package, True))
+            identifier = _package_identifier(item.package, self.unopened)
         holder = identifier_on_shelf(found) if identifier is not None else None
         if holder is not None:
             return holder == identifier
@@ -466,7 +472,10 @@ def _on_shelf(output_dir: Path | None, policy: NamingPolicy) -> dict[str, Path]:
 
 
 def _identified(
-    assigned: Sequence[Assignment], wanted: set[str], policy: NamingPolicy
+    assigned: Sequence[Assignment],
+    wanted: set[str],
+    policy: NamingPolicy,
+    unopened: Container[Path],
 ) -> list[Assignment]:
     """
     Read the identifier of each folder-named package a copy wanted the name of.
@@ -474,6 +483,7 @@ def _identified(
     :param assigned: The packages' names.
     :param wanted: Filesystem keys of the names the copies wanted.
     :param policy: The naming policy in force.
+    :param unopened: Books not to open, because opening them downloads them.
 
     :return: The packages' names, with those identifiers.
     """
@@ -481,15 +491,25 @@ def _identified(
         return list(assigned)
     return [
         (
-            replace(
-                item,
-                identifier=usable_identifier(_metadata_of(item.package, True)),
-            )
+            replace(item, identifier=_package_identifier(item.package, unopened))
             if item.filename and filesystem_key(item.identity) in wanted
             else item
         )
         for item in assigned
     ]
+
+
+def _package_identifier(package: Path, unopened: Container[Path]) -> str | None:
+    """
+    Read a package's usable identifier, unless opening it would download it.
+
+    Asked before the read: under ``--skip-incomplete`` the package document
+    of a book iCloud had evicted was downloaded to be compared, before the
+    inspection that calls the book not downloaded.
+    """
+    if package in unopened:
+        return None
+    return usable_identifier(_metadata_of(package, True))
 
 
 def _copy_identifier(source: Path) -> str | None:

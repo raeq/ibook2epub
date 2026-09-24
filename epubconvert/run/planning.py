@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -36,7 +36,7 @@ from .claims import (
     shelf_names,
     suffixed,
 )
-from .holders import holds_another_book, identifier_on_shelf, same_identity
+from .holders import Unopened, holds_another_book, identifier_on_shelf, same_identity
 from .placing import Existing, Shelf, place, read_shelf
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
@@ -466,6 +466,7 @@ def find_orphans(
     on_collision: CollisionMode = SKIP,
     *,
     assigned: Sequence[Assignment] | None = None,
+    unopened: Container[Path] = frozenset(),
 ) -> list[Path]:
     """
     Find archives on the shelf that no book in the library claims.
@@ -511,6 +512,7 @@ def find_orphans(
         files copied through included
         (:func:`~epubconvert.run.copynames.claim_copies`): a copy claims
         the file it is placed at, as a package does.
+    :param unopened: The books not to open for their identifier.
 
     :return: Archives no book accounts for, sorted by path.
     """
@@ -518,7 +520,7 @@ def find_orphans(
         assigned = assign_names(
             packages, policy, on_collision, shelf=shelf_names(output_dir)
         )
-    shelf = read_shelf(output_dir, policy, assigned)
+    shelf = read_shelf(output_dir, policy, assigned, unopened=unopened)
     claimed: set[str] = set()
     for item in assigned:
         clash = place(item, shelf).clash
@@ -604,7 +606,12 @@ def plan_exports(
             packages, policy, settings.on_collision, shelf=shelf_names(output_dir)
         )
     assignments = assigned
-    shelf = read_shelf(output_dir, policy, assignments)
+    shelf = read_shelf(
+        output_dir,
+        policy,
+        assignments,
+        unopened=Unopened(packages=settings.check_incomplete),
+    )
     # Neither is a failure, and both change what the shelf looks like. A run
     # that says nothing leaves the only way to notice as looking afterwards
     # and wondering.
@@ -699,6 +706,12 @@ def _decide_before_writing(
 
     :return: The decision, or None when the book may be written.
     """
+    # Under --skip-incomplete the source is inspected first: the read below
+    # downloaded the package document of a book the inspection then called
+    # not downloaded.
+    inspected = settings.check_incomplete
+    if inspected and (unusable := _decide_against_source(package, settings)):
+        return unusable
     if found is not None and unread:
         # About to write over the archive holding this name, and naming read
         # nothing that could say whose it is. Folder names are not unique: the
@@ -711,7 +724,7 @@ def _decide_before_writing(
         other = _decide_against_holder(package, found, identifier)
         if other is not None:
             return other
-    return _decide_against_source(package, settings)
+    return None if inspected else _decide_against_source(package, settings)
 
 
 def _decide_against_holder(

@@ -430,7 +430,7 @@ def _claimed(
         policy,
         args.on_collision,
         output_dir=output_dir,
-        unopened=copies.evicted,
+        unopened=copies.unopened,
     )
 
 

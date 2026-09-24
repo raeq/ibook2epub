@@ -39,7 +39,8 @@ Kept apart from the planner, which decides what to do about the answer.
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Collection
+from collections.abc import Collection, Container
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -49,6 +50,7 @@ from ..collect.package import (
     read_archive_package,
     read_package_dir,
 )
+from ..collect.source import is_evicted
 
 
 def same_identity(first: str, second: str) -> bool:
@@ -128,6 +130,28 @@ def _held_by(found: Path, holder: str | None, identifier: str) -> str | None:
     return f"{found.name} holds another book, {holder}; this book is {identifier}"
 
 
+@dataclass(frozen=True)
+class Unopened:
+    """
+    The books a run must not open to identify, because opening one downloads it.
+
+    Asked as a container: ``book in unopened``.
+    """
+
+    #: Files copied through that are left unopened: evicted, under
+    #: ``--skip-incomplete`` or ``--no-copy-through``.
+    files: frozenset[Path] = frozenset()
+    #: ``--skip-incomplete``: a package iCloud has evicted is left unopened
+    #: too, told by one stat when it is asked about (source.is_evicted).
+    packages: bool = False
+
+    def __contains__(self, book: object) -> bool:
+        """Whether *book* is not to be opened."""
+        if book in self.files:
+            return True
+        return self.packages and isinstance(book, Path) and is_evicted(book)
+
+
 def foreign(
     found: Path,
     found_identity: str,
@@ -136,6 +160,7 @@ def foreign(
     *,
     source: Path | None = None,
     live: Collection[str] = frozenset(),
+    unopened: Container[Path] = frozenset(),
 ) -> str | None:
     """
     Explain why a file matching a book's name on the filesystem is not its own.
@@ -164,6 +189,10 @@ def foreign(
         from when the file is of another identity. Without it such a file
         is always another book's.
     :param live: The identity of every book in the plan, NFC-normalized.
+    :param unopened: Books not to open for their identifier, because opening
+        one downloads it: *source* is judged as one whose identifier says
+        nothing. The read ignored ``--skip-incomplete``, and downloaded the
+        book the flag exists to leave where it is.
 
     :return: The reason to report, or None when the file may be this book's.
     """
@@ -172,7 +201,7 @@ def foreign(
     taken = f"{found.name} already holds this name"
     if source is None:
         return taken
-    if identifier is None:
+    if identifier is None and source not in unopened:
         identifier = source_identifier(source)
     holder = identifier_on_shelf(found) if identifier is not None else None
     if holder is not None and identifier is not None:
