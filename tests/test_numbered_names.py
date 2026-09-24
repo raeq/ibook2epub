@@ -543,6 +543,53 @@ class TestATitleThatLooksNumberedRenamedByCase:
         }
 
 
+class TestANamesakeOfATitleThatLooksNumbered:
+    """
+    ``b/Dune (2).epub`` is exported alone and ``a/Dune (2).epub`` added. The
+    shelf's ``Dune (2).epub`` was indexed only as a number of ``Dune``, so
+    the two books that want it were never found to share a file: the
+    newcomer, sorting first, was reported exported from the other's
+    archive, and the other was written again as ``Dune (2) (2).epub``.
+    """
+
+    def test_the_book_on_the_shelf_keeps_its_file(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir)
+        make_metadata_package(
+            library / "b", "Dune (2).epub", title="Dune", identifier="urn:b"
+        )
+        run.main([*argv, "-q"])
+        make_metadata_package(
+            library / "a", "Dune (2).epub", title="Dune", identifier="urn:a"
+        )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-d"])
+        dry = capsys.readouterr()
+        run.main(argv)
+        ran = capsys.readouterr()
+        run.main(argv)
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["source"]).parent.name, Path(row["target"]).name)
+            for row in rows
+        ) == [
+            ("exported", "b", "Dune (2).epub"),
+            ("pending", "a", "Dune (2) (2).epub"),
+        ]
+        assert "Dry run: would export 1 epub file(s)" in dry.out
+        assert "Exported 1 epub file(s)" in ran.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in dry.out + ran.out + again.out
+        written = {path.name: identifier_of(path) for path in output_dir.glob("*.epub")}
+        assert written == {"Dune (2).epub": "urn:b", "Dune (2) (2).epub": "urn:a"}
+
+
 def len_then_name(path: Path) -> tuple[int, str]:
     """Order ``X.epub``, ``X (2).epub``, ``X (3).epub`` by their number."""
     return len(path.name), path.name
