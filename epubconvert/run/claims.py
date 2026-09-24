@@ -9,9 +9,13 @@ tried as, which placing a book on the shelf tries too
 
 from __future__ import annotations
 
+import unicodedata
+from collections.abc import Collection, Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..collect.identifiers import usable_identifier
+from ..export.archive import COPYABLE_SUFFIXES, PARTIAL_PREFIX
 from ..export.naming import encode_name, filesystem_key, split_extension, truncate_bytes
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -133,3 +137,81 @@ def lost_to(holder: str | None, metadata: Package | None) -> str:
     )
     identifier = usable_identifier(metadata)
     return f"{reason}; this book is {identifier}" if identifier else reason
+
+
+def shelf_files(output_dir: Path) -> list[Path]:
+    """
+    Find every file on the shelf a run could have put there.
+
+    Every kind :func:`~epubconvert.export.archive.collect_copyable` takes
+    along, whatever the case of the extension, and no partial. The shelf was
+    read with ``glob("*.epub")``, which is case-sensitive, so a zipped book
+    copied through as ``Foo.EPUB`` was invisible to the plan, the orphan
+    check and the placing: a package ``Foo.epub`` was judged free and, on a
+    case-insensitive volume, written over it. PDFs were invisible the same
+    way.
+
+    :param output_dir: Directory holding exported files.
+
+    :return: The files, sorted; none when the directory is missing, which is
+        what a dry run or a first run finds.
+    """
+    try:
+        entries = sorted(output_dir.iterdir())
+    except OSError:
+        return []
+    return [
+        found
+        for found in entries
+        if found.suffix.lower() in COPYABLE_SUFFIXES
+        and not found.name.startswith(PARTIAL_PREFIX)
+        and found.is_file()
+    ]
+
+
+def shelf_names(output_dir: Path | None) -> frozenset[str]:
+    """
+    Read the name of every file on the shelf, for the claim pass to weigh.
+
+    :param output_dir: Directory holding exported files, or None for none.
+
+    :return: The names, NFC-normalized, as :func:`claim_order` compares them;
+        empty when there is no shelf to read.
+    """
+    if output_dir is None:
+        return frozenset()
+    try:
+        return frozenset(
+            unicodedata.normalize("NFC", found.name)
+            for found in output_dir.iterdir()
+            if found.is_file()
+        )
+    except OSError:
+        # Missing, which is what a dry run or a first run finds.
+        return frozenset()
+
+
+def claim_order(candidates: Sequence[str], shelf: Collection[str]) -> list[int]:
+    """
+    Order books for the claim pass: first those whose name is on the shelf.
+
+    The pass walked the library in sorted order and never looked at the
+    shelf. So ``a/Dune.epub``, added beside ``b/dune.epub`` already exported
+    alone, took the name a case-insensitive volume gives both, as it sorts
+    first: in suffix mode ``b`` was written again under a suffix and its
+    archive listed as an orphan, and in skip mode both were collisions, on
+    every run. A book whose exact name is a file on the shelf claims it
+    first; otherwise the sorted order stands, so a library with nothing on
+    the shelf is named as before.
+
+    :param candidates: The first name each book tries, in sorted order.
+    :param shelf: The shelf's names, from :func:`shelf_names`.
+
+    :return: Indices into *candidates*, in the order to claim.
+    """
+    if not shelf:
+        return list(range(len(candidates)))
+    return sorted(
+        range(len(candidates)),
+        key=lambda index: unicodedata.normalize("NFC", candidates[index]) not in shelf,
+    )

@@ -29,7 +29,9 @@ opens for a no-op rerun over 200 books. Under the policies that name from the
 folder it runs only for a book about to be written over an archive, which then
 pays for one source read too; reporting a book exported still trusts the name
 there, because checking that would read every source and every archive on
-every rerun.
+every rerun. The one exception is a file found under another spelling of the
+book's name, which may be the book's own archive after a rename by case; that
+rare case pays for one source read (:func:`foreign`).
 
 Kept apart from the planner, which decides what to do about the answer.
 """
@@ -37,11 +39,16 @@ Kept apart from the planner, which decides what to do about the answer.
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Collection
 from functools import lru_cache
 from pathlib import Path
 
 from ..collect.identifiers import usable_identifier
-from ..collect.package import ValidationError, read_archive_package
+from ..collect.package import (
+    ValidationError,
+    read_archive_package,
+    read_package_dir,
+)
 
 
 def same_identity(first: str, second: str) -> bool:
@@ -111,14 +118,24 @@ def holds_another_book(found: Path, identifier: str | None) -> str | None:
     """
     if identifier is None:
         return None
-    holder = identifier_on_shelf(found)
+    return _held_by(found, identifier_on_shelf(found), identifier)
+
+
+def _held_by(found: Path, holder: str | None, identifier: str) -> str | None:
+    """Explain a mismatch between the shelf's identifier and this book's."""
     if holder is None or holder == identifier:
         return None
     return f"{found.name} holds another book, {holder}; this book is {identifier}"
 
 
 def foreign(
-    found: Path, found_identity: str, identity: str, identifier: str | None
+    found: Path,
+    found_identity: str,
+    identity: str,
+    identifier: str | None,
+    *,
+    source: Path | None = None,
+    live: Collection[str] = frozenset(),
 ) -> str | None:
     """
     Explain why a file matching a book's name on the filesystem is not its own.
@@ -127,13 +144,55 @@ def foreign(
     identity, so two different books can share it; and even a file of this
     book's own identity may hold another book (:func:`holds_another_book`).
 
+    A file of another identity under the same key is not always another
+    book's, though. Rename ``b/dune.epub`` to ``b/Dune.epub`` and its archive
+    is found under the old spelling, where the default policy, comparing
+    names exactly, called it another book's for ever: a collision with its
+    own archive, or in suffix mode a second copy beside it and the first
+    listed as an orphan. So when *source* is given the book's identifier is
+    read, if the plan has not, and compared with the file's -- one read, paid
+    only for a file of another spelling. When neither identifier says, the
+    name is trusted unless another book of the library has the file's exact
+    identity: a book renamed by case keeps its archive, and a namesake that
+    is still in the library keeps its own.
+
     :param found: The archive occupying this book's filename.
     :param found_identity: That archive's identity, from its name on disk.
     :param identity: This book's identity.
     :param identifier: This book's usable identifier, or None.
+    :param source: The book's own package or file, to read its identifier
+        from when the file is of another identity. Without it such a file
+        is always another book's.
+    :param live: The identity of every book in the plan, NFC-normalized.
 
     :return: The reason to report, or None when the file may be this book's.
     """
-    if not same_identity(found_identity, identity):
-        return f"{found.name} already holds this name"
-    return holds_another_book(found, identifier)
+    if same_identity(found_identity, identity):
+        return holds_another_book(found, identifier)
+    taken = f"{found.name} already holds this name"
+    if source is None:
+        return taken
+    if identifier is None:
+        identifier = source_identifier(source)
+    holder = identifier_on_shelf(found) if identifier is not None else None
+    if holder is not None and identifier is not None:
+        # Read once: holds_another_book would stat the archive again.
+        return _held_by(found, holder, identifier)
+    return taken if unicodedata.normalize("NFC", found_identity) in live else None
+
+
+def source_identifier(source: Path) -> str | None:
+    """
+    Read the usable identifier of a book in the library.
+
+    :param source: A package directory, or a file copied through.
+
+    :return: Its identifier, or None when it has none or cannot be read, as
+        for a PDF.
+    """
+    try:
+        if source.is_dir():
+            return usable_identifier(read_package_dir(source))
+        return usable_identifier(read_archive_package(source))
+    except (ValidationError, OSError):
+        return None

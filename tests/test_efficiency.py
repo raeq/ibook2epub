@@ -28,6 +28,7 @@ from epubconvert.export.naming import PassthroughNaming
 from epubconvert.run import claims, convert, holders, placing, planning, run
 from tests.conftest import make_metadata_package, make_package
 from tests.test_annotations import highlight, library_row, make_databases
+from tests.test_copy_claims import zipped_book
 
 #: Font obfuscation, which is not protection, and a key-transport algorithm,
 #: which is.
@@ -380,6 +381,34 @@ class TestEachShelfArchiveIsReadOnce:
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert self._opens(monkeypatch, library, output_dir) == Counter()
+
+
+class TestARerunOverCopiesOpensNothing:
+    """
+    Whether a file on the shelf is a copy's own is settled by its size while
+    no other book wants its name, a stat each; only two books wanting one
+    name have their identifiers read.
+    """
+
+    def test_no_file_is_opened(self, tmp_path, output_dir, monkeypatch):
+        library = tmp_path / "lib"
+        for index in range(4):
+            zipped_book(tmp_path, library / f"Book {index}.epub", f"urn:uuid:{index}")
+        (library / "Paper.pdf").write_bytes(b"%PDF-1.4 fake")
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        run.main(argv)
+        opened: list[Path] = []
+        original = ZipFile.__init__
+
+        def counting(self, file, *args, **kwargs):
+            opened.append(Path(str(file)))
+            original(self, file, *args, **kwargs)
+
+        monkeypatch.setattr(ZipFile, "__init__", counting)
+        for mode in ("skip", "suffix"):
+            run.main([*argv, "--on-collision", mode])
+
+        assert not opened
 
 
 def _nested_blocks(levels: int, algorithm: str = FONTS) -> bytes:

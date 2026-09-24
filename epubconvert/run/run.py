@@ -20,7 +20,6 @@ import shlex
 import sys
 from collections.abc import Sequence
 from contextlib import nullcontext
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -45,12 +44,13 @@ from ..utils.app_logger import logger
 from ..utils.defaults import SOURCE_CANDIDATES
 from ..utils.display import emit, printable
 from ..utils.policy import Assignment, NamingPolicy
+from .afterwards import after_export, outcome, pending_packages, selected_names
 from .annotating import (
-    annotations_after_export,
     apply_annotations,
     gather_annotations,
     run_container_only,
 )
+from .claims import shelf_names
 from .cli import parse_args
 from .convert import (
     ExportOptions,
@@ -58,7 +58,6 @@ from .convert import (
     Report,
     cap_exports,
     count_pending_decisions,
-    exit_code,
     export_planned,
     filter_packages,
     format_summary,
@@ -68,6 +67,7 @@ from .convert import (
 )
 from .copying import (
     CopyPlan,
+    copy_decisions,
     copy_through_all,
     placed_copies,
     plan_copies,
@@ -76,7 +76,6 @@ from .copying import (
 from .copynames import Names, claim_copies
 from .placing import settled
 from .planning import (
-    COLLISION,
     Decision,
     PlanOptions,
     assign_names,
@@ -158,7 +157,12 @@ def _shared_names(
     :return: Every name, and the copy plan under the names it is written to.
     """
     names = claim_copies(
-        assign_names(discovered, policy, args.on_collision),
+        assign_names(
+            discovered,
+            policy,
+            args.on_collision,
+            shelf=shelf_names(args.output_dir),
+        ),
         copies.named,
         policy,
         args.on_collision,
@@ -178,16 +182,19 @@ def _plan_copies(args: argparse.Namespace, policy: NamingPolicy) -> CopyPlan:
     Find the files to take along and name them, once, for every caller.
 
     The orphan check, the copy and the ignored count all read this one plan.
+    Made under ``--no-copy-through`` too, which only stops the copying: left
+    empty, a package was reported exported from a zipped book's file, a copy
+    whose book is still in the library was listed as an orphan, and the
+    zipped books were counted as not books.
 
     :param args: Parsed command line arguments.
     :param policy: The naming policy in force.
 
-    :return: The plan, empty under ``--no-copy-through``. When some files went
-        unnamed, the run is told what that costs rather than left with an
-        orphan count it cannot explain.
+    :return: The plan. When some files went unnamed, the run is told what that
+        costs rather than left with an orphan count it cannot explain.
     """
     plan = plan_copies(
-        [] if args.no_copy_through else collect_copyable(args.source_dir),
+        collect_copyable(args.source_dir),
         policy,
         max_workers=args.workers,
         skip_incomplete=args.skip_incomplete,
@@ -218,11 +225,9 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     decisions = plan_exports(
         packages, args.output_dir, policy, _plan_options(args), assigned=everything
     )
-    # The copies that lost their name, as the run reports them.
-    decisions += [
-        Decision(source, COLLISION, reason=reason)
-        for source, reason in select_copies(copies, args.match).lost
-    ]
+    # The files it copies, as the run settles them: a listing that left them
+    # out said nothing where -d said "2 to copy".
+    decisions += copy_decisions(_to_copy(args, copies), args.output_dir)
     # Orphans come from the whole library, not this run's filtered subset:
     # --match narrows a run, not the shelf. Files copied through claim their
     # names too, or the shelf would report what this run just put there.
@@ -237,8 +242,12 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     )
     emit(render_listing(decisions + orphans, args.as_json))
     ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
-    if ignored and not args.as_json:
-        emit(f"{ignored} ignored (not books)")
+    if not args.as_json:
+        uncopied = len(select_copies(copies, args.match).sources)
+        if args.no_copy_through and uncopied:
+            emit(f"{uncopied} not copied (--no-copy-through)")
+        if ignored:
+            emit(f"{ignored} ignored (not books)")
     return 0
 
 
@@ -420,10 +429,13 @@ def _survey(
     """
     discovered = collect_package_dirs(args.source_dir)
     packages = filter_packages(discovered, args.match)
-    if not packages:
+    copies = _plan_copies(args, policy)
+    # Not said when the run has files to copy: "No matching *.epub packages"
+    # and then "Copied Paper.pdf" read as having found nothing and then done
+    # something.
+    if not packages and not _to_copy(args, copies).sources:
         logger.warning("No matching *.epub packages found under %s", args.source_dir)
 
-    copies = _plan_copies(args, policy)
     report.ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     shared, copies = _shared_names(args, discovered, policy, copies)
     everything = [*shared.packages, *shared.copies]
@@ -443,7 +455,7 @@ def _run_export(
     args: argparse.Namespace,
     policy: NamingPolicy,
     found: list[dict[str, Any]] | None,
-) -> tuple[Report, int, list[Assignment], list[Path]]:
+) -> tuple[Report, int, list[Assignment], list[Path], frozenset[Path]]:
     """
     Collect, select and export, under the output directory lock.
 
@@ -458,8 +470,9 @@ def _run_export(
         names it gave every book it converted. Annotations are applied against
         that same assignment afterwards: naming the library again disagreed
         with it under ``--match`` with a collision suffix, so the archive the
-        refresh looked for did not exist. And the library's copyable files,
+        refresh looked for did not exist. The library's copyable files,
         which the annotation step needs for the same reason the embed does.
+        And the books ``-m`` held back, which a later run converts.
 
     :raises OutputLockedError: If another run holds the output lock, or the
         lock file could not be opened.
@@ -475,7 +488,7 @@ def _run_export(
         # a traceback with no summary and no 130.
         report.interrupted = True
         logger.warning("Interrupted before anything was written.")
-        return report, 0, [], []
+        return report, 0, [], [], frozenset()
     if args.force and args.max_export_files and len(packages) > args.max_export_files:
         logger.warning(
             "--force selected %d book(s) but -m limits this run to %d; "
@@ -484,7 +497,7 @@ def _run_export(
             args.max_export_files,
         )
 
-    copyable = _copyable(args, copies) if found is not None else []
+    copyable = copies.sources if found is not None else []
     options = ExportOptions(
         covers=args.covers,
         min_free_mb=args.min_free,
@@ -503,6 +516,7 @@ def _run_export(
     # run move the output directory underneath the decisions.
     pending_before = 0
     decisions: list[Decision] = []
+    held: frozenset[Path] = frozenset()
     # The guard covers taking the lock and the sweep too. They were outside
     # it, and a Ctrl-C there escaped to main's last resort: 130, but no
     # summary, and nothing on stdout at all under -q.
@@ -517,7 +531,7 @@ def _run_export(
             if locked and not args.dry_run:
                 sweep_partials(args.output_dir)
             copy_through_all(
-                select_copies(copies, args.match),
+                _to_copy(args, copies),
                 args.output_dir,
                 report,
                 max_workers=args.workers,
@@ -538,6 +552,7 @@ def _run_export(
             # Counted where the cap is applied, so the summary can tell books
             # it held back from books that failed rather than infer it.
             report.held_back = pending_before - count_pending_decisions(selected)
+            held = pending_packages(decisions) - pending_packages(selected)
             asyncio.run(
                 export_planned(
                     selected,
@@ -560,100 +575,38 @@ def _run_export(
     # A dry run exports nothing, so what it would export is what it takes
     # off: counting only exports said "-m 0 -d" would leave every book it
     # had just listed.
-    done = report.planned if args.dry_run else report.exported
     return (
         report,
-        max(0, pending_before - done),
-        # The files it copies too: a vault writes a note for each of them.
-        _selected(
+        max(
+            0,
+            pending_before - (report.planned if args.dry_run else report.exported),
+        ),
+        # The files --match selects too, copied or not: a vault writes a note
+        # for each. Under --no-copy-through their highlights are still the
+        # point of a note, and the vault had none for a zipped book or a PDF.
+        selected_names(
             assigned,
             [*packages, *select_copies(copies, args.match).sources],
             decisions,
             policy,
         ),
         copyable,
+        held,
     )
 
 
-def _copyable(args: argparse.Namespace, copies: CopyPlan) -> list[Path]:
+def _to_copy(args: argparse.Namespace, copies: CopyPlan) -> CopyPlan:
     """
-    Every file in the library that is a book without being a package.
-
-    Wanted for the annotations, which name a book only by its name: a zipped
-    ``b/Foo.epub`` and a package ``a/Foo.epub/`` are one key, and counting
-    only the packages gave the zipped book's highlights to the package.
+    Narrow the library's copies to the ones this run copies.
 
     :param args: Parsed command line arguments.
-    :param copies: The plan this run already made, which walked for them.
+    :param copies: Every file to take along, under the names it takes.
 
-    :return: The files, from the plan when it has them. Under
-        ``--no-copy-through`` it has none, but the zipped book is still in the
-        library and still owns its highlights, so the library is walked.
+    :return: The files ``--match`` selects, or none under
+        ``--no-copy-through``: the flag stops the copying, and the copies
+        still claim their names and their files on the shelf.
     """
-    if args.no_copy_through:
-        return collect_copyable(args.source_dir)
-    return copies.sources
-
-
-def _selected(
-    assigned: Sequence[Assignment],
-    packages: Sequence[Path],
-    decisions: Sequence[Decision],
-    policy: NamingPolicy,
-) -> list[Assignment]:
-    """
-    Keep the assignments of this run's own books, as the plan left them.
-
-    The assignment names the whole library, and ``--match`` narrows what the
-    run touches: only the books it selected go on to the annotation step.
-
-    A book the plan found to be a collision has no name there either. Under a
-    policy that names from the folder the plan reads a book's identifier only
-    before it writes, so ``--force`` and ``--refresh`` could call a book a
-    collision whose name the annotation step then trusted: its highlights
-    reached no file, and the warning, finding a file of that name, said
-    nothing. A book the plan placed at another file, such as its marked name,
-    is renamed to it; see :func:`_as_decided`.
-
-    :param assigned: The assignment of every package in the library.
-    :param packages: The packages this run selected.
-    :param decisions: What the plan decided about them, where it got that far.
-    :param policy: The naming policy the names came from.
-
-    :return: Their assignments, in the library's order.
-    """
-    chosen = set(packages)
-    decided = {decision.package: decision for decision in decisions}
-    return [
-        _as_decided(entry, decided.get(entry.package), policy)
-        for entry in assigned
-        if entry.package in chosen
-    ]
-
-
-def _as_decided(
-    entry: Assignment, decision: Decision | None, policy: NamingPolicy
-) -> Assignment:
-    """
-    Rename one book's assignment to the file the plan placed it at.
-
-    :param entry: Its assignment.
-    :param decision: What the plan decided about it, if it got that far.
-    :param policy: The naming policy the names came from.
-
-    :return: The assignment with no name for a collision, or the name of the
-        file the plan exports it to or found it at. A vault note shares that
-        file's stem: named from the assignment, an edition that moved on to
-        its marked name wrote its highlights into the other edition's note.
-    """
-    if decision is None:
-        return entry
-    if decision.status == COLLISION:
-        return replace(entry, filename="", reason=decision.reason)
-    if decision.target is not None and decision.target.name != entry.filename:
-        name = decision.target.name
-        return replace(entry, filename=name, identity=policy.identity(name))
-    return entry
+    return CopyPlan() if args.no_copy_through else select_copies(copies, args.match)
 
 
 def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:
@@ -834,58 +787,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return exits.INTERRUPTED
 
 
-def _after_export(
-    args: argparse.Namespace,
-    policy: NamingPolicy,
-    report: Report,
-    *,
-    named: Sequence[Assignment],
-    found: list[dict[str, Any]] | None,
-    copyable: Sequence[Path],
-) -> int | None:
-    """
-    Do the annotation work the export leaves over, unless the run was stopped.
-
-    Ctrl-C asks the run to stop, and this went on regardless: it wrote a vault
-    of notes after the reader had asked for nothing more to be written, and
-    warned that highlights "reached no file" for books that were never
-    attempted, which says a book cannot be converted when it was only not
-    reached.
-
-    :param args: Parsed command line arguments.
-    :param policy: The naming policy the names came from.
-    :param report: The export's report, which says whether it was stopped.
-    :param named: The names the export used.
-    :param found: The annotations this run read, or None.
-    :param copyable: The library's already-zipped books and PDFs.
-
-    :return: What :func:`~epubconvert.run.annotating.annotations_after_export`
-        returns, or None when the run was stopped, before this or during it.
-        Stopped during it, *report* is marked interrupted, so the summary
-        still says what the run finished and the run still exits 130.
-    """
-    if not report.interrupted:
-        try:
-            return annotations_after_export(
-                args, policy, named, found, copyable=copyable
-            )
-        except KeyboardInterrupt:
-            # A Ctrl-C while the detached file or the vault was written
-            # escaped to main's last resort, which prints no summary: the
-            # books this run had finished went unreported, on stdout and in
-            # the log file. Each write is atomic, so nothing is half-written.
-            report.interrupted = True
-    # Said only when there was somewhere else for them to go. Under -ae alone
-    # every book converted before the Ctrl-C already carries its own.
-    elsewhere = args.annotations_detached or args.annotations_refresh
-    if found is not None and elsewhere and not args.dry_run:
-        logger.warning(
-            "Your highlights were not written: the run was interrupted. "
-            "Rerun to write them."
-        )
-    return None
-
-
 def _run(args: argparse.Namespace) -> int:
     """
     Do what the command line asked, once logging is set up.
@@ -925,15 +826,21 @@ def _run(args: argparse.Namespace) -> int:
     found = gather_annotations(args, policy)
 
     try:
-        report, remaining, named, copyable = _run_export(args, policy, found)
+        report, remaining, named, copyable, held = _run_export(args, policy, found)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
 
     # After the books are on the shelf, so annotations reach them by the same
     # path --annotations-refresh uses. A dry run writes nothing, here included.
-    annotated = _after_export(
-        args, policy, report, named=named, found=found, copyable=copyable
+    annotated = after_export(
+        args,
+        policy,
+        report,
+        named=named,
+        found=found,
+        copyable=copyable,
+        held_back=held,
     )
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     # Standard output belongs to the document when one is going there; a
@@ -952,31 +859,4 @@ def _run(args: argparse.Namespace) -> int:
         report.failed + report.copies_failed,
     )
 
-    return _outcome(report, annotated)
-
-
-def _outcome(report: Report, annotated: int | None) -> int:
-    """
-    Choose the one exit code for a run that converted and then annotated.
-
-    The first of these that applies: 130 if the run was stopped with Ctrl-C;
-    1 if a book failed or the run could not proceed; the annotation step's
-    own code, such as 5 for a destination it could not write; otherwise 0.
-    The README's exit-code section states the same order.
-
-    The annotation code used to win outright, so a run stopped with Ctrl-C,
-    or one whose book had failed, exited 5 under a summary that said
-    "Interrupted" or "failed 1". The summary describes the books, and the
-    books are what the run is for, so their outcome comes first; the
-    annotation step has already logged its own reason on stderr.
-
-    :param report: The export's report.
-    :param annotated: The annotation step's exit code, or None when it had
-        nothing to report.
-
-    :return: A process exit code.
-    """
-    converted = exit_code(report)
-    if converted != exits.SUCCESS or annotated is None:
-        return converted
-    return annotated
+    return outcome(report, annotated)

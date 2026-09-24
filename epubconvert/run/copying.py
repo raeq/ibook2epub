@@ -27,7 +27,15 @@ from .convert import (
     matches_pattern,
     progress_for,
 )
-from .planning import copy_name_opens_file, copy_target_name
+from .planning import (
+    COLLISION,
+    COPIED,
+    COPY,
+    INCOMPLETE,
+    Decision,
+    copy_name_opens_file,
+    copy_target_name,
+)
 
 
 def _copy_and_record(
@@ -212,6 +220,36 @@ def select_copies(plan: CopyPlan, pattern: str | None) -> CopyPlan:
         plan.evicted & chosen,
         tuple(entry for entry in plan.lost if entry[0] in chosen),
     )
+
+
+def copy_decisions(plan: CopyPlan, output_dir: Path) -> list[Decision]:
+    """
+    Say what a run does with each file it copies, as ``--list`` shows it.
+
+    ``-d`` said "2 to copy" while the listing showed nothing of the copies.
+    Settled as the copy settles them (:func:`_group_copies`): a file whose
+    name holds its copy is already on the shelf, one not downloaded that is
+    not there is incomplete, and one that lost its name is a collision.
+
+    :param plan: The files this run copies, under the names they take.
+    :param output_dir: Directory the copies go into.
+
+    :return: One decision per file, in sorted order.
+    """
+    decisions = [
+        Decision(source, COLLISION, reason=reason) for source, reason in plan.lost
+    ]
+    for source, name in plan.named:
+        target = output_dir / name if name is not None else None
+        if target is not None and target.exists():
+            decisions.append(Decision(source, COPIED, target))
+        elif source in plan.evicted or target is None:
+            decisions.append(
+                Decision(source, INCOMPLETE, reason="not downloaded from iCloud")
+            )
+        else:
+            decisions.append(Decision(source, COPY, target))
+    return sorted(decisions, key=lambda decision: decision.package)
 
 
 def _group_copies(

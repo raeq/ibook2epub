@@ -256,10 +256,11 @@ Deciding what to do:
   -f, --force           Re-export books even if they are already in the
                         output directory. With --library-export, replace the
                         file it names.
-  --list                List every *.epub/ package with its status (pending,
-                        exported, collision, drm, incomplete, orphan) and
-                        exit without converting anything. Anything in the
-                        source that is not a package is counted, not listed.
+  --list                List every *.epub/ package, and every PDF or zipped
+                        epub file copied through, with its status (pending,
+                        exported, collision, drm, incomplete, orphan, copy,
+                        copied) and exit without converting anything.
+                        Anything else in the source is counted, not listed.
   --json                With --list, emit machine-readable JSON instead of a
                         table.
   --refresh             Re-export a book when its source directory is newer
@@ -581,6 +582,15 @@ ibook2epub -o ~/Books --name-by author-title --list
 `--on-collision suffix` keeps them all, and how it tells them apart matters if
 you run this on a schedule.
 
+"First" is the first in sorted order, except that a book whose exact name is
+already a file on the shelf keeps it. That matters for names that differ only
+in case, which macOS treats as one file: `b/dune.epub`, exported on its own,
+keeps `dune.epub` when `a/Dune.epub` arrives, and the newcomer is the collision,
+or `Dune (2).epub` under `suffix`. A book renamed only by case, with no
+namesake left in the library, still finds its archive under the old spelling:
+the two identifiers are compared, and when neither book declares one the name
+is trusted.
+
 A book that has to share a name is marked with a short digest of its own
 `dc:identifier`:
 
@@ -624,8 +634,10 @@ for its name too, after every package: a package `a/Book.epub/` and a zipped
 `b/Book.epub` want one file, and the package gets it. The copy is reported as a
 name collision, or under `--on-collision suffix` is copied as `Book (2).epub`;
 a copy has no digest marker, so it is always numbered. A copy already on the
-shelf before the package arrived keeps its file, and the package is reported as
-a collision rather than as exported from the other book's file.
+shelf before the package arrived keeps its file, in either mode, and is not
+copied again: the package is reported as a collision rather than as exported
+from the other book's file, or under `--on-collision suffix` is written beside
+it, as `Book (2).epub` when it has no digest marker either.
 
 ### Taking your highlights with you
 
@@ -849,6 +861,15 @@ With DRM this is permanent: no rerun will ever produce an archive to embed
 into. So a locked library wants `-ae -ad ~/highlights.json`, or `-ao` on its
 own. The warning stays quiet when `-ad` is already in force, because then the
 highlights are in a file and there is nothing to report.
+
+A zipped book or a PDF copied through is on the shelf, but copied byte for
+byte, so `-ae` and `-ae -ar` embed nothing in it either. They say so in a
+warning of their own, which is quiet under `-ad` too:
+
+```text
+2 annotation(s) from 1 book(s) copied through unchanged were not embedded
+(copies are byte-for-byte): Beta.epub. Use -ad FILE or -ao FILE.
+```
 
 **This is ahead of the specification, not conformant to it.** That draft still
 has sections marked T.B.D., and its dependency on text fragments has not yet

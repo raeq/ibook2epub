@@ -33,6 +33,7 @@ from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
+from .claims import shelf_names
 from .convert import OutputLockedError, output_lock, progress_for
 from .copying import plan_copies
 from .copynames import claim_copies
@@ -78,6 +79,7 @@ def annotations_after_export(
     found: list[dict[str, Any]] | None,
     *,
     copyable: Sequence[Path],
+    held_back: Collection[Path] = frozenset(),
 ) -> int | None:
     """
     Finish the annotation work the conversion could not do itself.
@@ -100,6 +102,8 @@ def annotations_after_export(
     :param copyable: The library's already-zipped books and PDFs, the other
         half of telling a highlight's book apart; see
         :func:`~epubconvert.export.archive.index_by_package`.
+    :param held_back: The books ``-m`` held back for a later run, which will
+        embed their highlights: not converted is not unconvertible.
 
     :return: An exit code when something went wrong, None otherwise.
     """
@@ -116,8 +120,58 @@ def annotations_after_export(
         # A file copied through is copied as it is, with nothing embedded.
         kept = set(copyable)
         packages = [item for item in named if item.package not in kept]
-        _warn_about_stranded(args, policy, found, packages, copyable)
+        _warn_about_stranded(
+            args, policy, found, packages, copyable, held_back=held_back
+        )
+        _warn_about_copies(
+            index_by_package(
+                found, [item.package for item in named], copyable=copyable, quiet=True
+            ),
+            [item.package for item in named if item.package in kept],
+            copied=not args.no_copy_through,
+        )
     return None if code == exits.SUCCESS else code
+
+
+def _warn_about_copies(
+    index: dict[str, list[dict[str, Any]]], copies: Sequence[Path], *, copied: bool
+) -> None:
+    """
+    Say so when highlights belong to books taken along rather than converted.
+
+    ``-ae`` puts highlights in as a book is converted, and a zipped book or a
+    PDF is copied byte for byte, so there is nothing to put them in. The
+    warning about highlights that reached no file left the copies out, and
+    ``-ae -ar`` walked the packages alone, so both said nothing. Like that
+    warning, this one is not given under ``-ad``, where the highlights are
+    in a file already, and changes no exit code.
+
+    :param index: The annotations, by book.
+    :param copies: The books copied through, those that lost their name too.
+    :param copied: Whether the run copies them; under ``--no-copy-through``
+        it does not.
+    """
+    books = sorted(
+        {copy.name for copy in copies if annotations_for_book(copy.name, index)}
+    )
+    if not books:
+        return
+    count = sum(len(annotations_for_book(name, index)) for name in books)
+    shown = ", ".join(printable(name) for name in books[:3])
+    if len(books) > 3:
+        shown += f", and {len(books) - 3} more"
+    how = (
+        "copied through unchanged were not embedded (copies are byte-for-byte)"
+        if copied
+        else "not copied (--no-copy-through) were not embedded"
+    )
+    logger.warning(
+        "%d annotation(s) from %d book(s) %s: %s. Use -ad FILE or -ao FILE.",
+        count,
+        len(books),
+        how,
+        shown,
+    )
 
 
 def _warn_about_stranded(
@@ -126,6 +180,8 @@ def _warn_about_stranded(
     found: list[dict[str, Any]],
     named: Sequence[Assignment],
     copyable: Sequence[Path],
+    *,
+    held_back: Collection[Path] = frozenset(),
 ) -> None:
     """
     Say so when highlights had nowhere to go.
@@ -144,11 +200,18 @@ def _warn_about_stranded(
     Not called when ``-ad`` is also in force: those highlights are already in a
     file, so there is nothing to warn about.
 
+    A book ``-m`` held back is left out, as a run stopped with Ctrl-C leaves
+    out the books it did not reach: the summary says it is held back, and
+    the next run embeds its highlights. It was counted here, and the reader
+    of a plain ``-ae`` under the default cap was told those books' highlights
+    reached no file and pointed at DRM. One line says they wait instead.
+
     :param args: Parsed command line arguments.
     :param policy: The naming policy the names came from.
     :param found: Every annotation this run read.
     :param named: The names the export used.
     :param copyable: The library's already-zipped books and PDFs.
+    :param held_back: The books ``-m`` held back for a later run.
     """
     # Quiet: the conversion before this read the same annotations against
     # the same library and has already said which it could not place.
@@ -160,15 +223,23 @@ def _warn_about_stranded(
     # warning, seeing a file there, said nothing.
     places = placed(named, args.output_dir, policy)
     stranded_books: list[str] = []
-    stranded = 0
+    stranded = waiting = 0
     for item in named:
         if places.get(item.package) is not None:
             continue
         mine = annotations_for_book(item.package.name, index)
-        if mine:
+        if item.package in held_back:
+            waiting += len(mine)
+        elif mine:
             stranded_books.append(item.package.name)
             stranded += len(mine)
 
+    if waiting:
+        logger.info(
+            "%d annotation(s) wait for books -m held back; they go in when those "
+            "are converted.",
+            waiting,
+        )
     if not stranded:
         return
 
@@ -386,7 +457,7 @@ def apply_annotations(
             copyable=copyable,
         )
         # A failed book outranks the destination's own error, the order a
-        # conversion run uses too: see run._outcome.
+        # conversion run uses too: see afterwards.outcome.
         return code if code != exits.SUCCESS else written
     return code
 
@@ -430,7 +501,11 @@ def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
     :return: One assignment per package.
     """
     return assign_names(
-        collect_package_dirs(args.source_dir), policy, args.on_collision
+        collect_package_dirs(args.source_dir),
+        policy,
+        args.on_collision,
+        # The shelf the conversion weighed, so every route names alike.
+        shelf=shelf_names(args.output_dir),
     )
 
 
@@ -496,6 +571,9 @@ def _embed_in_shelf(
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
+    if not args.annotations_detached:
+        # Rewritten are the packages' archives; a copy is not rebuilt.
+        _warn_about_copies(index, copyable, copied=True)
 
     # Every book it could not refresh is a failure, and so is a refresh the
     # floor stopped, as for a conversion. Both were logged and the run exited

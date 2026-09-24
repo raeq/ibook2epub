@@ -11,8 +11,9 @@ marked name.
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Collection, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -20,8 +21,7 @@ from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_package_dir
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
-from ..utils.spec import PACKAGE_SUFFIX
-from .claims import MAX_SUFFIX, suffixed
+from .claims import MAX_SUFFIX, shelf_files, suffixed
 from .holders import foreign, holds_another_book
 
 
@@ -43,6 +43,9 @@ class Shelf:
     #: Keys of every name the plan assigned, and of each name a book moved on
     #: to, so no two books of one plan are placed at one file.
     spoken: set[str]
+    #: The identity of every book in the plan, NFC-normalized, so a file of
+    #: another spelling is known for a namesake's (holders.foreign).
+    live: frozenset[str] = field(default_factory=frozenset)
 
 
 class Place(NamedTuple):
@@ -76,11 +79,11 @@ def read_shelf(
         filesystem_key(policy.identity(found.name)): Existing(
             path=found, identity=policy.identity(found.name)
         )
-        for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-        if found.is_file()
+        for found in shelf_files(output_dir)
     }
     spoken = {filesystem_key(item.identity) for item in assigned if item.filename}
-    return Shelf(policy, existing, spoken)
+    live = frozenset(unicodedata.normalize("NFC", item.identity) for item in assigned)
+    return Shelf(policy, existing, spoken, live)
 
 
 def place(assignment: Assignment, shelf: Shelf) -> Place:
@@ -105,7 +108,7 @@ def place(assignment: Assignment, shelf: Shelf) -> Place:
     if not assignment.filename:
         return Place("", None, assignment.reason)
     clash = shelf.existing.get(filesystem_key(assignment.identity))
-    reason = _foreign_to(clash, assignment.identity, assignment.identifier)
+    reason = _foreign_to(clash, assignment.identity, assignment, shelf)
     if reason is None:
         return Place(assignment.filename, clash, None)
     if assignment.marked:
@@ -116,7 +119,7 @@ def place(assignment: Assignment, shelf: Shelf) -> Place:
             key = filesystem_key(identity)
             clash = shelf.existing.get(key)
             if key not in shelf.spoken and (
-                _foreign_to(clash, identity, assignment.identifier) is None
+                _foreign_to(clash, identity, assignment, shelf) is None
             ):
                 shelf.spoken.add(key)
                 return Place(candidate, clash, None)
@@ -124,12 +127,19 @@ def place(assignment: Assignment, shelf: Shelf) -> Place:
 
 
 def _foreign_to(
-    clash: Existing | None, identity: str, identifier: str | None
+    clash: Existing | None, identity: str, assignment: Assignment, shelf: Shelf
 ) -> str | None:
     """Say why *clash* is not this book's archive; None if free or its own."""
     if clash is None:
         return None
-    return foreign(clash.path, clash.identity, identity, identifier)
+    return foreign(
+        clash.path,
+        clash.identity,
+        identity,
+        assignment.identifier,
+        source=assignment.package,
+        live=shelf.live,
+    )
 
 
 def settled(
@@ -153,7 +163,14 @@ def settled(
     shelf = read_shelf(output_dir, policy, assigned)
     result = []
     for item in assigned:
-        filename, _clash, reason = place(item, shelf)
+        filename, clash, reason = place(item, shelf)
+        if clash is not None:
+            # The book's own archive, found under another spelling of its
+            # name: the file, not the name, is what a note is named after and
+            # what a copy is checked against. Kept as assigned, -ar wrote
+            # Dune.md where the conversion route wrote dune.md, and on a
+            # case-sensitive volume the copy was written again as Dune.epub.
+            filename = clash.path.name
         if filename == item.filename:
             result.append(item)
         elif filename:

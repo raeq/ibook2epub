@@ -8,6 +8,8 @@ the files that are taken along rather than converted.
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -17,10 +19,13 @@ from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
-from ..utils.spec import PACKAGE_SUFFIX
-from .claims import Claims, lost_to
+from .claims import Claims, claim_order, lost_to, shelf_files, shelf_names
 from .holders import identifier_on_shelf
 from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
+
+#: A name numbered by claims.suffixed, as a filesystem key: its stem, the
+#: number, and the extension.
+_NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
 
 
 class Names(NamedTuple):
@@ -62,8 +67,9 @@ def claim_copies(
 
     What is already on the shelf is weighed as for a package
     (:func:`epubconvert.run.placing.place`), and read only where two books meet
-    at a name: a copy that lost its name but finds its own bytes under it --
-    copied before the package arrived -- keeps that file, and the package that
+    at a name: a copy that finds its own bytes under the name another book
+    holds -- copied before the package arrived -- keeps that file in either
+    mode, rather than being copied again under a suffix, and the package that
     now wants it has its identifier read, as a folder-named book about to be
     written has, so it is not reported exported from the other book's file.
 
@@ -80,25 +86,37 @@ def claim_copies(
 
     :return: The packages' names, some with an identifier read, and the copies'.
     """
+    wanting = sorted(
+        ((source, name) for source, name in copies if name is not None),
+        key=lambda entry: entry[0],
+    )
+    wants = Counter(filesystem_key(item.identity) for item in assigned if item.filename)
+    wants.update(filesystem_key(policy.identity(name)) for _, name in wanting)
     claiming = _Claiming(
         _Naming(policy, on_collision, getattr(policy, "max_bytes", 0)),
-        existing={
-            filesystem_key(policy.identity(found.name)): found
-            for found in (output_dir.glob(f"*{PACKAGE_SUFFIX}") if output_dir else ())
-            if found.is_file()
-        },
+        existing=_on_shelf(output_dir, policy),
         unopened=unopened,
+        contested={key for key, count in wants.items() if count > 1},
     )
     for item in assigned:
         if item.filename:
             claiming.claims.take(item.identity, 1, item.identity, item.filename)
             claiming.holders[filesystem_key(item.identity)] = item.filename
 
-    named = [
-        claiming.name(source, name, policy.identity(name))
-        for source, name in sorted(copies, key=lambda entry: entry[0])
-        if name is not None
-    ]
+    # A copy whose name is on the shelf claims first, as a package does, and
+    # before it one whose own bytes are on the shelf under its name or one of
+    # its numbers: two PDFs of one name have no identifier to tell them
+    # apart, and the first in sorted order took the other's file for its own
+    # copy and was never copied.
+    order = sorted(
+        claim_order([name for _, name in wanting], shelf_names(output_dir)),
+        key=lambda index: claiming.kept(*wanting[index]) is None,
+    )
+    claimed = {
+        index: claiming.name(*wanting[index], policy.identity(wanting[index][1]))
+        for index in order
+    }
+    named = [claimed[index] for index in range(len(wanting))]
     wanted = {filesystem_key(policy.identity(name)) for _, name in copies if name}
     return Names(_identified(assigned, wanted, policy), named)
 
@@ -112,9 +130,55 @@ class _Claiming:
     existing: dict[str, Path]
     #: Files not to open, because opening them downloads them.
     unopened: Collection[Path]
+    #: Filesystem keys more than one book of the pass wants.
+    contested: set[str] = field(default_factory=set)
     claims: Claims = field(default_factory=Claims)
     #: The name that took each filesystem key.
     holders: dict[str, str] = field(default_factory=dict)
+    #: Each copy's identifier, once read.
+    read: dict[Path, str | None] = field(default_factory=dict)
+    #: The shelf's files by the key of their name less any " (n)", with n.
+    numbered: dict[str, list[tuple[int, Path]]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for key, found in self.existing.items():
+            numbered = _NUMBERED.fullmatch(key)
+            if numbered is None:
+                self.numbered.setdefault(key, []).append((1, found))
+            else:
+                plain = numbered["stem"] + (numbered["extension"] or "")
+                position = int(numbered["position"])
+                self.numbered.setdefault(plain, []).append((position, found))
+
+    def kept(self, source: Path, name: str) -> tuple[Path, str, str | None] | None:
+        """
+        Find *source*'s own copy on the shelf, under its name or one of its numbers.
+
+        A copy already on the shelf keeps its file, and not only under the
+        plain name: in suffix mode the copy numbered " (2)" was pushed to
+        " (3)" by a package or an earlier copy arriving, found another
+        book's file under the next free number, or none, and was copied
+        again. formal/RerunPlanner.tla found it. Only the files under the
+        name's numbers are looked at, from an index of the shelf.
+
+        :param source: The file to copy.
+        :param name: The name it wants.
+
+        :return: The file, its identity and *source*'s identifier when it was
+            read; None when no file there is *source*'s.
+        """
+        policy = self.setup.policy
+        wanted = filesystem_key(policy.identity(name))
+        numbers = self.numbered.get(wanted, [])
+        if self.setup.on_collision != SUFFIX:
+            numbers = [entry for entry in numbers if entry[0] == 1]
+        for _position, found in sorted(numbers):
+            # Whether another book wants it is a question about the name,
+            # not the number.
+            own, identifier = self._own(source, found, wanted)
+            if own:
+                return found, policy.identity(found.name), identifier
+        return None
 
     def name(self, source: Path, name: str, group: str) -> Assignment:
         """
@@ -126,6 +190,18 @@ class _Claiming:
 
         :return: Its assignment.
         """
+        kept = self.kept(source, name)
+        if kept is not None:
+            # Copied before the book now holding the name arrived: the copy
+            # keeps its file, whatever the mode, and that book moves on
+            # (placing.place) or is a collision. Settled only in _lost, this
+            # never ran under --on-collision suffix, where a free " (n)"
+            # always exists: the copy was written again under one and its file
+            # listed as an orphan.
+            mine, identity, identifier = kept
+            self.claims.take(identity, 1, identity, mine.name)
+            self.holders.setdefault(filesystem_key(identity), mine.name)
+            return Assignment(source, mine.name, identity, identifier=identifier)
         taken = _claim(self.claims, name, group, setup=self.setup)
         if taken is None:
             return self._lost(source, group)
@@ -136,9 +212,11 @@ class _Claiming:
             source,
             filename,
             key,
+            # Read where the file there may be another book's, so the plan
+            # can tell (placing.place).
             identifier=(
-                self._identifier(source)
-                if found is not None and not _same_size(source, found)
+                self._own(source, found, filesystem_key(key))[1]
+                if found is not None
                 else None
             ),
             # Positional, from the name it wanted: a copy has no digest of its
@@ -148,24 +226,18 @@ class _Claiming:
 
     def _lost(self, source: Path, group: str) -> Assignment:
         """
-        Settle a copy that lost its name: its own file under it, or a collision.
+        Settle a copy that lost its name, which is a collision.
 
         :param source: The file to copy.
         :param group: The identity of the name it wanted.
 
-        :return: The copy at its own file, or nameless with the reason.
+        :return: The copy, nameless, with the reason.
         """
         key = filesystem_key(group)
         found = self.existing.get(key)
-        identifier = None
-        if found is not None:
-            if _same_size(source, found):
-                return Assignment(source, found.name, group)
-            # Read only where there is a file to compare, so a rerun that loses
-            # the same name opens nothing it did not open before.
-            identifier = self._identifier(source)
-            if identifier is not None and identifier_on_shelf(found) == identifier:
-                return Assignment(source, found.name, group, identifier=identifier)
+        # The file under the name is not its own (kept): read what this book
+        # is, for the reason.
+        identifier = None if found is None else self._own(source, found, key)[1]
         return Assignment(
             source,
             "",
@@ -175,9 +247,63 @@ class _Claiming:
             identifier=identifier,
         )
 
+    def _own(self, source: Path, found: Path, key: str) -> tuple[bool, str | None]:
+        """
+        Decide whether *found* is *source*'s copy, which is written byte for byte.
+
+        Its size says so while no other book of the pass wants the name: a
+        stat each, which downloads nothing, so a rerun over a shelf of copies
+        opens none of them. Where another book wants it too, two different
+        zipped books of one size told apart by nothing else, and the one
+        added later was never copied; there the identifiers decide. They
+        decide too for a file of another size, which may be the copy's own
+        from before Apple rewrote the book. A PDF has none, and its size is
+        all there is.
+
+        :param source: The file to copy.
+        :param found: The file on the shelf under the name it wants.
+        :param key: That name's filesystem key.
+
+        :return: Whether it is, and *source*'s identifier when it was read.
+        """
+        same = _same_size(source, found)
+        if same and key not in self.contested:
+            return True, None
+        identifier = self._identifier(source)
+        if identifier is not None:
+            holder = identifier_on_shelf(found)
+            if holder is not None:
+                return holder == identifier, identifier
+        return same, identifier
+
     def _identifier(self, source: Path) -> str | None:
         """Read a file's identifier, unless opening it would download it."""
-        return None if source in self.unopened else _copy_identifier(source)
+        if source not in self.read:
+            self.read[source] = (
+                None if source in self.unopened else _copy_identifier(source)
+            )
+        return self.read[source]
+
+
+def _on_shelf(output_dir: Path | None, policy: NamingPolicy) -> dict[str, Path]:
+    """
+    Find every file on the shelf a copy could have been written to.
+
+    Everything :func:`~epubconvert.export.archive.collect_copyable` takes
+    along, whatever the case of its extension: the pass looked for ``*.epub``
+    alone, so a PDF on the shelf was invisible to it.
+
+    :param output_dir: Directory holding exported files, or None.
+    :param policy: The naming policy in force.
+
+    :return: The files, by filesystem key.
+    """
+    if output_dir is None:
+        return {}
+    return {
+        filesystem_key(policy.identity(found.name)): found
+        for found in shelf_files(output_dir)
+    }
 
 
 def _identified(
@@ -216,12 +342,7 @@ def _copy_identifier(source: Path) -> str | None:
 
 
 def _same_size(source: Path, found: Path) -> bool:
-    """
-    Whether *found* can be *source*'s copy, which is written byte for byte.
-
-    A stat each, which downloads nothing, so a rerun over a shelf of copies
-    opens none of them to know they are there.
-    """
+    """Whether *found* is *source*'s size: a stat each, which downloads nothing."""
     try:
         return source.stat().st_size == found.stat().st_size
     except OSError:  # pragma: no cover - racing removal

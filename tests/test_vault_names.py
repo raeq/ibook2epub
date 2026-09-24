@@ -217,3 +217,37 @@ class TestAVaultLeavesAnEvictedBookAlone:
 
         assert code == 0
         assert not opened
+
+
+class TestANoteForABookRenamedByCase:
+    """
+    Under ``-p`` a book renamed from ``dune.epub`` to ``Dune.epub`` is found
+    at its archive ``dune.epub``, and the conversion route names its note
+    ``dune.md`` after that file. The refresh route kept the assigned name and
+    wrote ``Dune.md``, a second note for one book.
+    """
+
+    FLAGS = ["-p", "strip", "--annotations-format", "markdown", "-q"]
+
+    def test_every_route_names_it_after_the_file(self, tmp_path, monkeypatch):
+        library, container = tmp_path / "lib", tmp_path / "container"
+        output = tmp_path / "out"
+        _read_from(monkeypatch, container)
+        book = make_metadata_package(
+            library / "b", "dune.epub", title="Dune", identifier="urn:uuid:D"
+        )
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-q", "-p", "strip"])
+        book = book.rename(library / "b" / "Dune.epub")
+        make_databases(
+            container,
+            rows=[highlight(asset="D", uuid="UD", text="DUNE TEXT")],
+            books=[library_row(asset="D", path=str(book), title="Dune")],
+        )
+        converted, refreshed = tmp_path / "converted", tmp_path / "refreshed"
+        argv = ["-s", str(library), "-o", str(output), *self.FLAGS]
+
+        main([*argv, "-m", "0", "-ad", str(converted)])
+        main([*argv, "-ae", "-ar", "-ad", str(refreshed)])
+
+        assert sorted(note.name for note in converted.glob("*.md")) == ["dune.md"]
+        assert sorted(note.name for note in refreshed.glob("*.md")) == ["dune.md"]
