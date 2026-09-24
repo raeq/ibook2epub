@@ -155,7 +155,7 @@ re-copying unchanged books, and lets you compare two exports by checksum.
 **Ctrl-C is a normal way to stop.** An interrupted run reports what it
 finished, exits `130`, and leaves every completed book intact — rerun to carry
 on. Books already being written are allowed to finish so their replace stays
-atomic; queued ones are dropped.
+atomic, even if Ctrl-C is pressed again while they do; queued ones are dropped.
 
 Only one run at a time may write to a given output directory. A second
 concurrent run exits `3` rather than duplicating work — useful when this is
@@ -685,7 +685,9 @@ that was already on the shelf is not rewritten by a run that had nothing else
 to do with it, so bringing an older shelf up to date is what `-ar` is for.
 Each book it refreshes is rebuilt beside the original, so `-ar` stops at the
 `--min-free` floor as a conversion does, and exits `1` if the floor stopped it
-or a book could not be refreshed.
+or a book could not be refreshed. It copies nothing, so it never opens a
+zipped book iCloud has evicted, and it takes `--skip-incomplete` and `-w` as a
+conversion does.
 
 `-ad` and `-ao` write to standard output when given no filename, so
 `ibook2epub -ao \| jq '.annotations[].text'` works. Everything else then goes to
@@ -1132,6 +1134,14 @@ contradict each other.
 `4` and `8` both mean Apple's library could not be read, for different
 reasons: `4` that there is none where it was looked for, `8` that macOS would
 not let this run look. Every failure prints its reason on stderr as well.
+
+`5` also covers a report that could not be written. When `--list`, `--verify`
+or a run's summary cannot be written to standard output — a full disk behind
+`> report.txt`, say — the run says so on stderr and exits `5` rather than `0`,
+so a script does not take a lost report for a clean run. A reader that closes
+the pipe early, as `| head` does, has seen what it wanted and changes no exit
+code. Any other code a run has earned leads: `--verify` still exits `7` for a
+damaged shelf.
 
 `1` also covers a run that could not proceed at all — for example when the
 output volume is below `--min-free`. Nothing is counted as *failed* in that

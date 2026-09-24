@@ -120,6 +120,14 @@ class TestParseArgs:
         with pytest.raises(SystemExit):
             cli.parse_args(["-s", str(library), "-m", "-1"])
 
+    def test_a_negative_floor_is_rejected(self, library, capsys):
+        # Accepted, it disabled the floor as 0 does, without saying so.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args(["-s", str(library), "--min-free", "-1"])
+
+        assert refused.value.code == exits.USAGE
+        assert "--min-free must be 0 or greater" in capsys.readouterr().err
+
     def test_verbosity_accumulates(self, library):
         args = cli.parse_args(["-s", str(library), "-vv"])
 

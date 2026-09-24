@@ -22,7 +22,7 @@ from epubconvert.export.archive import (
     is_excluded,
     zip_package,
 )
-from epubconvert.run import convert, planning, run
+from epubconvert.run import convert, planning, run, summary
 from tests.conftest import EXPECTED_MEMBERS, abandoned_partial, make_package
 
 
@@ -434,29 +434,29 @@ class TestFormatSummary:
     def test_dry_run_never_claims_an_export(self, tmp_path):
         report = convert.Report(planned=4, skipped=1)
 
-        summary = convert.format_summary(report, tmp_path, dry_run=True)
+        line = summary.format_summary(report, tmp_path, dry_run=True)
 
-        assert "would export 4" in summary
-        assert "Exported" not in summary
+        assert "would export 4" in line
+        assert "Exported" not in line
 
     def test_real_run_reports_counts(self, tmp_path):
         report = convert.Report(exported=2, files_written=7, skipped=1, failed=1)
 
-        summary = convert.format_summary(report, tmp_path, dry_run=False)
+        line = summary.format_summary(report, tmp_path, dry_run=False)
 
-        assert "Exported 2" in summary
-        assert "skipped 1" in summary
-        assert "failed 1" in summary
+        assert "Exported 2" in line
+        assert "skipped 1" in line
+        assert "failed 1" in line
 
     def test_books_an_interrupt_left_are_sent_back_to_run(self, tmp_path):
         # Neither held back by the cap nor failed: never attempted, so a rerun
         # is exactly right and -m 0 is beside the point.
         report = convert.Report(exported=1, interrupted=True)
 
-        summary = convert.format_summary(report, tmp_path, dry_run=False, remaining=3)
+        line = summary.format_summary(report, tmp_path, dry_run=False, remaining=3)
 
-        assert "3 not attempted: rerun to continue." in summary
-        assert "-m 0" not in summary
+        assert "3 not attempted: rerun to continue." in line
+        assert "-m 0" not in line
 
     @pytest.mark.parametrize(
         "report",
@@ -474,11 +474,11 @@ class TestFormatSummary:
         # it too.
         output_dir = tmp_path / os.fsdecode(b"B\xfccher\x1b[2K")
 
-        summary = convert.format_summary(report, output_dir, dry_run=report.planned > 0)
+        line = summary.format_summary(report, output_dir, dry_run=report.planned > 0)
 
-        assert f"{tmp_path}/B\\udcfccher\\x1b[2K" in summary
-        assert summary.count("B\\udcfccher") == (2 if report.aborted else 1)
-        summary.encode("utf-8")
+        assert f"{tmp_path}/B\\udcfccher\\x1b[2K" in line
+        assert line.count("B\\udcfccher") == (2 if report.aborted else 1)
+        line.encode("utf-8")
 
     def test_a_run_to_a_path_that_is_not_utf8_prints_its_summary(
         self, tmp_path, capsys

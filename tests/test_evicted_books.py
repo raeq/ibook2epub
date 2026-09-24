@@ -170,3 +170,38 @@ class TestSkipIncompleteReadsNoEvictedSource:
         assert (
             "Skipped, not downloaded from iCloud: Dune.epub" in capsys.readouterr().err
         )
+
+
+class TestARefreshOpensNoEvictedBook:
+    """
+    ``-ae -ar`` copies nothing, but named the library's zipped books as a
+    run that copies them does, and under a metadata policy naming one opens
+    it: every book iCloud had evicted was downloaded to refresh the others'
+    highlights. ``--skip-incomplete``, which would have stopped it, was
+    refused beside ``-ar``.
+    """
+
+    @pytest.mark.parametrize(
+        "extra", [[], ["-ad", "notes.json"], ["--skip-incomplete"], ["-w", "2"]]
+    )
+    def test_an_evicted_zipped_book_is_not_opened(
+        self, tmp_path, output_dir, monkeypatch, extra
+    ):
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library, "Alpha.epub", title="Alpha", creator="A", identifier="urn:uuid:A"
+        )
+        evicted = zipped_book(tmp_path, library / "Zipped.epub", "urn:uuid:Z")
+        base = ["-s", str(library), "-o", str(output_dir), "-q", *AUTHOR_TITLE]
+        assert run.main([*base, "-m", "0"]) == 0
+        _evict(monkeypatch, evicted)
+        opened = _opened(monkeypatch, evicted)
+        monkeypatch.chdir(tmp_path)
+
+        code = run.main([*base, "-ae", "-ar", *extra])
+
+        assert code == 0
+        assert not opened

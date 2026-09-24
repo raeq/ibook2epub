@@ -46,6 +46,7 @@ from .planning import (
     plan_exports,
     record_decisions,
 )
+from .workers import WritingPool
 
 try:
     import fcntl
@@ -55,6 +56,9 @@ except ImportError:  # pragma: no cover - Windows has no fcntl
     HAVE_FLOCK = False
 
 LOCK_NAME = ".ibook2epub.lock"
+
+#: What a lock file that is a link, or not a regular file, is said to be.
+NOT_PLAIN = "is not a plain file"
 
 #: How long a temporary must have gone unmodified before a sweep takes it for
 #: abandoned. Holding the lock does not make this run the only writer: a run
@@ -178,6 +182,12 @@ class _Progress:  # pylint: disable=too-few-public-methods
         #: it only the sampled book stopped, and every unsampled book after it
         #: went on writing: twelve books on four workers wrote ten.
         self.floor_crossed = False
+        #: Set while one caller measures the volume. The others wait for its
+        #: answer rather than take their unsampled turns meanwhile: on a slow
+        #: card every worker started a write during the one measurement that
+        #: would have refused them.
+        self.measuring = False
+        self._measured = threading.Condition(_REPORT_LOCK)
 
     def should_check_room(self) -> bool:
         """
@@ -197,22 +207,30 @@ class _Progress:  # pylint: disable=too-few-public-methods
         Once a sample finds the floor crossed, every later caller is refused
         without measuring: the volume does not get emptier by being asked
         again, and asking only every ``interval`` writes is what let the
-        writes in between carry on.
+        writes in between carry on. Callers arriving while a sample is being
+        taken wait for it.
 
         :param output_dir: Directory being written to.
         :param min_free_mb: Floor in MiB; 0 disables the check.
 
         :return: True when the write may go ahead.
         """
-        with _REPORT_LOCK:
+        with self._measured:
+            self._measured.wait_for(lambda: not self.measuring)
             if self.floor_crossed:
                 return False
-            measure = self.should_check_room()
-        if not measure or _has_room(output_dir, min_free_mb):
-            return True
-        with _REPORT_LOCK:
-            self.floor_crossed = True
-        return False
+            if not self.should_check_room():
+                return True
+            self.measuring = True
+        room = True
+        try:
+            room = _has_room(output_dir, min_free_mb)
+        finally:
+            with self._measured:
+                self.measuring = False
+                self.floor_crossed = not room
+                self._measured.notify_all()
+        return room
 
     def tick(self) -> str:
         """Advance the counter and render it as ``[12/240]``."""
@@ -417,7 +435,7 @@ async def export_planned(
         return report
 
     progress = _Progress(len(pending), default_workers(max_workers))
-    pool = ThreadPoolExecutor(
+    pool = WritingPool(
         max_workers=default_workers(max_workers), thread_name_prefix="zip"
     )
     try:
@@ -440,12 +458,11 @@ async def export_planned(
                     report.failed += 1
                 logger.error("Export failed unexpectedly: %r", outcome)
     finally:
-        # cancel_futures drops books that have not started, so an interrupt
-        # does not wait for the whole queued backlog. wait=True still joins
-        # the handful already being written: they finish, replace atomically,
-        # and record themselves, which keeps the summary honest about what is
-        # on disk.
-        pool.shutdown(wait=True, cancel_futures=True)
+        # Books not started are dropped, so an interrupt does not wait for
+        # the queued backlog; the handful being written finish, replace
+        # atomically and record themselves, a second Ctrl-C notwithstanding,
+        # which keeps the summary honest about what is on disk.
+        pool.finish("book(s)")
 
     return report
 
@@ -585,12 +602,6 @@ def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
     file between the two calls and this one truncated the holder details it
     was about to report.
 
-    Opened by name, it was followed: a symlink planted at the lock's name had
-    its target truncated for the holder's pid, a dangling one created a file
-    wherever it pointed, and a hard link truncated its other name. The rule is
-    :func:`~epubconvert.utils.contained.open_contained`'s -- ``O_NOFOLLOW`` at
-    open, then the descriptor judged: a regular file with one name.
-
     :param path: The lock file.
     :param output_dir: The directory it locks, for the message.
 
@@ -599,33 +610,81 @@ def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
     :raises OutputLockedError: If it cannot be opened, or is not a plain file.
         Nothing has been written to it either way.
     """
-    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
     shown = printable(str(output_dir))
-    not_plain = f"cannot lock {shown}: its lock file is not a plain file"
     try:
-        descriptor = os.open(path, flags, 0o644)
+        descriptor = _open_plain_lock(path, create=True)
+    except _NotPlainFileError as exc:
+        raise OutputLockedError(
+            f"cannot lock {shown}: its lock file {NOT_PLAIN}", contended=False
+        ) from exc
     except OSError as exc:
-        # ELOOP is O_NOFOLLOW refusing a symlink. Anything else -- a read-only
-        # output directory got past main's mkdir(exist_ok=True) and died here
-        # with a raw traceback -- is an unopenable lock file. main turns either
-        # into a clean exit 5.
-        message = (
-            not_plain
-            if exc.errno == errno.ELOOP
-            else f"cannot lock {shown}: {printable(str(exc))}"
-        )
-        raise OutputLockedError(message, contended=False) from exc
-    try:
-        info = os.fstat(descriptor)
-    except OSError as exc:  # pragma: no cover - fstat on an open descriptor
-        os.close(descriptor)
+        # A read-only output directory got past main's mkdir(exist_ok=True)
+        # and died here with a raw traceback. main makes either a clean 5.
         raise OutputLockedError(
             f"cannot lock {shown}: {printable(str(exc))}", contended=False
         ) from exc
+    return os.fdopen(descriptor, "rb+", buffering=0)
+
+
+def lock_file_refusal(path: Path) -> str | None:
+    """
+    Judge an existing lock file as :func:`output_lock` will open it.
+
+    By opening it as the run does: the pre-flight check restated the rule,
+    once in full and once as a mode, and a restated rule drifts from the run.
+
+    :param path: The lock file, known to exist.
+
+    :return: None when the run could open it, otherwise why not, worded to
+        follow the file's name: :data:`NOT_PLAIN`, or "is not writable".
+    """
+    try:
+        os.close(_open_plain_lock(path, create=False))
+    except _NotPlainFileError:
+        return NOT_PLAIN
+    except OSError:
+        return "is not writable"
+    return None
+
+
+class _NotPlainFileError(OSError):
+    """A lock file that is a link, or not a regular file."""
+
+
+def _open_plain_lock(path: Path, *, create: bool) -> int:
+    """
+    Open a lock file by the one rule every route judges it by.
+
+    Opened by name, it was followed: a symlink planted at the lock's name had
+    its target truncated for the holder's pid, a dangling one created a file
+    wherever it pointed, and a hard link truncated its other name. The rule is
+    :func:`~epubconvert.utils.contained.open_contained`'s -- ``O_NOFOLLOW`` at
+    open, then the descriptor judged: a regular file with one name.
+
+    :param path: The lock file.
+    :param create: Whether to create it when it is absent.
+
+    :return: A descriptor open for reading and writing.
+
+    :raises _NotPlainFileError: If it is not a plain file.
+    :raises OSError: If it cannot be opened.
+    """
+    flags = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | (os.O_CREAT if create else 0)
+    try:
+        descriptor = os.open(path, flags, 0o644)
+    except OSError as exc:
+        if exc.errno != errno.ELOOP:  # O_NOFOLLOW refusing a symlink
+            raise
+        raise _NotPlainFileError(exc.errno, NOT_PLAIN, str(path)) from exc
+    try:
+        info = os.fstat(descriptor)
+    except OSError:  # pragma: no cover - fstat on an open descriptor
+        os.close(descriptor)
+        raise
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
         os.close(descriptor)
-        raise OutputLockedError(not_plain, contended=False)
-    return os.fdopen(descriptor, "rb+", buffering=0)
+        raise _NotPlainFileError(errno.EINVAL, NOT_PLAIN, str(path))
+    return descriptor
 
 
 def _record_holder(handle: BinaryIO, path: Path) -> None:
@@ -768,119 +827,6 @@ def sweep_partials(output_dir: Path, now: float | None = None) -> int:
     if removed:
         logger.info("Removed %d abandoned temporary file(s).", removed)
     return removed
-
-
-def format_summary(
-    report: Report, output_dir: Path, dry_run: bool, remaining: int | None = None
-) -> str:
-    """
-    Render a one-line human readable summary of a run.
-
-    :param report: The report to render.
-    :param output_dir: The directory the run targeted.
-    :param dry_run: Whether the run was a dry run.
-    :param remaining: Books still to convert after this run, if known.
-
-    :return: The summary line, with the output directory escaped for display:
-        a path that is not UTF-8 raised UnicodeEncodeError under a strict
-        stdout after the books were written.
-    """
-    shelf = printable(str(output_dir))
-    if dry_run:
-        summary = (
-            f"Dry run: would export {report.planned} epub file(s) to "
-            f"{shelf} (skipped {report.skipped} already present"
-        )
-        summary += _clauses(report, failures=False)
-        summary += ")."
-        if remaining:
-            # The same advice a real run gives. A bare count left out that
-            # the cap was what held these back.
-            summary += _remaining_hint(report, remaining)
-        return summary
-
-    summary = (
-        f"Exported {report.exported} epub file(s) "
-        f"({report.files_written} member files) to {shelf}"
-    )
-    if report.skipped:
-        summary += f", skipped {report.skipped}"
-    summary += _clauses(report, failures=True)
-    summary += "."
-    if report.interrupted:
-        summary = f"Interrupted. {summary}"
-    if report.aborted:
-        summary = f"Aborted: not enough free space on {shelf}. {summary}"
-    if remaining:
-        summary += _remaining_hint(report, remaining)
-    return summary
-
-
-def _remaining_hint(report: Report, remaining: int) -> str:
-    """
-    Say what is left, and why, since each reason wants different advice.
-
-    ``remaining`` counts every pending book this run did not export. Advising a
-    rerun and ``-m 0`` for all of them was wrong twice over when the only book
-    left had failed under ``-m 0``: the flag was already given, and a rerun
-    fails the same book again (#15). The count itself is unchanged; only the
-    advice is split by cause.
-
-    The held-back count is taken first because it is exact: the cap counts it
-    where it is applied. Failed copies are not among the books remaining, so
-    they are counted apart in ``report.copies_failed``: counted in
-    ``report.failed`` they turned a book the cap held back, and then a book
-    the ``--min-free`` floor stopped, into one that had failed.
-
-    :param report: The run's report.
-    :param remaining: Pending books this run did not export.
-
-    :return: The sentences to append, each prefixed with a space.
-    """
-    held = min(report.held_back, remaining)
-    failed = min(report.failed, remaining - held)
-    unattempted = remaining - failed - held
-    parts = [f" {remaining} remaining."]
-    if held:
-        parts.append(
-            f" {held} held back by --max-export-files: rerun to continue, "
-            "or pass -m 0 to convert everything."
-        )
-    if unattempted:
-        parts.append(f" {unattempted} not attempted: rerun to continue.")
-    if failed:
-        parts.append(f" {failed} failed: see the errors above for why.")
-    return "".join(parts)
-
-
-def _clauses(report: Report, *, failures: bool) -> str:
-    """
-    Render the optional counts a summary mentions only when they are non-zero.
-
-    Stated once rather than repeated per branch, which is what pushed
-    :func:`format_summary` past the branch limit and would have grown with
-    every new counter.
-
-    :param report: The report to read.
-    :param failures: Whether to include the failure count, which a dry run has
-        no meaning for.
-
-    :return: The clauses, each already prefixed with ", ".
-    """
-    parts = [
-        (report.collisions, "{} name collision(s)"),
-        (report.drm, "{} DRM-protected"),
-        (report.incomplete, "{} not downloaded"),
-        # A dry run counts what it would copy there; "copied" said it had.
-        (report.copied, "{} copied" if failures else "{} to copy"),
-        (report.ignored, "{} ignored"),
-        (report.orphaned, "{} orphaned"),
-    ]
-    if failures:
-        # One figure for both: a PDF that did not reach the shelf is as much
-        # a failure as a book that did not convert, and the exit code says so.
-        parts.append((report.failed + report.copies_failed, "failed {}"))
-    return "".join(f", {phrase.format(count)}" for count, phrase in parts if count)
 
 
 def progress_for(total: int, interval: int) -> _Progress:

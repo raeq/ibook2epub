@@ -578,7 +578,7 @@ class TestTheLibraryNotFoundListingLinesUp:
 
     def test_every_candidate_is_indented_the_same(self, tmp_path, monkeypatch, capsys):
         candidates = (tmp_path / "one", tmp_path / "two")
-        monkeypatch.setattr("epubconvert.run.run.SOURCE_CANDIDATES", candidates)
+        monkeypatch.setattr("epubconvert.run.preflight.SOURCE_CANDIDATES", candidates)
         monkeypatch.setattr(
             "epubconvert.run.cli.discover_source", lambda: candidates[0]
         )

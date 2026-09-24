@@ -12,9 +12,11 @@ standard output goes out through :func:`emit` here too.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
+from typing import TextIO
 
 #: Unicode's bidirectional formatting characters: ALM, LRM and RLM, the
 #: embeddings and overrides, and the isolates. None is a control character, so
@@ -92,7 +94,7 @@ def printable_json(document: str) -> str:
     )
 
 
-def emit(text: str) -> None:
+def emit(text: str, stream: TextIO | None = None) -> None:
     """
     Print a report's text on standard output, and stop quietly if nobody reads.
 
@@ -101,16 +103,64 @@ def emit(text: str) -> None:
     is saying they have seen enough, not reporting an error, so the run goes
     on to its own exit code: a ``--verify`` still exits 7 for a damaged shelf.
 
+    Any other error writing it -- ``--list > /dev/full`` -- was a traceback
+    and exit 1 too. That one is a report lost, not read: it is said once, on
+    standard error, and :func:`report_lost` tells the run, which exits 5 for
+    it (see ``run.main``).
+
     :param text: What to print; a newline is added.
+    :param stream: Where to print it, when not standard output: a summary
+        goes to standard error when ``-ad -`` has standard output for its
+        document, and ``... -ad - 2>&1 | head -c0`` ended that in a
+        traceback too, after every book was written.
     """
+    target = sys.stdout if stream is None else stream
     try:
-        print(text, flush=True)
-    except BrokenPipeError:
-        # Standard output is pointed at the null device, so neither the next
-        # line nor the interpreter's flush at exit can raise again.
+        print(text, file=target, flush=True)
+    except OSError as exc:
+        # The stream is pointed at the null device, so neither the next line
+        # nor the interpreter's flush at exit can raise again.
         devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
+        os.dup2(devnull, target.fileno())
         os.close(devnull)
+        if isinstance(exc, BrokenPipeError):
+            return
+        said = _REPORT.lost
+        _REPORT.lost = True
+        # Standard error is where it would be said, so a lost summary there
+        # goes unsaid; the exit code still tells.
+        if not said and target is not sys.stderr:
+            # By name: app_logger displays through this module, so importing
+            # it here would be circular.
+            logging.getLogger("epubconvert").error(
+                "Could not write the report to standard output: %s",
+                printable(exc.strerror or str(exc)),
+            )
+
+
+class _Report:  # pylint: disable=too-few-public-methods
+    """What became of this run's report."""
+
+    #: Whether writing it failed other than by the reader closing the pipe.
+    lost = False
+
+
+_REPORT = _Report()
+
+
+def start_report() -> None:
+    """Begin a run's report afresh, with nothing lost yet."""
+    _REPORT.lost = False
+
+
+def report_lost() -> bool:
+    """
+    Report whether this run's report could not be written.
+
+    :return: True when :func:`emit` failed for a reason other than the reader
+        closing the pipe, since :func:`start_report`.
+    """
+    return _REPORT.lost
 
 
 def collapse(value: object) -> str:

@@ -18,6 +18,7 @@ exit code rather than promising success before looking.
 # pylint: disable=too-few-public-methods
 
 import errno
+import inspect
 import os
 import threading
 from collections.abc import Callable
@@ -233,3 +234,23 @@ class TestARefreshWaitsOnNoFifo:
 
         assert code == exits.FAILED
         assert "could not refresh 1" in capsys.readouterr().err
+
+
+class TestTheRefreshTakesOnlyWhatItUses:
+    """
+    ``apply_annotations`` took ``converted`` and ``named`` for a conversion
+    that embeds as it writes and never calls it. Its one caller passed
+    neither, so every branch they chose was dead, and "converted nothing"
+    was said of every refresh through a condition that could not be false.
+    """
+
+    def test_it_is_called_with_the_arguments_and_the_policy_alone(self):
+        assert list(inspect.signature(annotating.apply_annotations).parameters) == [
+            "args",
+            "policy",
+        ]
+
+    def test_nor_do_the_helpers_it_calls_ask_whether_it_converted(self):
+        for name in ("_embed_in_shelf", "_refresh_outcome"):
+            helper = getattr(annotating, name)
+            assert "converted" not in inspect.signature(helper).parameters

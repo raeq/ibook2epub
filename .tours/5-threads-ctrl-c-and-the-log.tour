@@ -42,9 +42,9 @@
     },
     {
       "title": "Shutting down mid-run",
-      "file": "epubconvert/run/convert.py",
-      "pattern": "    finally:\n        # cancel_futures drops books that have not started",
-      "description": "The two arguments pull in opposite directions and both are deliberate.\n\n`cancel_futures=True` drops books that have not started, so an interrupt does not wait for the whole queued backlog. `wait=True` still joins the handful already being written: they finish, replace atomically, and record themselves.\n\nThat combination is what makes the summary honest about what is on disk."
+      "file": "epubconvert/run/workers.py",
+      "pattern": "                self.shutdown\\(wait=False, cancel_futures=True\\)",
+      "description": "Two halves, and both are deliberate.\n\n`cancel_futures=True` drops books that have not started, so an interrupt does not wait for the whole queued backlog. The wait after it still sees out the handful already being written: they finish, replace atomically, and record themselves. That is what makes the summary honest about what is on disk.\n\nThe wait is retried until it completes. A second Ctrl-C used to land in it and break out, so the summary counted none of the books in flight and the lock was released while they were still writing. It waits on the pool's own count of unfinished tasks rather than joining the threads again: before Python 3.13 an interrupted `Thread.join` marks a running thread stopped. The interrupt is raised once the wait is over, so the run still ends as stopped."
     },
     {
       "title": "Ctrl-C is a normal way to stop",

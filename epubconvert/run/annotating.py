@@ -10,7 +10,9 @@ still decides which of these a run does.
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Collection, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -40,6 +42,7 @@ from .copying import plan_copies
 from .copynames import Names, claim_copies
 from .placing import placed, settled
 from .planning import assign_names
+from .preflight import ShelfUnwritableError, check_writable
 
 
 def gather_annotations(
@@ -69,7 +72,7 @@ def gather_annotations(
     except ContainerUnavailableError as exc:
         if required:
             raise
-        logger.error("Could not read annotations: %s", exc)
+        logger.error("Could not read annotations: %s", printable(str(exc)))
         return None
 
 
@@ -335,7 +338,7 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     try:
         found = collect_annotations(policy=policy)
     except ContainerUnavailableError as exc:
-        logger.critical("Could not read annotations: %s", exc)
+        logger.critical("Could not read annotations: %s", printable(str(exc)))
         return exc.exit_code
     if args.dry_run:
         # Guarded here, where the write is decided, rather than at the call
@@ -360,7 +363,8 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
             policy,
             _named(args, policy),
             copyable,
-            shelf=args.output_dir.is_dir(),
+            # Never raises: a shelf it may not search is placed on as none.
+            shelf=os.path.isdir(args.output_dir),  # noqa: PTH112
             highlighted={_source_of(item) for item in found},
         )
         if markdown
@@ -489,7 +493,10 @@ def _claimed(
         policy,
         max_workers=args.workers,
         skip_incomplete=args.skip_incomplete,
-        copied=not args.no_copy_through,
+        # A refresh copies nothing, so an evicted file is left unopened, as
+        # under --no-copy-through: named as a copy, every zipped book was
+        # opened, and so downloaded, to refresh the other books' highlights.
+        copied=not args.annotations_refresh,
     )
     return claim_copies(
         assignments,
@@ -531,50 +538,31 @@ def _shelved(
     return [*names.packages, *copies[len(names.packages) :]]
 
 
-def apply_annotations(
-    args: argparse.Namespace,
-    policy: NamingPolicy,
-    *,
-    converted: bool = False,
-    named: Sequence[Assignment] | None = None,
-) -> int:
+def apply_annotations(args: argparse.Namespace, policy: NamingPolicy) -> int:
     """
-    Put the reader's annotations wherever this run asked for them.
+    Put the reader's annotations into the books already on the shelf: ``-ar``.
 
-    Applied to the shelf after a conversion rather than threaded through it, so
-    that ``-ar`` -- which converts nothing -- and an ordinary run reach the
-    books by exactly the same path. There is one place that decides what a book
-    carries.
-
-    Only archives already on the shelf are touched. Under ``-ar`` a book added
-    to the library since the conversion is therefore not converted: that mode
-    says what it does.
+    Converts nothing, so a book added to the library since the conversion is
+    not converted: that mode says what it does. A conversion embeds as each
+    book is written instead, and never comes here; the ``converted`` and
+    ``named`` parameters that served it were never passed, and are gone.
 
     :param args: Parsed command line arguments.
     :param policy: The naming policy, so a shelf name is worked out the way the
         conversion worked it out.
-    :param converted: Whether books were put on the shelf by this run, which
-        only changes what is said afterwards.
-    :param named: The names the export already worked out, when there was one.
-        Recomputing them re-parses every package document a second time under
-        a metadata naming policy, which is the 2x read this project has
-        already fixed once elsewhere.
 
     :return: A process exit code.
     """
     try:
-        found = gather_annotations(args, policy, required=not converted)
+        found = gather_annotations(args, policy, required=True)
     except ContainerUnavailableError as exc:
         # Nothing was converted, so the highlights were the whole run and why
         # they could not be read is its outcome: 4 for a missing library, 8
         # for a refusal (#19). This route only ever saw None before.
-        logger.error("Could not read annotations: %s", exc)
+        logger.error("Could not read annotations: %s", printable(str(exc)))
         return exc.exit_code
-    if found is None:
-        # The books are the point and they are already on the shelf. Reporting
-        # NO_SOURCE here told a scheduled run the source directory was missing
-        # when it had been found and used.
-        return exits.SUCCESS if converted else exits.NO_SOURCE
+    if found is None:  # pragma: no cover - -ar requires -ae, which reads them
+        return exits.NO_SOURCE
 
     stopped = _before_writing(args)
     if stopped is not None:
@@ -583,7 +571,7 @@ def apply_annotations(
     # Named once, here, and passed to everything that needs it. Under a
     # metadata policy naming re-parses every package document, and computing it
     # in two places is the 2x read this project has already fixed twice.
-    assignments = list(named) if named is not None else _named(args, policy)
+    assignments = _named(args, policy)
     # Walked whether or not a conversion would copy them: a zipped book in the
     # library shares its name with a package either way.
     copyable = collect_copyable(args.source_dir)
@@ -594,7 +582,6 @@ def apply_annotations(
             args,
             policy,
             found,
-            converted=converted,
             assignments=assignments,
             copyable=copyable,
         )
@@ -604,28 +591,37 @@ def apply_annotations(
         if code not in (exits.SUCCESS, exits.FAILED):
             return code
 
-    if args.annotations_detached:
-        # Each note named after the file the book is placed at, as the
-        # conversion route names it: named from the assignment, an edition
-        # moved on to its marked name wrote into the other edition's note.
-        # Only a vault uses the names, as for -ao: a JSON or CSV file named
-        # and opened every zipped book for nothing, and --skip-incomplete is
-        # refused beside it, so an evicted one was downloaded to be named.
-        written = write_export(
-            args,
-            found,
-            args.annotations_detached,
-            (
-                _with_copies(args, policy, assignments, copyable, shelf=True)
-                if vault_of(args) is not None
-                else []
-            ),
-            copyable=copyable,
-        )
-        # A failed book outranks the destination's own error, the order a
-        # conversion run uses too: see afterwards.outcome.
-        return code if code != exits.SUCCESS else written
-    return code
+    # Guarded here rather than at the call sites. It was checked on the route
+    # through annotations_after_export and not on the -ar route, so
+    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
+    # read rather than before it: returning first, the dry run said the
+    # annotations "were read" having read nothing, and exited 0 where the
+    # real run was refused the container and exited 8. -ao -d reads first.
+    # After the shelf is judged too, which a dry run does as the run does.
+    if args.dry_run or not args.annotations_detached:
+        if args.dry_run:
+            logger.info("Dry run: annotations were read but nothing was written.")
+        return code
+
+    # Each note named after the file the book is placed at, as the
+    # conversion route names it: named from the assignment, an edition
+    # moved on to its marked name wrote into the other edition's note.
+    # Only a vault uses the names, as for -ao: a JSON or CSV file named
+    # and opened every zipped book for nothing.
+    written = write_export(
+        args,
+        found,
+        args.annotations_detached,
+        (
+            _with_copies(args, policy, assignments, copyable, shelf=True)
+            if vault_of(args) is not None
+            else []
+        ),
+        copyable=copyable,
+    )
+    # A failed book outranks the destination's own error, the order a
+    # conversion run uses too: see afterwards.outcome.
+    return code if code != exits.SUCCESS else written
 
 
 def _before_writing(args: argparse.Namespace) -> int | None:
@@ -641,21 +637,13 @@ def _before_writing(args: argparse.Namespace) -> int | None:
     # every book it found, having looked at none. Checked before the dry run
     # returns, for the same reason as the read: it returned first, and "-d"
     # exited 0 over the typo the real run exited 5 for.
-    if args.annotations_embedded and not args.output_dir.is_dir():
+    # os.path.isdir, which never raises, where Path.is_dir raised
+    # PermissionError for a shelf in a directory the run may not search.
+    if args.annotations_embedded and not os.path.isdir(args.output_dir):  # noqa: PTH112
         logger.critical(
             "Output directory does not exist: %s", printable(str(args.output_dir))
         )
         return exits.NO_OUTPUT
-
-    # Guarded here rather than at the call sites. It was checked on the route
-    # through annotations_after_export and not on the -ar route, so
-    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
-    # read rather than before it: returning first, the dry run said the
-    # annotations "were read" having read nothing, and exited 0 where the
-    # real run was refused the container and exited 8. -ao -d reads first.
-    if args.dry_run:
-        logger.info("Dry run: annotations were read but nothing was written.")
-        return exits.SUCCESS
     return None
 
 
@@ -682,7 +670,6 @@ def _embed_in_shelf(
     policy: NamingPolicy,
     found: list[dict[str, Any]],
     *,
-    converted: bool,
     assignments: Sequence[Assignment],
     copyable: Sequence[Path],
 ) -> int:
@@ -698,20 +685,14 @@ def _embed_in_shelf(
     :param args: Parsed command line arguments.
     :param policy: The naming policy the names came from.
     :param found: Every annotation read from Apple.
-    :param converted: Whether this run also converted books.
     :param assignments: The names every package was given.
     :param copyable: The library's already-zipped books and PDFs, which
         answer to a package's name too.
 
     :return: A process exit code.
     """
-    # Quiet after a conversion, which embedded from the same index and has
-    # already said which annotations it could not place.
     index = index_by_package(
-        found,
-        [item.package for item in assignments],
-        copyable=copyable,
-        quiet=converted,
+        found, [item.package for item in assignments], copyable=copyable
     )
 
     # The same lock the export takes. These writes go into the output
@@ -719,9 +700,15 @@ def _embed_in_shelf(
     # tell one of those from an abandoned one. Refused on this route, the
     # error escaped main -- which maps it only around the export -- as a
     # traceback and exit 1.
+    # A dry run takes no lock, as a conversion's does not, and writes nothing.
     tally = _Tally()
+    highlighted = {
+        item.package
+        for item in assignments
+        if annotations_for_book(item.package.name, index)
+    }
     try:
-        with output_lock(args.output_dir):
+        with nullcontext() if args.dry_run else output_lock(args.output_dir):
             # Read under the lock, and as before a write: a policy that names
             # from the folder reads the book's own identifier to compare --
             # only for the books with highlights, the ones rewritten.
@@ -730,14 +717,16 @@ def _embed_in_shelf(
                 args.output_dir,
                 policy,
                 writing=True,
-                only={
-                    item.package
-                    for item in assignments
-                    if annotations_for_book(item.package.name, index)
-                },
+                only=highlighted,
             )
+            # Before anything is rewritten, and in the dry run as well: a
+            # read-only shelf with a lock file that opened failed every book.
+            if any(places.get(package) is not None for package in highlighted):
+                check_writable(args.output_dir)
+            if args.dry_run:
+                return exits.SUCCESS
             _refresh_each(args, assignments, index, places, tally)
-    except OutputLockedError as exc:
+    except (OutputLockedError, ShelfUnwritableError) as exc:
         logger.critical("%s", exc)
         return exc.exit_code
     except KeyboardInterrupt:
@@ -750,10 +739,10 @@ def _embed_in_shelf(
         # there is one on the shelf is the conversion's business, not known here.
         _warn_about_copies(index, copyable, copied=None)
         _warn_about_bookless(found)
-    return _refresh_outcome(tally, converted=converted)
+    return _refresh_outcome(tally)
 
 
-def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
+def _refresh_outcome(tally: _Tally) -> int:
     """
     Say what a refresh did, and choose its exit code.
 
@@ -762,7 +751,6 @@ def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
     so a scheduled refresh that hit ENOSPC on every book reported success.
 
     :param tally: What the refresh did.
-    :param converted: Whether this run also converted books.
 
     :return: 130 if interrupted, 1 if a book was left behind, otherwise 0.
     """
@@ -773,8 +761,7 @@ def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
         parts.append("stopped at the --min-free floor before the rest")
     if tally.interrupted:
         parts.append("interrupted before the rest")
-    if not converted:
-        parts.append("converted nothing")
+    parts.append("converted nothing")
     summary = "; ".join(parts) + "."
     if tally.interrupted:
         logger.warning("%s", summary)

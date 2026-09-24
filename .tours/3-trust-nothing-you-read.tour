@@ -104,7 +104,7 @@
       "title": "The stricter check, when asked",
       "file": "epubconvert/collect/validate.py",
       "pattern": "def run_epubcheck\\(path: Path, timeout: int = 120\\) -> list\\[str\\]:",
-      "description": "The external `epubcheck` tool, run through `subprocess` with a fixed executable resolved by `shutil.which`, no shell, and a timeout.\n\n`ValidationOptions.check` only reaches it when the structural checks passed — no point running a two-minute validator over an archive already known to be broken. `_check_environment` in `epubconvert/run/run.py` verifies the tool is on `PATH` before any book is converted, so the run exits `6` before doing any work rather than failing on the first book. An epubcheck that cannot run at all, or runs out of time, is logged and does not fail the book: it says nothing about the book."
+      "description": "The external `epubcheck` tool, run through `subprocess` with a fixed executable resolved by `shutil.which`, no shell, and a timeout.\n\n`ValidationOptions.check` only reaches it when the structural checks passed — no point running a two-minute validator over an archive already known to be broken. `check_environment` in `epubconvert/run/preflight.py` verifies the tool is on `PATH` before any book is converted, so the run exits `6` before doing any work rather than failing on the first book. An epubcheck that cannot run at all, or runs out of time, is logged and does not fail the book: it says nothing about the book."
     }
   ]
 }
