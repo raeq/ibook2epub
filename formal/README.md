@@ -94,6 +94,9 @@ they do under `--name-by author-title`, and runs that can be stopped
 partway. `VerifyHolder` switches on `_decide_against_holder`, which reads
 the identifier of the archive already on the shelf and reports a collision
 when it and the book's own identifier are both usable and differ.
+`ReadsSources` says whether naming read each book's package document, as
+`--name-by author-title` does; without it the book's identifier is read
+only when the book is about to be written over an archive.
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
@@ -105,6 +108,8 @@ when it and the book's own identifier are both usable and differ.
 | `ChangesUnverified` | whole library | books added and removed | all | off | **ExportedMeansTheBooksOwnFile violated** |
 | `RefreshUnverified` | whole library, `--refresh` | books added and removed | all | off | **NeverWritesOverAnotherBook violated** |
 | `Unidentifiable` | `--match`, `--refresh` | books added and removed | book 1 only | on | **ExportedMeansTheBooksOwnFile violated** |
+| `FolderNamedWrites` | `--match`, `--refresh`, named from the folder | books added and removed | all | before a write | NeverWritesOverAnotherBook holds |
+| `FolderNamedReports` | the same | books added and removed | all | before a write | **ExportedMeansTheBooksOwnFile violated** |
 
 What the configurations that fail show:
 
@@ -130,7 +135,24 @@ What the configurations that fail show:
   Two books that share a genuine identifier, such as a converter's template
   UUID, cannot be told apart either.
 
-The check runs only under a naming policy that already reads each source's
-package document (`--name-by author-title`), so it adds no reads on the
-source side. Under the default policy, names come from the package folder
-names, which are unique within a library.
+- **`FolderNamedReports`** is the other limit. The default policy,
+  `strip` and `romanize` name a book from its package folder and read no
+  package document, so a planner that trusted the name there wrote over
+  the other book's archive, as `RefreshUnverified` does. Folder names are
+  not unique: the library is walked recursively, so `a/Dune.epub` and
+  `b/Dune.epub` both exist; `strip` folds case and replaces characters
+  other filesystems reject, and `romanize` folds accents and
+  transliterates, so `Café.epub` and `Cafe.epub` want one name. Before
+  `--refresh` or `--force` writes over an archive, `_decide` now reads that
+  one book's identifier and runs the check (`FolderNamedWrites`). A book
+  reported `exported` is still not checked: that would read every source
+  and every archive on every rerun, which is the cost these policies exist
+  to avoid. So when the book holding a folder name leaves the library, or a
+  `--match` run names only its namesake, the namesake is listed as
+  `exported` from the other book's file and its archive is not reported as
+  an orphan. It is never written over.
+  `tests/test_planning.py::TestAFolderNameIsNotProofOfTheBook` replays the
+  writes against the CLI.
+
+Under `--name-by author-title` the check adds no reads on the source side,
+because naming already read every package document.

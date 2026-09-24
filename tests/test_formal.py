@@ -58,6 +58,11 @@ EXPECTED = {
     "RerunPlanner.Unidentifiable": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
+    # Named from the folder: checked before a write, never for a report.
+    "RerunPlanner.FolderNamedWrites": HOLDS,
+    "RerunPlanner.FolderNamedReports": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
 }
 
 

@@ -439,3 +439,108 @@ class TestADecomposedNameIsTheSameName:
 
         assert decision.status == planning.PENDING
         assert decision.target == decomposed
+
+
+class TestAFolderNameIsNotProofOfTheBook:
+    """
+    A folder-named shelf is verified before anything is written over it.
+
+    The policies that name a book after its folder read no package document,
+    so there was no identifier to compare and the name was trusted. Folder
+    names are not unique: the library is walked recursively, so two
+    subfolders can each hold a ``Dune.epub``, and ``romanize`` folds
+    ``Café`` and ``Cafe`` to one name. After the book holding the name left
+    the library, ``--refresh`` or ``--force`` wrote the other over its
+    archive -- likely the last copy of a book deleted from Apple Books.
+    """
+
+    @staticmethod
+    def _identifier(path: Path) -> str | None:
+        with ZipFile(path) as archive:
+            return read_package(archive).identifier
+
+    @staticmethod
+    def _nested(tmp_path: Path, output_dir: Path) -> tuple[Path, list[str]]:
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:A"
+        )
+        make_metadata_package(
+            library / "b", "Dune.epub", title="Dune Messiah", identifier="urn:uuid:B"
+        )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        run.main(argv)
+        remove_tree(library / "a" / "Dune.epub")
+        return library, argv
+
+    def test_refresh_does_not_write_over_a_nested_namesakes_archive(
+        self, tmp_path, output_dir
+    ):
+        library, argv = self._nested(tmp_path, output_dir)
+        later = (output_dir / "Dune.epub").stat().st_mtime + 60
+        os.utime(library / "b" / "Dune.epub", (later, later))
+
+        run.main([*argv, "--refresh"])
+
+        assert self._identifier(output_dir / "Dune.epub") == "urn:uuid:A"
+
+    def test_force_does_not_write_over_a_nested_namesakes_archive(
+        self, tmp_path, output_dir
+    ):
+        _, argv = self._nested(tmp_path, output_dir)
+
+        run.main([*argv, "--force"])
+
+        assert self._identifier(output_dir / "Dune.epub") == "urn:uuid:A"
+
+    def test_the_book_that_would_have_written_is_a_collision(
+        self, tmp_path, output_dir
+    ):
+        library, _ = self._nested(tmp_path, output_dir)
+
+        [decision] = planning.plan_exports(
+            collect_package_dirs(library),
+            output_dir,
+            PassthroughNaming(),
+            planning.PlanOptions(force=True),
+        )
+
+        assert decision.status == planning.COLLISION
+        assert "holds another book, urn:uuid:A" in (decision.reason or "")
+
+    def test_refresh_does_not_write_over_a_romanized_namesakes_archive(
+        self, tmp_path, output_dir
+    ):
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library, "Café.epub", title="Café", identifier="urn:uuid:A"
+        )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        run.main([*argv, "-p", "romanize"])
+        [written] = output_dir.glob("*.epub")
+        remove_tree(library / "Café.epub")
+        make_metadata_package(
+            library, "Cafe.epub", title="Cafe", identifier="urn:uuid:B"
+        )
+        later = written.stat().st_mtime + 60
+        os.utime(library / "Cafe.epub", (later, later))
+
+        run.main([*argv, "-p", "romanize", "--refresh"])
+
+        assert self._identifier(written) == "urn:uuid:A"
+
+    def test_refresh_still_rewrites_the_books_own_archive(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library, "Dune.epub", title="Dune", identifier="urn:uuid:A"
+        )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        run.main(argv)
+        exported = output_dir / "Dune.epub"
+        before = exported.stat().st_mtime_ns
+        later = exported.stat().st_mtime + 60
+        os.utime(library / "Dune.epub", (later, later))
+
+        run.main([*argv, "--refresh"])
+
+        assert exported.stat().st_mtime_ns != before

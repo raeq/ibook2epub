@@ -10,7 +10,6 @@ output directory, which is why this tool needs no state file.
 from __future__ import annotations
 
 import json
-import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -37,6 +36,7 @@ from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
+from .holders import foreign, holds_another_book
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
@@ -616,9 +616,12 @@ def plan_exports(
             from_folder,
         )
     named = {item.package: item for item in assignments}
+    # Naming read no package document, so no book carries an identifier to
+    # compare against the archive holding its name. See _decide.
+    unread = not getattr(policy, "needs_metadata", False)
 
     return [
-        _decide(package, named[package], existing, output_dir, settings)
+        _decide(package, named[package], existing, output_dir, settings, unread=unread)
         for package in packages
     ]
 
@@ -629,6 +632,8 @@ def _decide(
     existing: dict[str, _Existing],
     output_dir: Path,
     settings: PlanOptions,
+    *,
+    unread: bool = False,
 ) -> Decision:
     """
     Decide what to do with a single package.
@@ -638,14 +643,15 @@ def _decide(
     :param existing: Identities already present in the output directory.
     :param output_dir: Directory the epub files are written into.
     :param settings: Planning behaviour.
+    :param unread: Naming read no package document, so the assignment
+        carries no identifier whatever the book declares.
 
     :return: The decision for this package.
     """
-    filename, key = assignment.filename, assignment.identity
-    if not filename:
+    if not assignment.filename:
         return Decision(package, COLLISION, reason=assignment.reason)
 
-    clash = existing.get(filesystem_key(key))
+    clash = existing.get(filesystem_key(assignment.identity))
     taken = _decide_against_clash(package, clash, assignment)
     if taken is not None:
         return taken
@@ -661,7 +667,7 @@ def _decide(
             return settled
     refreshing = found is not None and not forced
 
-    unusable = _decide_against_source(package, settings)
+    unusable = _decide_before_writing(package, found, settings, unread=unread)
     if unusable is not None:
         return unusable
 
@@ -670,10 +676,40 @@ def _decide(
         # computed name: under a policy whose identity is looser than its
         # filename the two differ, and the stale file would keep satisfying
         # the identity check for ever.
-        reason = "forced" if forced else "source is newer"
-        return Decision(package, PENDING, found, reason=reason)
+        return Decision(
+            package, PENDING, found, reason="forced" if forced else "source is newer"
+        )
 
-    return Decision(package, PENDING, output_dir / filename)
+    return Decision(package, PENDING, output_dir / assignment.filename)
+
+
+def _decide_before_writing(
+    package: Path, found: Path | None, settings: PlanOptions, *, unread: bool
+) -> Decision | None:
+    """
+    Decide whether a book about to be written may be, and over what.
+
+    :param package: The package directory.
+    :param found: The archive it would be written over, if any.
+    :param settings: Planning behaviour.
+    :param unread: Naming read no package document, so nothing has yet
+        compared this book with the archive holding its name.
+
+    :return: The decision, or None when the book may be written.
+    """
+    if found is not None and unread:
+        # About to write over the archive holding this name, and naming read
+        # nothing that could say whose it is. Folder names are not unique: the
+        # library is walked recursively, so two subfolders can each hold a
+        # Dune.epub, and romanize folds Café and Cafe to one name. Once the
+        # book holding the name left the library, --refresh and --force wrote
+        # the other over its archive, likely the last copy. One source read,
+        # paid only by a book about to replace something.
+        identifier = usable_identifier(_metadata_of(package, True))
+        other = _decide_against_holder(package, found, identifier)
+        if other is not None:
+            return other
+    return _decide_against_source(package, settings)
 
 
 def _decide_against_clash(
@@ -682,12 +718,8 @@ def _decide_against_clash(
     """
     Decide whether the archive holding this filename is another book's.
 
-    Two ways it can be. The filesystem key answers a looser question than
-    identity, so two different books can share it; and even a file of this
-    book's own identity may hold another book (see
-    :func:`_decide_against_holder`). Either way neither available answer is
-    "write it" -- that would replace another book's archive -- nor
-    "exported", which would silently drop this one.
+    Neither available answer is "write it" -- that would replace another
+    book's archive -- nor "exported", which would silently drop this one.
 
     :param package: The package directory.
     :param clash: The archive occupying this filename, if any.
@@ -698,22 +730,10 @@ def _decide_against_clash(
     """
     if clash is None:
         return None
-    # Compared through NFC, like the lookup that found the file: HFS+ hands
-    # names back decomposed, and compared raw a book's own archive read back
-    # from there was another book's for ever -- a collision no --refresh or
-    # --force could get past. Canonically equivalent names render alike and
-    # are one file wherever the filesystem normalizes, so they cannot be two
-    # books.
-    if _nfc(clash.identity) != _nfc(assignment.identity):
-        return Decision(
-            package, COLLISION, reason=f"{clash.path.name} already holds this name"
-        )
-    return _decide_against_holder(package, clash.path, assignment.identifier)
-
-
-def _nfc(identity: str) -> str:
-    """Return *identity* composed, so a decomposed readback compares equal."""
-    return unicodedata.normalize("NFC", identity)
+    reason = foreign(
+        clash.path, clash.identity, assignment.identity, assignment.identifier
+    )
+    return None if reason is None else Decision(package, COLLISION, reason=reason)
 
 
 def _decide_against_holder(
@@ -722,27 +742,8 @@ def _decide_against_holder(
     """
     Decide whether the archive holding this book's name holds another book.
 
-    A name is not a book. With no state file, a book whose name is on the
-    shelf was taken for exported -- but the name is only what the planner
-    computes now, and a file keeps the book it was written for. A run
-    narrowed by ``--match`` names only the books it selected, so a book alone
-    in it takes a name another edition's archive already has; and once the
-    edition holding a name is deleted from the library, the next edition
-    takes the name. Each was reported exported by the other book's archive
-    and never written, and ``--refresh`` or ``--force`` wrote it over that
-    archive, which for a deleted book can be the last copy.
-    formal/RerunPlanner.tla found all three.
-
-    So when the book has a usable identifier, the archive's identifier is read
-    and compared. Only when both are usable: a placeholder such as ``none``,
-    or an archive that cannot be read, says nothing about which book it is,
-    and the name is trusted as before.
-
-    Reading one archive's identifier measured 0.15 ms for a 4-member book and
-    1.38 ms for a 504-member one, on Linux 6.18 with the archives in the page
-    cache: between 0.4 s and 3.9 s over a 2,800-book shelf, against no reads
-    at all. It runs only under a policy that already reads each source's
-    package document, and only for a book whose name is on the shelf.
+    :mod:`epubconvert.run.holders` says why a name is not a book, and what
+    reading the archive's identifier costs.
 
     :param package: The package directory.
     :param found: The archive on the shelf under this book's name.
@@ -750,31 +751,8 @@ def _decide_against_holder(
 
     :return: A collision decision, or None when the archive may be this book.
     """
-    if identifier is None:
-        return None
-    holder = _identifier_on_shelf(found)
-    if holder is None or holder == identifier:
-        return None
-    return Decision(
-        package,
-        COLLISION,
-        reason=f"{found.name} holds another book, {holder}; this book is {identifier}",
-    )
-
-
-def _identifier_on_shelf(archive_path: Path) -> str | None:
-    """
-    Read the usable identifier of an archive already on the shelf.
-
-    :param archive_path: The exported archive.
-
-    :return: Its identifier, or None when it has none or cannot be read.
-    """
-    try:
-        with ZipFile(archive_path) as archive:
-            return usable_identifier(read_package(archive))
-    except (ValidationError, BadZipFile, OSError):
-        return None
+    reason = holds_another_book(found, identifier)
+    return None if reason is None else Decision(package, COLLISION, reason=reason)
 
 
 def _decide_against_existing(

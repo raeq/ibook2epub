@@ -18,7 +18,10 @@
  *       file of the book's name exists, PENDING otherwise; --refresh writes
  *       over that file when the source is newer
  *   _decide_against_holder      COLLISION when that file's usable identifier
- *       and the book's differ; with either unusable, the name is trusted
+ *       and the book's differ; with either unusable, the name is trusted.
+ *       A policy that names from the folder reads no package document, so
+ *       _decide reads the source's identifier only for a book about to be
+ *       written over an archive, and a book reported exported is not checked
  * and epubconvert/run/run.py (_shared_names): a run narrowed by --match names
  * only the books it selected.
  *
@@ -36,7 +39,9 @@ CONSTANTS
     AllowMatch,    \* runs may be narrowed with --match
     AllowRefresh,  \* runs may pass --refresh
     AllowChanges,  \* books may be added to and removed from the library
-    VerifyHolder   \* _decide_against_holder: the check that fixes the defects
+    VerifyHolder,  \* _decide_against_holder: the check that fixes the defects
+    ReadsSources   \* naming reads each package document (--name-by author-title);
+                   \* otherwise the check runs only before a write
 
 Books == 1..N
 
@@ -126,8 +131,12 @@ RemoveBook(b) ==
 Run(S, refresh, newer, done) ==
     LET name     == Assign(S)
         present  == {b \in S : name[b] # "" /\ shelf[name[b]] # 0}
+        \* Whose archive is compared: every book on the shelf when naming read
+        \* the sources, otherwise only a book --refresh would write.
+        checked  == IF ReadsSources THEN present
+                    ELSE IF refresh THEN present \cap newer ELSE {}
         \* The archive's identifier and the book's are both usable and differ.
-        foreign  == {b \in present :
+        foreign  == {b \in checked :
                        /\ VerifyHolder
                        /\ b \in Usable
                        /\ shelf[name[b]] \in Usable
