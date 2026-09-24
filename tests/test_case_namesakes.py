@@ -22,7 +22,7 @@ import pytest
 
 from epubconvert.collect import annotations
 from epubconvert.export.naming import PassthroughNaming
-from epubconvert.run import planning, run
+from epubconvert.run import holders, planning, run
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import identifier_of, listing, zipped_book
@@ -174,3 +174,102 @@ class TestAssignNamesWeighsTheShelf:
         named = planning.assign_names([second, first], PassthroughNaming(), "suffix")
 
         assert [item.filename for item in named] == ["Dune.epub", "dune (2).epub"]
+
+
+def _exported_then_renamed(
+    tmp_path: Path, output_dir: Path, mode: str, identifier: str = "urn:b"
+) -> tuple[Path, list[str]]:
+    library = tmp_path / "lib"
+    make_metadata_package(
+        library / "b", "dune.epub", title="Dune", identifier=identifier
+    )
+    argv = ["-s", str(library), "-o", str(output_dir), "--on-collision", mode]
+    run.main([*argv, "-m", "0", "-q"])
+    (library / "b" / "dune.epub").rename(library / "b" / "Dune.epub")
+    return library, argv
+
+
+class TestABookRenamedByCaseOnly:
+    """
+    Its archive is found under the name's other spelling, and was another
+    book's for ever: the identity compared exactly while the lookup folded
+    case, so the book was a collision with its own archive, or in suffix
+    mode was written again beside it and its archive listed as an orphan.
+    """
+
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_its_archive_is_its_own(self, tmp_path, output_dir, capsys, mode):
+        library, argv = _exported_then_renamed(tmp_path, output_dir, mode)
+        capsys.readouterr()
+
+        run.main([*argv, "-m", "0"])
+        captured = capsys.readouterr()
+
+        assert files(output_dir) == {"dune.epub": "urn:b"}
+        assert "Already exported, skipping: Dune.epub" in captured.err
+        assert "collision" not in captured.out + captured.err
+        assert "orphan" not in captured.out
+        assert listing(library, output_dir, capsys, *argv[4:]) == [
+            ("Dune.epub", "exported")
+        ]
+
+    def test_force_rewrites_its_own_archive(self, tmp_path, output_dir, capsys):
+        _, argv = _exported_then_renamed(tmp_path, output_dir, "skip")
+        capsys.readouterr()
+
+        run.main([*argv, "-m", "0", "--force"])
+        captured = capsys.readouterr()
+
+        assert files(output_dir) == {"dune.epub": "urn:b"}
+        assert "Exported 1 epub file(s)" in captured.out
+        assert "collision" not in captured.out
+
+    def test_without_an_identifier_the_name_is_trusted(
+        self, tmp_path, output_dir, capsys
+    ):
+        _, argv = _exported_then_renamed(tmp_path, output_dir, "suffix", "none")
+        capsys.readouterr()
+
+        run.main([*argv, "-m", "0"])
+        captured = capsys.readouterr()
+
+        assert sorted(path.name for path in output_dir.glob("*.epub")) == ["dune.epub"]
+        assert "Already exported, skipping: Dune.epub" in captured.err
+
+
+class TestForeign:
+    """What :func:`holders.foreign` says of a file of another spelling."""
+
+    @staticmethod
+    def _archive(tmp_path: Path, identifier: str) -> Path:
+        return zipped_book(tmp_path, tmp_path / "out" / "dune.epub", identifier)
+
+    def test_another_books_archive_is_foreign(self, tmp_path):
+        found = self._archive(tmp_path, "urn:other")
+        source = make_metadata_package(
+            tmp_path / "lib", "Dune.epub", title="Dune", identifier="urn:mine"
+        )
+
+        reason = holders.foreign(
+            found, "dune.epub", "Dune.epub", None, source=source, live=set()
+        )
+
+        assert reason == (
+            "dune.epub holds another book, urn:other; this book is urn:mine"
+        )
+
+    def test_unread_it_is_another_live_books_by_its_exact_name(self, tmp_path):
+        found = self._archive(tmp_path, "none")
+        source = make_metadata_package(
+            tmp_path / "lib", "Dune.epub", title="Dune", identifier="none"
+        )
+
+        claimed = holders.foreign(
+            found, "dune.epub", "Dune.epub", None, source=source, live={"dune.epub"}
+        )
+        trusted = holders.foreign(
+            found, "dune.epub", "Dune.epub", None, source=source, live=set()
+        )
+
+        assert claimed == "dune.epub already holds this name"
+        assert trusted is None

@@ -40,6 +40,7 @@ from epubconvert.utils import contained, display
 from epubconvert.utils.opf import Package
 from tests.conftest import (
     abandoned_partial,
+    make_metadata_package,
     make_package,
     needs_permissions,
     remove_tree,
@@ -616,23 +617,26 @@ class TestRuleAFilesystemClashIsNotACompletedBook:
     the identity says which case this is.
     """
 
-    def test_an_exact_identity_policy_refuses_rather_than_guesses(
+    def test_an_exact_identity_policy_finds_a_book_renamed_by_case(
         self, tmp_path, output_dir
     ):
         # Under PassthroughNaming identity *is* the filename, so a renamed
-        # export and a genuinely different book are indistinguishable.
-        # Refusing costs a rerun; guessing costs whichever book loses. The
-        # reason names the file that holds it.
+        # export and a genuinely different book differ only in what they
+        # declare. It used to refuse, and a book renamed by case was a
+        # collision with its own archive for ever; the identifiers are read
+        # and compared instead, and here they agree.
         library = tmp_path / "lib"
-        make_package(library, "The Hobbit.epub")
+        make_metadata_package(
+            library, "The Hobbit.epub", title="The Hobbit", identifier="urn:h"
+        )
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
         (output_dir / "The Hobbit.epub").rename(output_dir / "THE HOBBIT.epub")
         packages = archive.collect_package_dirs(library)
 
         decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
 
-        assert [d.status for d in decisions] == [planning.COLLISION]
-        assert "THE HOBBIT.epub" in (decisions[0].reason or "")
+        assert [d.status for d in decisions] == [planning.EXPORTED]
+        assert decisions[0].target == output_dir / "THE HOBBIT.epub"
 
     def test_a_different_book_that_clashes_is_a_collision(self, tmp_path, output_dir):
         # The output directory holds one book; a genuinely different package
@@ -640,17 +644,23 @@ class TestRuleAFilesystemClashIsNotACompletedBook:
         # these are two books, but on a case-insensitive volume they are one
         # file -- so writing the second destroys the first. Reporting it as
         # already exported is the other wrong answer: the book is silently
-        # never converted and permanently recorded as done.
+        # never converted and permanently recorded as done. The reason names
+        # the file that holds it.
         library = tmp_path / "lib"
-        make_package(library, "The Hobbit.epub")
+        make_metadata_package(
+            library, "The Hobbit.epub", title="The Hobbit", identifier="urn:one"
+        )
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
         remove_tree(library / "The Hobbit.epub")
-        make_package(library, "THE HOBBIT.epub")
+        make_metadata_package(
+            library, "THE HOBBIT.epub", title="The Hobbit", identifier="urn:two"
+        )
         packages = archive.collect_package_dirs(library)
 
         decisions = planning.plan_exports(packages, output_dir, PassthroughNaming())
 
         assert [d.status for d in decisions] == [planning.COLLISION]
+        assert "The Hobbit.epub holds another book" in (decisions[0].reason or "")
 
     def test_a_normalisation_variant_clashes_too(self, tmp_path, output_dir):
         # The HFS+ migration case filesystem_key's own docstring cites: the

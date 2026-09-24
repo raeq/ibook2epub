@@ -585,7 +585,10 @@ you run this on a schedule.
 already a file on the shelf keeps it. That matters for names that differ only
 in case, which macOS treats as one file: `b/dune.epub`, exported on its own,
 keeps `dune.epub` when `a/Dune.epub` arrives, and the newcomer is the collision,
-or `Dune (2).epub` under `suffix`.
+or `Dune (2).epub` under `suffix`. A book renamed only by case, with no
+namesake left in the library, still finds its archive under the old spelling:
+the two identifiers are compared, and when neither book declares one the name
+is trusted.
 
 A book that has to share a name is marked with a short digest of its own
 `dc:identifier`:

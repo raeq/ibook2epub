@@ -388,12 +388,13 @@ class TestAFileHoldingAnotherBookIsNotClaimed:
 
     def test_a_file_of_another_identity_is_an_orphan(self, tmp_path, output_dir):
         # One file to a case-insensitive filesystem, two books to passthrough:
-        # the planner calls BOOK.epub a collision with Book.epub.
+        # the planner calls BOOK.epub a collision with Book.epub, whose
+        # archive declares another identifier.
         library = tmp_path / "lib"
-        make_package(library, "Book.epub")
+        make_metadata_package(library, "Book.epub", title="B", identifier="urn:1")
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
         remove_tree(library / "Book.epub")
-        make_package(library, "BOOK.epub")
+        make_metadata_package(library, "BOOK.epub", title="B", identifier="urn:2")
         packages = archive.collect_package_dirs(library)
 
         orphans = planning.find_orphans(output_dir, PassthroughNaming(), packages)
