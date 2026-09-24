@@ -671,3 +671,24 @@ class TestAReportingModeWritesNothing:
             cli.parse_args([report, "-ae", "-ar"])
 
         assert refused.value.code == 2
+
+    @pytest.mark.parametrize("report", ["--list", "--verify"])
+    @pytest.mark.parametrize(
+        "write",
+        [
+            ["-ae"],
+            ["-ad", "h.json"],
+            ["-ad"],
+            ["-ad", "vault", "--annotations-format", "markdown"],
+            ["-ao", "h.json"],
+        ],
+    )
+    def test_an_annotation_destination_is_not_dropped(self, report, write):
+        # "--list -ad FILE" listed the library, wrote no file and exited 0.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args([report, *write])
+
+        assert refused.value.code == 2
+
+    def test_a_report_still_runs_alone(self):
+        assert cli.parse_args(["--verify"]).verify

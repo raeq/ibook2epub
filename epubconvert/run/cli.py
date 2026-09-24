@@ -630,6 +630,19 @@ def _check_reporting_flags(
             f"{report} only reads, so it cannot be combined with "
             "--annotations-refresh, which rewrites the shelf"
         )
+    # Neither report reads annotations, so "--list -ad FILE" listed the
+    # library, wrote no file and exited 0. -ao is not here: it is a
+    # convert-nothing mode, and CONVERSION_ONLY already refuses both reports
+    # beside it.
+    for held, spelled in (
+        (args.annotations_embedded, "--annotations-embedded"),
+        (args.annotations_detached, "--annotations-detached"),
+    ):
+        if held:
+            parser.error(
+                f"{report} only reads, so {spelled} would write nothing; run "
+                "the annotation export on its own"
+            )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
