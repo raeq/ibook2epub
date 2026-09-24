@@ -12,6 +12,7 @@ something", "fix the path" and "a book is broken" are four different responses.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import errno
 import os
 import re
 from pathlib import Path
@@ -22,7 +23,7 @@ import pytest
 from epubconvert.collect import annotations
 from epubconvert.collect import library as library_module
 from epubconvert.collect.coredata import ContainerPermissionError
-from epubconvert.export import naming
+from epubconvert.export import archive, naming
 from epubconvert.run import annotating, convert, run
 from epubconvert.utils import exits
 from tests.conftest import make_package, needs_permissions
@@ -297,6 +298,182 @@ class TestAReadOnlyShelfStopsTheRehearsalToo:
         assert str(shelf) in capsys.readouterr().err
 
 
+def _refuse_opening(monkeypatch, path: Path, error: int = errno.EACCES) -> None:
+    """Make *path* refuse to open, as a read-only file does for anyone but root."""
+    opener = os.open
+
+    def refusing(file, flags, *args, **kwargs):
+        if os.fspath(file) == str(path):
+            raise OSError(error, os.strerror(error), str(file))
+        return opener(file, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", refusing)
+
+
+class TestTheRehearsalJudgesTheLockFile:
+    """
+    The rehearsal judged only the shelf directory, and the real run opens the
+    lock file in it. A lock file that could not be opened (mode 444) let a dry
+    run exit 0 where the real run exited 5; and a read-only shelf holding a
+    writable lock file, with nothing to convert, refused every run with 5
+    although the real lock would have been taken.
+    """
+
+    @staticmethod
+    def _shelf(tmp_path: Path) -> tuple[list[str], Path]:
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        base = ["-s", str(library), "-o", str(shelf), "-q"]
+        assert run.main(base) == exits.SUCCESS
+        return base, shelf
+
+    @pytest.mark.parametrize("error", [errno.EACCES, errno.EROFS])
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_lock_file_that_cannot_be_opened_stops_both(
+        self, tmp_path, monkeypatch, error, mode
+    ):
+        base, shelf = self._shelf(tmp_path)
+        (shelf / "Book.epub").unlink()
+        _refuse_opening(monkeypatch, shelf / convert.LOCK_NAME, error)
+
+        assert run.main([*base, *mode]) == exits.NO_OUTPUT
+
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_lock_file_that_is_a_link_stops_both(self, tmp_path, mode):
+        base, shelf = self._shelf(tmp_path)
+        (shelf / convert.LOCK_NAME).unlink()
+        (shelf / convert.LOCK_NAME).symlink_to(tmp_path / "elsewhere")
+
+        assert run.main([*base, *mode]) == exits.NO_OUTPUT
+        assert not (tmp_path / "elsewhere").exists()
+
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_read_only_shelf_with_a_writable_lock_file_is_not_refused(
+        self, tmp_path, monkeypatch, mode
+    ):
+        base, shelf = self._shelf(tmp_path)
+        allowed = os.access
+        monkeypatch.setattr(
+            os,
+            "access",
+            lambda path, mode, **kwargs: (
+                Path(path) != shelf and allowed(path, mode, **kwargs)
+            ),
+        )
+
+        assert run.main([*base, *mode]) == exits.SUCCESS
+
+    @needs_permissions
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_read_only_lock_file_stops_both(self, tmp_path, mode):
+        base, shelf = self._shelf(tmp_path)
+        (shelf / "Book.epub").unlink()
+        (shelf / convert.LOCK_NAME).chmod(0o444)
+
+        assert run.main([*base, *mode]) == exits.NO_OUTPUT
+
+    @needs_permissions
+    @pytest.mark.parametrize("mode", [[], ["-d"], ["--list"]])
+    def test_a_read_only_shelf_with_nothing_to_do(self, tmp_path, mode):
+        base, shelf = self._shelf(tmp_path)
+        shelf.chmod(0o555)
+        try:
+            code = run.main([*base, *mode])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.SUCCESS
+
+
+#: Every route that reads the shelf, as extra arguments after -s and -o.
+_SHELF_READERS = [
+    pytest.param(["--list"], id="list"),
+    pytest.param(["--verify"], id="verify"),
+    pytest.param(["-d"], id="dry-run"),
+    pytest.param([], id="convert"),
+    pytest.param(["-ae", "-ar"], id="refresh"),
+]
+
+
+def _refuse_listing(monkeypatch, shelf: Path) -> None:
+    """Make *shelf* unlistable, as mode 300 makes it for anyone but root."""
+    listable = os.scandir
+
+    def unlistable(path, *args, **kwargs):
+        if os.fspath(path) == str(shelf):
+            raise PermissionError(13, "Permission denied", str(path))
+        return listable(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", unlistable)
+
+
+class TestAnUnreadableShelfIsNotAnEmptyOne:
+    """
+    A shelf that could not be listed read as an empty one: --verify exited 0
+    with "No archives found", --list showed every book pending, and a real run
+    on a directory it could write but not read (mode 300) exported again every
+    book already there.
+    """
+
+    @staticmethod
+    def _shelf_with_a_book(tmp_path: Path) -> tuple[Path, Path]:
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        assert run.main(["-s", str(library), "-o", str(shelf), "-q"]) == 0
+        return library, shelf
+
+    @pytest.mark.parametrize("mode", _SHELF_READERS)
+    def test_every_route_that_reads_it_stops(self, tmp_path, monkeypatch, capsys, mode):
+        # Root reads a directory whatever its mode; an unlistable one stands
+        # in for it, so this runs under any user.
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        library, shelf = self._shelf_with_a_book(tmp_path)
+        before = (shelf / "Book.epub").stat().st_mtime_ns
+        _refuse_listing(monkeypatch, shelf)
+
+        code = run.main(["-s", str(library), "-o", str(shelf), "-q", *mode])
+
+        out, err = capsys.readouterr()
+        assert code == exits.NO_OUTPUT
+        assert f"Cannot read output directory {shelf}" in err
+        assert "No archives found" not in out
+        assert (shelf / "Book.epub").stat().st_mtime_ns == before
+
+    def test_the_directory_is_named_escaped(self, tmp_path, monkeypatch, capsys):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "my\x1b[2Kshelf"
+        shelf.mkdir()
+
+        _refuse_listing(monkeypatch, shelf)
+
+        code = run.main(["-s", str(library), "-o", str(shelf), "--list", "-q"])
+
+        err = capsys.readouterr().err
+        assert code == exits.NO_OUTPUT
+        assert "Cannot read output directory" in err
+        assert "\x1b" not in err
+
+    @needs_permissions
+    @pytest.mark.parametrize("mode", _SHELF_READERS)
+    def test_a_shelf_it_may_write_but_not_read(self, tmp_path, monkeypatch, mode):
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        library, shelf = self._shelf_with_a_book(tmp_path)
+        shelf.chmod(0o300)
+        try:
+            code = run.main(["-s", str(library), "-o", str(shelf), "-q", *mode])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.NO_OUTPUT
+
+
 @pytest.fixture(name="refused")
 def _refused(tmp_path):
     """A Books container this run may not read; chmod stands in for TCC."""
@@ -561,6 +738,57 @@ class TestAnInterruptAfterTheBooksStillReportsThem:
         assert capsys.readouterr().out.startswith("Interrupted. Exported 0")
 
 
+class TestAnInterruptedRefreshSaysWhatItDid:
+    """
+    A Ctrl-C during --annotations-refresh escaped to main's last resort:
+    exit 130, but nothing said how many books already had their highlights
+    rewritten. --list and --verify have no summary to finish; they end with
+    130 and no traceback.
+    """
+
+    def test_the_books_already_refreshed_are_counted(
+        self, annotated, output_dir, monkeypatch, capsys
+    ):
+        argv = ["-s", str(annotated), "-o", str(output_dir)]
+        run.main([*argv, "-m", "0", "-q"])
+        refreshed: list[Path] = []
+        real = archive.replace_annotations
+
+        def second_interrupts(target, *args, **kwargs):
+            refreshed.append(target)
+            if len(refreshed) == 2:
+                raise KeyboardInterrupt
+            return real(target, *args, **kwargs)
+
+        monkeypatch.setattr(annotating, "replace_annotations", second_interrupts)
+        capsys.readouterr()
+
+        code = run.main([*argv, "-ae", "-ar", "-q"])
+
+        err = capsys.readouterr().err
+        assert code == exits.INTERRUPTED
+        assert (
+            "Refreshed annotations in 1 book(s); interrupted before the rest; "
+            "converted nothing."
+        ) in err
+
+    @pytest.mark.parametrize(
+        ("mode", "phase"),
+        [("--list", "render_listing"), ("--verify", "verify_output")],
+    )
+    def test_a_report_ends_with_130(self, tmp_path, monkeypatch, capsys, mode, phase):
+        make_package(tmp_path / "lib", "Book.epub")
+        (tmp_path / "out").mkdir()
+        monkeypatch.setattr(run, phase, _interrupt)
+
+        code = run.main(
+            ["-s", str(tmp_path / "lib"), "-o", str(tmp_path / "out"), mode]
+        )
+
+        assert code == exits.INTERRUPTED
+        assert "Interrupted" in capsys.readouterr().err
+
+
 class TestTheExitCodeAgreesWithTheSummary:
     """
     An annotation destination's error replaced the run's own code, so a run
@@ -623,6 +851,29 @@ class TestAnOutputPathUnderAFileIsRefusedEverywhere:
 
         assert code == exits.NO_OUTPUT
         assert "afile" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        ("kind", "said"),
+        [
+            ("file", "is a file"),
+            ("dangling", "is a symlink to no directory"),
+            ("loop", "is a symlink to no directory"),
+        ],
+    )
+    def test_the_message_says_what_is_in_the_way(self, tmp_path, capsys, kind, said):
+        # A dangling symlink or a loop was reported as "is a file".
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        blocker = tmp_path / "blocker"
+        if kind == "file":
+            blocker.write_text("x", encoding="utf-8")
+        else:
+            blocker.symlink_to(tmp_path / "gone" if kind == "dangling" else blocker)
+
+        code = run.main(["-s", str(library), "-o", str(blocker / "books"), "-d"])
+
+        assert code == exits.NO_OUTPUT
+        assert f"({blocker} {said})" in capsys.readouterr().err
 
     def test_a_missing_directory_under_a_directory_is_still_made(
         self, tmp_path, output_dir

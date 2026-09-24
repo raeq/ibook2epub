@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Collection, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +80,7 @@ def annotations_after_export(
     *,
     copyable: Sequence[Path],
     held_back: Collection[Path] = frozenset(),
+    stopped: Collection[Path] = frozenset(),
 ) -> int | None:
     """
     Finish the annotation work the conversion could not do itself.
@@ -104,6 +105,8 @@ def annotations_after_export(
         :func:`~epubconvert.export.archive.index_by_package`.
     :param held_back: The books ``-m`` held back for a later run, which will
         embed their highlights: not converted is not unconvertible.
+    :param stopped: The books the ``--min-free`` floor kept from starting,
+        which a rerun converts just the same.
 
     :return: An exit code when something went wrong, None otherwise.
     """
@@ -121,7 +124,13 @@ def annotations_after_export(
         kept = set(copyable)
         packages = [item for item in named if item.package not in kept]
         _warn_about_stranded(
-            args, policy, found, packages, copyable, held_back=held_back
+            args,
+            policy,
+            found,
+            packages,
+            copyable,
+            held_back=held_back,
+            stopped=stopped,
         )
         _warn_about_copies(
             index_by_package(
@@ -134,7 +143,10 @@ def annotations_after_export(
 
 
 def _warn_about_copies(
-    index: dict[str, list[dict[str, Any]]], copies: Sequence[Path], *, copied: bool
+    index: dict[str, list[dict[str, Any]]],
+    copies: Sequence[Path],
+    *,
+    copied: bool | None,
 ) -> None:
     """
     Say so when highlights belong to books taken along rather than converted.
@@ -149,7 +161,9 @@ def _warn_about_copies(
     :param index: The annotations, by book.
     :param copies: The books copied through, those that lost their name too.
     :param copied: Whether the run copies them; under ``--no-copy-through``
-        it does not.
+        it does not. None when the run cannot know: ``-ae -ar`` converts
+        nothing, and said "copied through unchanged" of a shelf built under
+        ``--no-copy-through``, which holds no copy.
     """
     books = sorted(
         {copy.name for copy in copies if annotations_for_book(copy.name, index)}
@@ -160,11 +174,15 @@ def _warn_about_copies(
     shown = ", ".join(printable(name) for name in books[:3])
     if len(books) > 3:
         shown += f", and {len(books) - 3} more"
-    how = (
-        "copied through unchanged were not embedded (copies are byte-for-byte)"
-        if copied
-        else "not copied (--no-copy-through) were not embedded"
-    )
+    if copied is None:
+        how = (
+            "not converted by ibook2epub were not embedded (zipped books and PDFs "
+            "are taken as they are)"
+        )
+    elif copied:
+        how = "copied through unchanged were not embedded (copies are byte-for-byte)"
+    else:
+        how = "not copied (--no-copy-through) were not embedded"
     logger.warning(
         "%d annotation(s) from %d book(s) %s: %s. Use -ad FILE or -ao FILE.",
         count,
@@ -182,6 +200,7 @@ def _warn_about_stranded(
     copyable: Sequence[Path],
     *,
     held_back: Collection[Path] = frozenset(),
+    stopped: Collection[Path] = frozenset(),
 ) -> None:
     """
     Say so when highlights had nowhere to go.
@@ -204,7 +223,9 @@ def _warn_about_stranded(
     out the books it did not reach: the summary says it is held back, and
     the next run embeds its highlights. It was counted here, and the reader
     of a plain ``-ae`` under the default cap was told those books' highlights
-    reached no file and pointed at DRM. One line says they wait instead.
+    reached no file and pointed at DRM. One line says they wait instead, and
+    one more for the books the ``--min-free`` floor stopped, which are as
+    unattempted.
 
     :param args: Parsed command line arguments.
     :param policy: The naming policy the names came from.
@@ -212,6 +233,7 @@ def _warn_about_stranded(
     :param named: The names the export used.
     :param copyable: The library's already-zipped books and PDFs.
     :param held_back: The books ``-m`` held back for a later run.
+    :param stopped: The books the ``--min-free`` floor kept from starting.
     """
     # Quiet: the conversion before this read the same annotations against
     # the same library and has already said which it could not place.
@@ -223,22 +245,32 @@ def _warn_about_stranded(
     # warning, seeing a file there, said nothing.
     places = placed(named, args.output_dir, policy)
     stranded_books: list[str] = []
-    stranded = waiting = 0
+    stranded = 0
+    # What a rerun embeds: those -m held back, and those the floor stopped.
+    waiting = [0, 0]
     for item in named:
         if places.get(item.package) is not None:
             continue
         mine = annotations_for_book(item.package.name, index)
         if item.package in held_back:
-            waiting += len(mine)
+            waiting[0] += len(mine)
+        elif item.package in stopped:
+            waiting[1] += len(mine)
         elif mine:
             stranded_books.append(item.package.name)
             stranded += len(mine)
 
-    if waiting:
+    if waiting[0]:
         logger.info(
             "%d annotation(s) wait for books -m held back; they go in when those "
             "are converted.",
-            waiting,
+            waiting[0],
+        )
+    if waiting[1]:
+        logger.info(
+            "%d annotation(s) wait for books the --min-free floor stopped; they go "
+            "in when a rerun converts those.",
+            waiting[1],
         )
     if not stranded:
         return
@@ -449,11 +481,18 @@ def apply_annotations(
         # Each note named after the file the book is placed at, as the
         # conversion route names it: named from the assignment, an edition
         # moved on to its marked name wrote into the other edition's note.
+        # Only a vault uses the names, as for -ao: a JSON or CSV file named
+        # and opened every zipped book for nothing, and --skip-incomplete is
+        # refused beside it, so an evicted one was downloaded to be named.
         written = write_export(
             args,
             found,
             args.annotations_detached,
-            _with_copies(args, policy, assignments, copyable, shelf=True),
+            (
+                _with_copies(args, policy, assignments, copyable, shelf=True)
+                if vault_of(args) is not None
+                else []
+            ),
             copyable=copyable,
         )
         # A failed book outranks the destination's own error, the order a
@@ -476,7 +515,9 @@ def _before_writing(args: argparse.Namespace) -> int | None:
     # returns, for the same reason as the read: it returned first, and "-d"
     # exited 0 over the typo the real run exited 5 for.
     if args.annotations_embedded and not args.output_dir.is_dir():
-        logger.critical("Output directory does not exist: %s", args.output_dir)
+        logger.critical(
+            "Output directory does not exist: %s", printable(str(args.output_dir))
+        )
         return exits.NO_OUTPUT
 
     # Guarded here rather than at the call sites. It was checked on the route
@@ -551,6 +592,7 @@ def _embed_in_shelf(
     # tell one of those from an abandoned one. Refused on this route, the
     # error escaped main -- which maps it only around the export -- as a
     # traceback and exit 1.
+    tally = _Tally()
     try:
         with output_lock(args.output_dir):
             # Read under the lock, and as before a write: a policy that names
@@ -567,30 +609,63 @@ def _embed_in_shelf(
                     if annotations_for_book(item.package.name, index)
                 },
             )
-            changed, failed, stopped = _refresh_each(args, assignments, index, places)
+            _refresh_each(args, assignments, index, places, tally)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
-    if not args.annotations_detached:
-        # Rewritten are the packages' archives; a copy is not rebuilt.
-        _warn_about_copies(index, copyable, copied=True)
+    except KeyboardInterrupt:
+        # Escaped to main's last resort, which said 130 and nothing about the
+        # books already rewritten. Each rewrite is an atomic replace, so the
+        # count is exact and a rerun carries on.
+        tally.interrupted = True
+    if not args.annotations_detached and not tally.interrupted:
+        # Rewritten are the packages' archives; a copy is not rebuilt. Whether
+        # there is one on the shelf is the conversion's business, not known here.
+        _warn_about_copies(index, copyable, copied=None)
+    return _refresh_outcome(tally, converted=converted)
 
-    # Every book it could not refresh is a failure, and so is a refresh the
-    # floor stopped, as for a conversion. Both were logged and the run exited
-    # 0, so a scheduled refresh that hit ENOSPC on every book reported success.
-    parts = [f"Refreshed annotations in {changed} book(s)"]
-    if failed:
-        parts.append(f"could not refresh {failed}")
-    if stopped:
+
+def _refresh_outcome(tally: _Tally, *, converted: bool) -> int:
+    """
+    Say what a refresh did, and choose its exit code.
+
+    Every book it could not refresh is a failure, and so is a refresh the
+    floor stopped, as for a conversion. Both were logged and the run exited 0,
+    so a scheduled refresh that hit ENOSPC on every book reported success.
+
+    :param tally: What the refresh did.
+    :param converted: Whether this run also converted books.
+
+    :return: 130 if interrupted, 1 if a book was left behind, otherwise 0.
+    """
+    parts = [f"Refreshed annotations in {tally.changed} book(s)"]
+    if tally.failed:
+        parts.append(f"could not refresh {tally.failed}")
+    if tally.stopped:
         parts.append("stopped at the --min-free floor before the rest")
+    if tally.interrupted:
+        parts.append("interrupted before the rest")
     if not converted:
         parts.append("converted nothing")
     summary = "; ".join(parts) + "."
-    if failed or stopped:
+    if tally.interrupted:
+        logger.warning("%s", summary)
+        return exits.INTERRUPTED
+    if tally.failed or tally.stopped:
         logger.error("%s", summary)
         return exits.FAILED
     logger.info("%s", summary)
     return exits.SUCCESS
+
+
+@dataclass
+class _Tally:
+    """What a refresh has done so far, kept where an interrupt cannot lose it."""
+
+    changed: int = 0  # Archives rewritten.
+    failed: int = 0  # Archives that could not be.
+    stopped: bool = False  # The --min-free floor stopped the rest.
+    interrupted: bool = False  # Ctrl-C stopped the rest.
 
 
 def _refresh_each(
@@ -598,7 +673,8 @@ def _refresh_each(
     assignments: Sequence[Assignment],
     index: dict[str, list[dict[str, Any]]],
     places: dict[Path, Path | None],
-) -> tuple[int, int, bool]:
+    tally: _Tally,
+) -> None:
     """
     Rebuild every archive on the shelf whose annotations changed.
 
@@ -612,11 +688,10 @@ def _refresh_each(
     :param assignments: The names every package was given.
     :param index: The annotations, by book.
     :param places: Each book's own archive on the shelf, or None.
-
-    :return: How many archives were rewritten, how many could not be, and
+    :param tally: Counted into as each book is done, so a Ctrl-C leaves it
+        saying how many archives were rewritten, how many could not be, and
         whether the floor stopped the refresh before the rest.
     """
-    changed = failed = 0
     # An interval of one: rebuilds run one at a time, so every one is
     # measured, one statvfs per book that is actually rewritten.
     progress = progress_for(len(assignments), 1)
@@ -634,7 +709,7 @@ def _refresh_each(
             continue
         try:
             if replace_annotations(target, mine, room=room):
-                changed += 1
+                tally.changed += 1
                 logger.info(
                     "%s Refreshed %d annotation(s) in %s",
                     marker,
@@ -644,7 +719,8 @@ def _refresh_each(
         except NoRoomError:
             # Sticky, like the conversions' floor: the volume does not get
             # emptier by asking again, so every book after this one stops too.
-            return changed, failed, True
+            tally.stopped = True
+            return
         except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
             # BadZipFile is not an OSError, so one damaged archive used to
             # abort the whole refresh and every book after it went untouched;
@@ -652,9 +728,8 @@ def _refresh_each(
             # same until #21. A damaged archive is an expected state: --verify
             # exists to find them. Counted as well as logged, so the run's
             # exit code says a book was left behind.
-            failed += 1
+            tally.failed += 1
             logger.error("Could not refresh %s: %s", printable(target.name), exc)
-    return changed, failed, False
 
 
 def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:

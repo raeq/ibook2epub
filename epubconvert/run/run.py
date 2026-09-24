@@ -17,7 +17,9 @@ import asyncio
 import glob
 import os
 import shlex
+import stat
 import sys
+import unicodedata
 from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
@@ -53,6 +55,7 @@ from .annotating import (
 from .claims import shelf_names
 from .cli import parse_args
 from .convert import (
+    LOCK_NAME,
     ExportOptions,
     OutputLockedError,
     Report,
@@ -100,14 +103,16 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
     converts_nothing = bool(args.library_export or args.annotations_only)
     if not converts_nothing or vault_of(args) is not None:
         if args.source_auto:
-            logger.info("Using discovered iBooks library: %s", args.source_dir)
+            logger.info(
+                "Using discovered iBooks library: %s", printable(str(args.source_dir))
+            )
         else:
-            logger.info("Examining source: %s", args.source_dir)
+            logger.info("Examining source: %s", printable(str(args.source_dir)))
     if args.list_only or args.verify:
         # Both only read the shelf, and "Writing" said otherwise.
-        logger.info("Reading output directory: %s", args.output_dir)
+        logger.info("Reading output directory: %s", printable(str(args.output_dir)))
     elif not converts_nothing:
-        logger.info("Writing output to: %s", args.output_dir)
+        logger.info("Writing output to: %s", printable(str(args.output_dir)))
     # Keyed off the policy object rather than re-derived from the raw argument.
     # Two independent statements of one fact drift apart the moment
     # build_policy's mapping changes, and the debug line above is the one that
@@ -263,7 +268,9 @@ def _run_verify(args: argparse.Namespace) -> int:
     # bill of health: the one command whose purpose is finding damage reported
     # success having checked not a single file.
     if not args.output_dir.is_dir():
-        logger.critical("Output directory does not exist: %s", args.output_dir)
+        logger.critical(
+            "Output directory does not exist: %s", printable(str(args.output_dir))
+        )
         return exits.NO_OUTPUT
 
     checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
@@ -306,9 +313,10 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
     forced = [name for name in broken if patterns[name] is not None]
     aside = [name for name in broken if patterns[name] is None]
     # Quoting makes a name one shell word, and does nothing about the ESC and
-    # CR that rewrite the line: a path or a name is escaped with printable,
-    # and a pattern holds "?" for each such character instead, since --match
-    # would read the escape literally (see _repair_pattern).
+    # CR that rewrite the line: a path is spelt in $'...' (see _shell_word), a
+    # name to move aside is escaped with printable, and a pattern holds "?"
+    # for each such character instead, since --match would read the escape
+    # literally (see _repair_pattern).
     if forced:
         emit("Re-export each damaged book, for example:")
         shelf = _shelf_flags(args)
@@ -344,10 +352,38 @@ def _shelf_flags(args: argparse.Namespace) -> str:
     :param args: Parsed command line arguments.
 
     :return: ``-s`` when the library was given rather than discovered, and
-        ``-o`` always, each quoted as one shell word and escaped for display.
+        ``-o`` always, each quoted as one shell word safe to display.
     """
     flags = [] if args.source_auto else ["-s", _as_word(args.source_dir)]
-    return printable(shlex.join([*flags, "-o", _as_word(args.output_dir)]))
+    return " ".join(
+        _shell_word(word) for word in [*flags, "-o", _as_word(args.output_dir)]
+    )
+
+
+def _shell_word(word: str) -> str:
+    """
+    Quote one word so a shell reads it back exactly, and a terminal shows it.
+
+    Escaping the quoted command for display turned a TAB into the four
+    characters ``\\x09``, which a shell reads literally: the repair command
+    created a directory named that, converted into it, and exited 0. A word
+    that needs escaping is written in bash and zsh's ANSI-C quoting instead,
+    where ``\\xNN`` means that byte, so it is both safe to print and the path
+    it names. Every other word keeps POSIX quoting.
+
+    :param word: One word of the command.
+
+    :return: The word, quoted.
+    """
+    if printable(word) == word:
+        return shlex.quote(word)
+    spelt = "".join(
+        char
+        if printable(char) == char and char not in "'\\"
+        else "".join(f"\\x{byte:02x}" for byte in os.fsencode(char))
+        for char in word
+    )
+    return f"$'{spelt}'"
 
 
 def _as_word(path: Path) -> str:
@@ -372,7 +408,14 @@ def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
     :return: The plainest pattern that selects them and nothing else, or None
         when no package has that name, or none can be printed that does.
     """
-    wanted = {package for package in packages if package.name.lower() == name.lower()}
+    # Composed on both sides, as --match reads them: a shelf on HFS+ hands a
+    # name back decomposed, and lower() alone found no package for it.
+    key = unicodedata.normalize("NFC", name).lower()
+    wanted = {
+        package
+        for package in packages
+        if unicodedata.normalize("NFC", package.name).lower() == key
+    }
     if not wanted:
         return None
     stem, suffix = Path(name).stem, Path(name).suffix
@@ -434,7 +477,10 @@ def _survey(
     # and then "Copied Paper.pdf" read as having found nothing and then done
     # something.
     if not packages and not _to_copy(args, copies).sources:
-        logger.warning("No matching *.epub packages found under %s", args.source_dir)
+        logger.warning(
+            "No matching *.epub packages found under %s",
+            printable(str(args.source_dir)),
+        )
 
     report.ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     shared, copies = _shared_names(args, discovered, policy, copies)
@@ -680,16 +726,59 @@ def _unwritable_shelf(args: argparse.Namespace) -> Path | None:
 
     :param args: Parsed command line arguments.
 
-    :return: That directory when it cannot be written, otherwise None. Always
-        None for ``--list`` and ``--verify``, which only read the shelf, and
-        for the runs that never touch it.
+    The lock file is what the run opens, so when there is one it is judged
+    instead: the directory alone let a lock file the run could not open (mode
+    444) pass the rehearsal, and refused a read-only shelf whose lock file
+    would have opened. On a read-only volume opening it fails too, with EROFS.
+
+    :return: The lock file or directory that cannot be written, otherwise
+        None. Always None for ``--list`` and ``--verify``, which only read the
+        shelf, and for the runs that never touch it.
     """
     if args.list_only or args.verify or args.annotations_only or args.library_export:
         return None
+    lock = args.output_dir / LOCK_NAME
+    if os.path.lexists(lock):
+        return None if _lock_opens(lock) else lock
     nearest = _nearest_existing(args.output_dir)
     if nearest is None or os.access(nearest, os.W_OK | os.X_OK):
         return None
     return nearest
+
+
+def _plain_file(path: Path) -> bool:
+    """
+    Report whether a path is a regular file with one name, not a link of either
+    kind: what :func:`~epubconvert.run.convert.output_lock` accepts.
+
+    :param path: The path, known to exist.
+
+    :return: True for a plain file.
+    """
+    try:
+        info = path.lstat()
+    except OSError:
+        return False
+    return stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+
+
+def _lock_opens(lock: Path) -> bool:
+    """
+    Report whether the run could open an existing lock file, as it opens it.
+
+    :param lock: The lock file, known to exist.
+
+    :return: True for a plain file -- not a link of either kind, as
+        :func:`~epubconvert.run.convert.output_lock` requires -- that opens
+        for writing.
+    """
+    if not _plain_file(lock):
+        return False
+    try:
+        os.close(os.open(lock, os.O_RDWR | os.O_NOFOLLOW))
+    except OSError:
+        return False
+    return True
 
 
 def _check_environment(args: argparse.Namespace) -> int | None:
@@ -725,7 +814,9 @@ def _check_environment(args: argparse.Namespace) -> int | None:
                 probed,
             )
         else:
-            logger.critical("Source directory does not exist: %s", args.source_dir)
+            logger.critical(
+                "Source directory does not exist: %s", printable(str(args.source_dir))
+            )
         return exits.NO_SOURCE
 
     # A file where the shelf should be. The real run failed at mkdir with 5,
@@ -735,18 +826,50 @@ def _check_environment(args: argparse.Namespace) -> int | None:
     uses_shelf = not (args.annotations_only or args.library_export)
     blocker = _file_in_the_way(args.output_dir) if uses_shelf else None
     if blocker is not None:
+        # "is a file" was said of a dangling symlink and of a symlink loop too.
+        try:
+            mode = blocker.lstat().st_mode
+        except OSError:  # pragma: no cover - removed since it was found
+            mode = 0
+        kind = "is not a directory"
+        if stat.S_ISLNK(mode):
+            kind = "is a symlink to no directory"
+        elif stat.S_ISREG(mode):
+            kind = "is a file"
         logger.critical(
-            "Output path is not a directory: %s (%s is a file)",
-            args.output_dir,
-            blocker,
+            "Output path is not a directory: %s (%s %s)",
+            printable(str(args.output_dir)),
+            printable(str(blocker)),
+            kind,
         )
         return exits.NO_OUTPUT
+    # A shelf that cannot be listed reads as an empty one: --verify found "No
+    # archives", --list showed every book pending, and a run on a directory
+    # it could write but not read (mode 300) exported them all again.
+    if uses_shelf and args.output_dir.is_dir():
+        try:
+            os.scandir(args.output_dir).close()
+        except OSError as exc:
+            logger.critical(
+                "Cannot read output directory %s: %s",
+                printable(str(args.output_dir)),
+                printable(exc.strerror or str(exc)),
+            )
+            return exits.NO_OUTPUT
     unwritable = _unwritable_shelf(args)
     if unwritable is not None:
+        # A lock file that is a link is refused for what it is, as the real
+        # run's output_lock refuses it, not called unwritable.
+        what = (
+            "is not a plain file"
+            if unwritable.name == LOCK_NAME and not _plain_file(unwritable)
+            else "is not writable"
+        )
         logger.critical(
-            "Cannot create or lock output directory %s: %s is not writable",
-            args.output_dir,
-            unwritable,
+            "Cannot create or lock output directory %s: %s %s",
+            printable(str(args.output_dir)),
+            printable(str(unwritable)),
+            what,
         )
         return exits.NO_OUTPUT
 

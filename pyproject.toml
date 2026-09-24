@@ -114,7 +114,9 @@ max-args = 8
 # to bound. Raised from 14 for Report's copies_failed, one more counter: the
 # alternative, a failed copy folded into the book failures, is the overlap
 # that made the summary call books the --min-free floor stopped "failed".
-max-attributes = 15
+# Raised from 15 for Report's stopped, the packages that floor kept from
+# starting, whose highlights were otherwise said to have reached no file.
+max-attributes = 16
 
 [tool.ruff]
 target-version = "py310"

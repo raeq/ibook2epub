@@ -851,8 +851,8 @@ put them in, so those highlights reach nothing:
 ```text
 10 annotation(s) from 4 book(s) reached no file: Blindsight.epub, Dune.epub,
 Neuromancer.epub, and 1 more. Those books are not on the shelf, so there was
-nothing to embed them in — a DRM-protected book can never be converted, and its
-highlights are the only part of it you can keep. Run again with
+nothing to embed them in -- a DRM-protected book can never be converted, and
+its highlights are the only part of it you can keep. Run again with
 --annotations-detached FILE to write them to a file of their own, or
 --annotations-only FILE to do that without converting anything.
 ```
@@ -870,6 +870,9 @@ warning of their own, which is quiet under `-ad` too:
 2 annotation(s) from 1 book(s) copied through unchanged were not embedded
 (copies are byte-for-byte): Beta.epub. Use -ad FILE or -ao FILE.
 ```
+
+`-ae -ar` converts nothing and cannot tell whether a copy is on the shelf, so
+it says those books were "not converted by ibook2epub" instead.
 
 **This is ahead of the specification, not conformant to it.** That draft still
 has sections marked T.B.D., and its dependency on text fragments has not yet

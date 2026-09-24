@@ -126,7 +126,13 @@ def after_export(
     if not report.interrupted:
         try:
             return annotations_after_export(
-                args, policy, named, found, copyable=copyable, held_back=held_back
+                args,
+                policy,
+                named,
+                found,
+                copyable=copyable,
+                held_back=held_back,
+                stopped=frozenset(report.stopped),
             )
         except KeyboardInterrupt:
             # A Ctrl-C while the detached file or the vault was written

@@ -476,3 +476,22 @@ class TestARepeatedDirectoryEntryIsNotInflatedAgain:
             archive.replace_annotations(target, [{"id": "mine"}])
 
         assert target.read_bytes() == before
+
+
+def test_a_repeated_member_is_named_escaped(tmp_path: Path):
+    # A refresh refusing an archive whose directory repeats a name said only
+    # that "member names appear more than once", so nobody could tell which.
+    path = tmp_path / "Twice.epub"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # zipfile warns of the duplicate
+        with ZipFile(path, "w") as opened:
+            opened.writestr(ZipInfo("mimetype"), "application/epub+zip")
+            opened.writestr(ZipInfo("OEBPS/\x1b[2Kch1.xhtml"), "one")
+            opened.writestr(ZipInfo("OEBPS/\x1b[2Kch1.xhtml"), "two")
+
+    with ZipFile(path) as reading:
+        said = package_reader.repeated_entries(reading)
+
+    assert said is not None
+    assert "ch1.xhtml" in said
+    assert "\x1b" not in said

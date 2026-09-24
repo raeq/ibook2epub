@@ -18,16 +18,17 @@ import errno
 import fnmatch
 import os
 import socket
+import stat
 import threading
 import time
 import unicodedata
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from random import shuffle
-from typing import TextIO
+from typing import BinaryIO
 
 from ..collect.annotations import for_book as annotations_for_book
 from ..collect.validate import ValidationOptions
@@ -147,6 +148,10 @@ class Report:
     #: counted there turned a book the floor stopped into one that "failed".
     copies_failed: int = 0
     held_back: int = 0  # Pending books the export cap left for a later run.
+    #: Packages the --min-free floor kept from starting. Not attempted, like
+    #: the books the cap held back: their highlights wait for a rerun, and
+    #: were said to have reached no file, with the DRM advice.
+    stopped: set[Path] = field(default_factory=set)
 
 
 #: Guards the shared Report and progress counter, which worker threads update.
@@ -242,6 +247,7 @@ def _zip_and_record(
         # counts a full volume, and the summary sends it back to a rerun.
         with _REPORT_LOCK:
             report.aborted = True
+            report.stopped.add(package)
         logger.info(
             "Not started, the volume is below --min-free: %s", printable(package.name)
         )
@@ -407,6 +413,7 @@ async def export_planned(
         # failures would claim work that never started.
         logger.warning("Nothing exported: %d book(s) left unattempted.", len(pending))
         report.aborted = True
+        report.stopped.update(package for package, _ in pending)
         return report
 
     progress = _Progress(len(pending), default_workers(max_workers))
@@ -529,23 +536,7 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
         return
 
     path = output_dir / LOCK_NAME
-    # Opened "r+" always, creating it only if absent. The old
-    # exists()-then-open("w") had a window where a concurrent run created the
-    # file between the two calls and this one truncated the holder details it
-    # was about to report. flock semantics were never affected; the message
-    # was.
-    try:
-        try:
-            handle = path.open("r+")
-        except FileNotFoundError:
-            handle = path.open("a+")
-            handle.seek(0)
-    except OSError as exc:
-        # A read-only output directory got past main's mkdir(exist_ok=True) and
-        # died here with a raw traceback. main turns this into a clean exit 5.
-        raise OutputLockedError(
-            f"cannot lock {output_dir}: {exc}", contended=False
-        ) from exc
+    handle = _open_lock_file(path, output_dir)
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -558,14 +549,15 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
             if exc.errno not in _CONTENDED:
                 logger.warning(
                     "Locking is not supported on %s (%s); continuing unlocked.",
-                    output_dir,
-                    exc,
+                    printable(str(output_dir)),
+                    printable(str(exc)),
                 )
                 handle.close()
                 yield False
                 return
             raise OutputLockedError(
-                f"another ibook2epub run is already using {output_dir} "
+                f"another ibook2epub run is already using "
+                f"{printable(str(output_dir))} "
                 f"({_read_lock_holder(handle)})",
                 contended=True,
             ) from exc
@@ -584,7 +576,59 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
         handle.close()
 
 
-def _record_holder(handle: TextIO, path: Path) -> None:
+def _open_lock_file(path: Path, output_dir: Path) -> BinaryIO:
+    """
+    Open the lock file for writing, creating it if absent, never through a link.
+
+    Opened read-write always, creating it only if absent. The old
+    exists()-then-open("w") had a window where a concurrent run created the
+    file between the two calls and this one truncated the holder details it
+    was about to report.
+
+    Opened by name, it was followed: a symlink planted at the lock's name had
+    its target truncated for the holder's pid, a dangling one created a file
+    wherever it pointed, and a hard link truncated its other name. The rule is
+    :func:`~epubconvert.utils.contained.open_contained`'s -- ``O_NOFOLLOW`` at
+    open, then the descriptor judged: a regular file with one name.
+
+    :param path: The lock file.
+    :param output_dir: The directory it locks, for the message.
+
+    :return: The open lock file, not yet locked.
+
+    :raises OutputLockedError: If it cannot be opened, or is not a plain file.
+        Nothing has been written to it either way.
+    """
+    flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
+    shown = printable(str(output_dir))
+    not_plain = f"cannot lock {shown}: its lock file is not a plain file"
+    try:
+        descriptor = os.open(path, flags, 0o644)
+    except OSError as exc:
+        # ELOOP is O_NOFOLLOW refusing a symlink. Anything else -- a read-only
+        # output directory got past main's mkdir(exist_ok=True) and died here
+        # with a raw traceback -- is an unopenable lock file. main turns either
+        # into a clean exit 5.
+        message = (
+            not_plain
+            if exc.errno == errno.ELOOP
+            else f"cannot lock {shown}: {printable(str(exc))}"
+        )
+        raise OutputLockedError(message, contended=False) from exc
+    try:
+        info = os.fstat(descriptor)
+    except OSError as exc:  # pragma: no cover - fstat on an open descriptor
+        os.close(descriptor)
+        raise OutputLockedError(
+            f"cannot lock {shown}: {printable(str(exc))}", contended=False
+        ) from exc
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(descriptor)
+        raise OutputLockedError(not_plain, contended=False)
+    return os.fdopen(descriptor, "rb+", buffering=0)
+
+
+def _record_holder(handle: BinaryIO, path: Path) -> None:
     """
     Note this run's pid and host in the lock file, for a refused run to quote.
 
@@ -606,10 +650,14 @@ def _record_holder(handle: TextIO, path: Path) -> None:
         os.lseek(descriptor, 0, os.SEEK_SET)
         os.write(descriptor, line)
     except OSError as exc:
-        logger.debug("Could not record the lock holder in %s: %s", path, exc)
+        logger.debug(
+            "Could not record the lock holder in %s: %s",
+            printable(str(path)),
+            printable(str(exc)),
+        )
 
 
-def _read_lock_holder(handle: TextIO) -> str:
+def _read_lock_holder(handle: BinaryIO) -> str:
     """
     Describe whoever currently holds the lock, for the error message.
 
@@ -733,12 +781,15 @@ def format_summary(
     :param dry_run: Whether the run was a dry run.
     :param remaining: Books still to convert after this run, if known.
 
-    :return: The summary line.
+    :return: The summary line, with the output directory escaped for display:
+        a path that is not UTF-8 raised UnicodeEncodeError under a strict
+        stdout after the books were written.
     """
+    shelf = printable(str(output_dir))
     if dry_run:
         summary = (
             f"Dry run: would export {report.planned} epub file(s) to "
-            f"{output_dir} (skipped {report.skipped} already present"
+            f"{shelf} (skipped {report.skipped} already present"
         )
         summary += _clauses(report, failures=False)
         summary += ")."
@@ -750,7 +801,7 @@ def format_summary(
 
     summary = (
         f"Exported {report.exported} epub file(s) "
-        f"({report.files_written} member files) to {output_dir}"
+        f"({report.files_written} member files) to {shelf}"
     )
     if report.skipped:
         summary += f", skipped {report.skipped}"
@@ -759,7 +810,7 @@ def format_summary(
     if report.interrupted:
         summary = f"Interrupted. {summary}"
     if report.aborted:
-        summary = f"Aborted: not enough free space on {output_dir}. {summary}"
+        summary = f"Aborted: not enough free space on {shelf}. {summary}"
     if remaining:
         summary += _remaining_hint(report, remaining)
     return summary
@@ -881,11 +932,11 @@ def _has_room(output_dir: Path, min_free_mb: int) -> bool:
         logger.critical(
             "Only %d MiB free on %s, below the --min-free floor of %d MiB.",
             free,
-            output_dir,
+            printable(str(output_dir)),
             min_free_mb,
         )
         return False
-    logger.debug("%d MiB free on %s", free, output_dir)
+    logger.debug("%d MiB free on %s", free, printable(str(output_dir)))
     return True
 
 

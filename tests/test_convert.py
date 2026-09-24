@@ -6,6 +6,7 @@
 # pylint: disable=use-implicit-booleaness-not-comparison
 
 import asyncio
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -456,3 +457,38 @@ class TestFormatSummary:
 
         assert "3 not attempted: rerun to continue." in summary
         assert "-m 0" not in summary
+
+    @pytest.mark.parametrize(
+        "report",
+        [
+            convert.Report(planned=1),
+            convert.Report(exported=1, files_written=3),
+            convert.Report(exported=1, aborted=True),
+        ],
+        ids=["dry-run", "export", "aborted"],
+    )
+    def test_the_output_directory_is_named_escaped(self, tmp_path, report):
+        # -o went into the line as given: under a strict UTF-8 stdout a path
+        # that is not UTF-8 raised UnicodeEncodeError after the books were
+        # written, and an ESC reached the terminal. The floor's clause names
+        # it too.
+        output_dir = tmp_path / os.fsdecode(b"B\xfccher\x1b[2K")
+
+        summary = convert.format_summary(report, output_dir, dry_run=report.planned > 0)
+
+        assert f"{tmp_path}/B\\udcfccher\\x1b[2K" in summary
+        assert summary.count("B\\udcfccher") == (2 if report.aborted else 1)
+        summary.encode("utf-8")
+
+    def test_a_run_to_a_path_that_is_not_utf8_prints_its_summary(
+        self, tmp_path, capsys
+    ):
+        # capsys encodes strictly, as a Linux UTF-8 locale's stdout does.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        output_dir = tmp_path / os.fsdecode(b"B\xfccher")
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-q"])
+
+        assert code == 0
+        assert "Exported 1 epub file(s)" in capsys.readouterr().out

@@ -14,6 +14,7 @@ import posixpath
 import re
 import stat
 import zlib
+from collections import Counter
 from pathlib import Path
 from typing import IO, Protocol
 from urllib.parse import unquote
@@ -148,13 +149,18 @@ def repeated_entries(archive: ZipFile) -> str | None:
     :param archive: The open archive.
 
     :return: :data:`SHARED_HEADER` if two entries share a local header, a
-        description if two share a name, or None if neither does.
+        description naming the repeated members if two share a name, or None
+        if neither does.
     """
     entries = archive.infolist()
     if len({info.header_offset for info in entries}) < len(entries):
         return SHARED_HEADER
-    if len({info.filename for info in entries}) < len(entries):
-        return "member names appear more than once"
+    counted = Counter(info.filename for info in entries)
+    repeated = sorted(name for name, times in counted.items() if times > 1)
+    if repeated:
+        shown = ", ".join(printable(name) for name in repeated[:5])
+        more = f" and {len(repeated) - 5} more" if len(repeated) > 5 else ""
+        return f"member names appear more than once: {shown}{more}"
     return None
 
 
