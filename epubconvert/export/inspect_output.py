@@ -101,7 +101,7 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         if source is None or not source.is_file():
             logger.debug(
                 "No cover for %s: %r is not a readable file inside the package",
-                target_archive.name,
+                printable(target_archive.name),
                 href,
             )
             return None
@@ -127,12 +127,17 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         if not _write_new(source, cover):
             logger.debug(
                 "Not writing cover for %s: %s was taken while copying",
-                target_archive.name,
-                cover.name,
+                printable(target_archive.name),
+                printable(cover.name),
             )
             return None
     except (OSError, ValueError, ValidationError) as exc:
-        logger.debug("No cover for %s: %s", printable(target_archive.name), exc)
+        # The reason can quote the book's own words -- a rootfile path out of
+        # container.xml, which XML lets carry a C1 CSI and a CR -- so it is
+        # escaped as the name is.
+        logger.debug(
+            "No cover for %s: %s", printable(target_archive.name), printable(str(exc))
+        )
         return None
 
     return cover
@@ -170,8 +175,8 @@ def _cover_name(target_archive: Path, href: str) -> Path | None:
     if not is_free(cover):
         logger.debug(
             "Not writing cover for %s: %s is taken",
-            target_archive.name,
-            cover.name,
+            printable(target_archive.name),
+            printable(cover.name),
         )
         return None
     return cover
