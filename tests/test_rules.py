@@ -307,6 +307,10 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                     continue
                 if path.name == "naming.py" and _inside(tree, node, "encode_name"):
                     continue
+                # Not a measurement: a zip member name's bytes, recovered from
+                # zipfile's cp437 reading, which maps every byte, to read again.
+                if path.name == "package.py" and _inside(tree, node, "member_name"):
+                    continue
                 offenders.append(f"{path}:{node.lineno}")
 
         assert offenders == [], f"encode a name through encode_name: {offenders}"
@@ -328,6 +332,9 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                 # errors="replace", so it cannot raise the way this rule is
                 # about. Named here so it is the one other decode, not a gap.
                 if path.name == "coredata.py" and _inside(tree, node, "_lenient_text"):
+                    continue
+                # Nor this: a zip member name read as the UTF-8 OCF says it is.
+                if path.name == "package.py" and _inside(tree, node, "member_name"):
                     continue
                 offenders.append(f"{path}:{node.lineno}")
 

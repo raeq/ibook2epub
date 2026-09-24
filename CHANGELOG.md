@@ -20,6 +20,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Under `--on-collision suffix`, a book declaring no usable identifier no
+  longer keeps a numbered-looking file that declares one. A deleted
+  `Dune (1965)` left `Dune (1965).epub`, and an unidentified `Dune` added
+  since was reported exported from it and never written, and the deleted
+  book's archive was not listed as an orphan.
+
+- Under `--on-collision suffix`, two books whose names are one file on the
+  shelf -- two folders of one name, or a book renamed by case and a namesake
+  added under its old spelling -- now read their identifiers, and the book
+  the file declares keeps it. The newcomer was reported exported from the
+  other's archive and never written, the other was written again under a
+  number, and the next run wrote the newcomer too and left the second copy
+  an orphan.
+
 - A package added beside a zipped book already copied, when either declares
   no usable identifier, is no longer placed at the copy's file: under
   `--on-collision suffix` it gets a numbered name of its own, under `skip` it
@@ -108,6 +122,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   say), its note is moved to the new name with everything the reader wrote,
   and only onto a name that is still free; if it cannot be moved the run names
   the old file and exits 1 instead of starting a second note.
+
+- That now holds for a note written by 2.3.1 or earlier, which names no book,
+  and for the note of a book removed from Books and added again, tagged for
+  its old id: each moves with its renamed book instead of being left behind
+  while a second note is started. A namesake that keeps the old name (a
+  `Dune.pdf` beside the renamed `Dune.epub`) is no longer handed such a note
+  to write its own highlights over; the run names the note and exits 1, or
+  under `--on-collision suffix` numbers the namesake.
+
+- A package holding a file whose name is not valid UTF-8 is reported failed
+  with that file's name ("member name is not UTF-8"), instead of a bare codec
+  error that named no file.
 
 - A re-imported book whose note was adopted under different letter case has
   its highlights written into that note, and an older note whose `# `/`## `
@@ -778,6 +804,69 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   run, and `--verify` counted it as damaged. A `FATAL` message is reported like
   an `ERROR`, and both of epubcheck's output streams are read, so a JVM notice
   on one no longer hides the errors on the other.
+
+- A book zipped with Info-ZIP (`zip -X0 book.epub mimetype`, then
+  `zip -rX9 book.epub META-INF OEBPS`), whose non-ASCII member names are
+  UTF-8 but not flagged as such, is read by those names:
+  - `-ae -ar` no longer renames such a member while refreshing the book, which
+    left `OEBPS/第1章.xhtml` stored as `OEBPS/τ¼¼1τ½á.xhtml` and the book
+    broken, and reported it refreshed.
+  - `--verify` and `--validate` no longer call such a book damaged ("manifest
+    item is not in the archive"), and a package document at a non-ASCII path
+    is found. A name stored twice, once flagged and once not, is reported as
+    a duplicate.
+
+- `--verify` and `--validate` report a `mimetype` member whose local header
+  carries an extra field, which OCF forbids and epubcheck rejects. `zip`
+  run without `-X` writes one.
+
+- A container that lists another rendition, such as a PDF, ahead of the
+  package document is read at the package document: the first rootfile whose
+  media type is `application/oebps-package+xml`. The PDF was parsed as the
+  package document and a sound book called damaged.
+
+- A book retitled in Books, or whose language, year or declared identifier
+  changed, takes its new values in a merged `-ao` or `-ad` file rather than
+  keeping the old ones for as long as its highlights were not edited.
+- A dry run judges the `--min-free` floor where the real run does: before the
+  first copy or book, and at the first archive `-ae -ar` would rewrite. On a
+  volume below the floor it said "would export" every book and exited `0`,
+  where the real run wrote nothing and exited `1`; it now ends as the real run
+  does. A rerun with every file already copied is no longer stopped by a full
+  volume it has nothing to write to, and a run the floor stops says
+  "Only N MiB free" once, not twice. A dry `-ae -ar` says how many books it
+  would refresh, and exits `1` for an archive the refresh could not read.
+
+- A file named by `-ad FILE` or `-ao FILE` is judged before anything is read
+  or converted, in a dry run too: a directory that is not there or cannot be
+  written, or an existing file that is not an annotation export, is refused
+  with exit `5`. The dry run exited `0`, and `-ad` converted the whole library
+  before refusing the file. The message names the file, not the temporary
+  written beside it.
+
+- A Ctrl-C landing as `-ae -ar` closes a member of the archive it is
+  rebuilding stops the refresh with `130`. It was taken for a book that could
+  not be read, and the refresh went on through the rest and exited `1`.
+
+- A copy whose target cannot be looked at (an I/O error on a network share
+  or a USB volume, on Python 3.10 and 3.11) is counted as a failed copy. It
+  ended the run in a traceback with no summary.
+
+- A closed standard output is a lost report (exit `5`): `--list >&-` lost its
+  listing and exited `0`. Under `-ad -` with standard error closed, the summary
+  no longer lands in the JSON on standard output. `-ao -` and
+  `--library-export -` into a full or closed standard output say so and exit
+  `5`, where each ended in a traceback.
+
+- A Ctrl-C just after a temporary is made no longer leaves a `.part` file
+  beside a highlights export, a note or a book `-ar` refreshes.
+
+- A `--log-file` that stops taking writes, such as one on a volume that fills
+  up, is said once and then left alone; it printed a "Logging error"
+  traceback for every line of the run.
+
+- `-s` naming a file says the path is not a directory, rather than that it
+  does not exist.
 
 ## [2.3.1] - 2026-09-11
 

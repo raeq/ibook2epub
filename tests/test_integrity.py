@@ -147,6 +147,25 @@ class TestAnArchiveIsNeverSilentlyIncomplete:
         with pytest.raises(ArchiveInvalidError, match="container.xml"):
             zip_package(package, output_dir / "NoContainer.epub")
 
+    def test_a_member_whose_name_is_not_text_is_refused_by_name(
+        self, tmp_path, output_dir
+    ):
+        # A zip member's name is stored as UTF-8, and os.walk hands back a
+        # name it could not decode as lone surrogates: zipfile raised a bare
+        # UnicodeEncodeError, which reported the book failed with "'utf-8'
+        # codec can't encode character" and no word of which file.
+        package = make_package(tmp_path / "lib", "Book.epub")
+        try:
+            # The byte 0xFF, as os.walk hands it back.
+            (package / "OEBPS" / "chapter\udcff.xhtml").write_bytes(b"<html/>")
+        except (OSError, UnicodeEncodeError):
+            pytest.skip("this filesystem refuses a name that is not UTF-8")
+
+        with pytest.raises(ArchiveInvalidError, match=r"OEBPS/chapter\\udcff\.xhtml"):
+            zip_package(package, output_dir / "Book.epub")
+
+        assert list(output_dir.iterdir()) == []
+
 
 class TestCaseOnlyNamesCollide:
     """On a case-insensitive volume two such names are one file."""

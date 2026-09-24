@@ -24,12 +24,13 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
 from ..collect.package import (
     ValidationError,
+    member_name,
     open_member,
     open_regular,
     read_member,
     repeated_entries,
 )
-from ..collect.validate import ArchiveInvalidError, ValidationOptions
+from ..collect.validate import ArchiveInvalidError, ValidationOptions, storable
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
 from ..utils.display import printable
@@ -528,6 +529,7 @@ def zip_package(
                     # shelf, so a fresh export and a refresh agree.
                     logger.trace("Replaced by this run's annotations: %s", arcname)
                     continue
+                storable(target_archive.name, arcname)
                 _store(archive, path, arcname)
                 stored.add(arcname)
                 file_count += 1
@@ -811,10 +813,11 @@ def replace_annotations(
             repeated = repeated_entries(reading)
             if repeated is not None:
                 raise ArchiveInvalidError(target_archive.name, [repeated])
-            names = reading.namelist()
+            # By the names OCF reads, which that check has just found unique.
+            found = {member_name(info): info for info in reading.infolist()}
             held = (
-                read_member(reading, reading.getinfo(EMBEDDED_PATH), MAX_EMBEDDED_BYTES)
-                if EMBEDDED_PATH in names
+                read_member(reading, found[EMBEDDED_PATH], MAX_EMBEDDED_BYTES)
+                if EMBEDDED_PATH in found
                 else None
             )
 
@@ -831,14 +834,12 @@ def replace_annotations(
             if room is not None and not room():
                 raise NoRoomError(target_archive.name)
 
-            members = [
-                info for info in reading.infolist() if info.filename != EMBEDDED_PATH
-            ]
+            members = [info for name, info in found.items() if name != EMBEDDED_PATH]
             handle, temporary = tempfile.mkstemp(
                 dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
             )
+            partial = Path(temporary)  # Named first: a Ctrl-C may land on close.
             os.close(handle)
-            partial = Path(temporary)
             _rebuild(reading, members, partial, embedded)
             # After the rebuild, as write_atomically does: a book the user
             # made read-only would otherwise make its own partial unwritable.
@@ -846,10 +847,7 @@ def replace_annotations(
 
         # Replaced once the original is closed rather than while it is still
         # being read, which a platform that locks open files refuses.
-        assert_is_a_book(
-            target_archive.name,
-            {info.filename for info in members} | {EMBEDDED_PATH},
-        )
+        assert_is_a_book(target_archive.name, set(found) | {EMBEDDED_PATH})
         partial.replace(target_archive)
     except BaseException:
         if partial is not None:
@@ -901,7 +899,7 @@ def _rebuild(
     """
     with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
         for info in members:
-            member = entry(info.filename, info.compress_type)
+            member = entry(member_name(info), info.compress_type)
             _size_ahead(member, info.file_size)
             with (
                 open_member(reading, info) as source,
@@ -920,10 +918,8 @@ def write_atomically(target: Path, text: str) -> None:
     neither the old file nor the new one. It is also not valid JSON, so every
     later run then refused to write to that path at all. The export is the
     artifact the merge machinery exists to protect; this is the same
-    temporary-then-replace path :func:`~epubconvert.export.archive.zip_package` uses.
-
-    A replace swaps in a new file, so three things the old one carried are
-    carried across deliberately:
+    temporary-then-replace path :func:`zip_package` uses. A replace swaps in a
+    new file, so three things the old one carried are carried across:
 
     - **Its mode.** Every rerun wrote the partial at the umask's mode, so an
       export the user had made 0600 became readable by everyone again.
@@ -941,12 +937,13 @@ def write_atomically(target: Path, text: str) -> None:
     :raises OSError: If it could not be written. The old file survives.
     """
     target, mode = _what_to_replace(target)
-    handle, temporary = tempfile.mkstemp(
-        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-    )
-    os.close(handle)
-    partial = Path(temporary)
-    try:
+    partial: Path | None = None
+    try:  # Made inside: a Ctrl-C as its descriptor closed left it behind.
+        handle, temporary = tempfile.mkstemp(
+            dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
+        )
+        partial = Path(temporary)
+        os.close(handle)
         partial.write_text(text, encoding="utf-8")
         _sync(partial)
         # After the write, not before: a target the user made read-only would
@@ -954,7 +951,8 @@ def write_atomically(target: Path, text: str) -> None:
         partial.chmod(mode)
         partial.replace(target)
     except BaseException:
-        partial.unlink(missing_ok=True)
+        if partial is not None:
+            partial.unlink(missing_ok=True)
         raise
 
 

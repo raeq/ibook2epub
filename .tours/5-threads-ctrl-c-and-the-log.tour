@@ -61,8 +61,8 @@
     {
       "title": "Nothing attempted, nothing failed",
       "file": "epubconvert/run/convert.py",
-      "pattern": "    if not _has_room\\(output_dir, run\\.min_free_mb\\):",
-      "description": "A distinction worth copying elsewhere. When the volume is already below `--min-free`, no book is attempted — so `report.aborted` is set rather than `report.failed`.\n\nCounting these as failures would claim work that never started. `exit_code` still returns `1` for it, because the run genuinely did not do its job."
+      "pattern": "    if report\\.aborted or not _has_room\\(output_dir, run\\.min_free_mb\\):",
+      "description": "A distinction worth copying elsewhere. When the volume is already below `--min-free`, no book is attempted — so `report.aborted` is set rather than `report.failed`. A dry run measures here too, so it ends as the real run would.\n\nCounting these as failures would claim work that never started. `exit_code` still returns `1` for it, because the run genuinely did not do its job."
     },
     {
       "title": "The floor, checked twice",

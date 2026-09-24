@@ -19,10 +19,12 @@ exit code rather than promising success before looking.
 
 import errno
 import inspect
+import io
 import os
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import IO
 from zipfile import ZipFile
 
 import pytest
@@ -254,3 +256,48 @@ class TestTheRefreshTakesOnlyWhatItUses:
         for name in ("_embed_in_shelf", "_refresh_outcome"):
             helper = getattr(annotating, name)
             assert "converted" not in inspect.signature(helper).parameters
+
+
+class TestADryRefreshReadsWhatTheRefreshReads:
+    def test_a_damaged_archive_fails_both(self, shelved):
+        (_shelf(shelved) / "Old.epub").write_bytes(b"PK not a zip")
+
+        dry = run.main([*shelved, "-ae", "-ar", "-q", "-d"])
+        real = run.main([*shelved, "-ae", "-ar", "-q"])
+
+        assert dry == real == exits.FAILED
+
+
+class TestACtrlCInsideARebuild:
+    """
+    A Ctrl-C landing in zipfile's close of one member left that member's
+    writing handle open, so closing the archive raised ValueError with the
+    KeyboardInterrupt behind it. The refresh counted that as a book it
+    could not read, went on rewriting the rest, and exited 1.
+    """
+
+    def test_stops_the_refresh(self, shelved, monkeypatch, capsys):
+        # zipfile's own class for a member being written, found by asking.
+        with ZipFile(io.BytesIO(), "w") as scratch, scratch.open("x", "w") as member:
+            writer = type(member)
+        original = writer.close
+        calls: list[IO[bytes]] = []
+
+        def close(self: IO[bytes]) -> None:
+            calls.append(self)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            original(self)
+
+        monkeypatch.setattr(writer, "close", close)
+
+        code = run.main([*shelved, "-ae", "-ar"])
+
+        # Finished here, so the abandoned archive is not complained of when
+        # it is collected, during some later test.
+        original(calls[1])
+        err = capsys.readouterr().err
+        assert code == exits.INTERRUPTED
+        assert "could not refresh" not in err
+        assert not any(_carries(book) for book in _shelf(shelved).glob("*.epub"))
+        assert not list(_shelf(shelved).glob(".ibook2epub-*"))

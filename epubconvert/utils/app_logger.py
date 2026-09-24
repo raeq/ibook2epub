@@ -9,7 +9,9 @@ from tests without spraying an ``app.log`` into the current directory.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -50,6 +52,48 @@ _FILE_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 # ISO 8601 with UTC offset: sorts lexicographically and is unambiguous across
 # timezones, unlike a 12-hour local clock.
 _FILE_DATEFMT = "%Y-%m-%dT%H:%M:%S%z"
+
+
+class _LogFile(logging.FileHandler):
+    """
+    The ``--log-file`` handler, which says once that it cannot be written.
+
+    A log file on a volume that filled up during the run printed logging's
+    "--- Logging error ---" traceback for every line after, on a run that
+    still exited 0. The first failure is said, on the console, and the file
+    is left alone for the rest of the run. The exit code is not changed, as
+    it is not for a log file that could not be opened at all: the file is a
+    copy of what the console already shows.
+    """
+
+    #: Whether a write to the file has failed.
+    failed = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Write a record, unless the file has already failed."""
+        if not self.failed:
+            super().emit(record)
+
+    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802
+        """Say once why the file could not be written, then stop writing it."""
+        del record
+        if self.failed:
+            return
+        self.failed = True
+        error = sys.exc_info()[1]
+        reason = error.strerror if isinstance(error, OSError) else None
+        logger.warning(
+            "Could not write to the log file %s: %s; not logging to it for the "
+            "rest of the run.",
+            printable(self.baseFilename),
+            printable(reason or str(error)),
+        )
+
+    def close(self) -> None:
+        """Close the file, whatever is left in it that cannot be written."""
+        # What could not be written was said when it failed.
+        with contextlib.suppress(OSError):
+            super().close()
 
 
 def level_for_verbosity(verbosity: int) -> int:
@@ -120,7 +164,7 @@ def configure(verbosity: int = 1, log_file: Path | None = None) -> TraceLogger:
             # backslashreplace: os.walk hands back an undecodable filename
             # as lone surrogates, which strict UTF-8 cannot write, and the
             # handler dropped the whole line for a traceback on stderr.
-            file_handler = logging.FileHandler(
+            file_handler = _LogFile(
                 log_path, encoding="utf-8", errors="backslashreplace"
             )
         except OSError as exc:

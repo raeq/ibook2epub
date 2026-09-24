@@ -711,6 +711,26 @@ class TestMalformedPackageDocuments:
         with ZipFile(path) as archive:
             assert package_reader.find_opf_path(archive) == "OEBPS/content.opf"
 
+    def test_the_package_document_is_chosen_over_a_rendition_listed_first(
+        self, tmp_path
+    ):
+        # OCF: the first rootfile whose media-type is a package document's.
+        # A container listing a PDF rendition ahead of it had the PDF parsed
+        # as the package document, and a sound book was called damaged.
+        container = (
+            '<?xml version="1.0"?>\n'
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="book.pdf" media-type="application/pdf"/>'
+            '<rootfile full-path="OEBPS/content.opf"'
+            ' media-type="application/oebps-package+xml"/></rootfiles></container>'
+        )
+        members = dict(MEMBERS, **{"META-INF/container.xml": container})
+        path = write_epub(tmp_path / "Book.epub", {**members, "book.pdf": "%PDF-1.4"})
+
+        with ZipFile(path) as archive:
+            assert package_reader.find_opf_path(archive) == "OEBPS/content.opf"
+        assert validate.validate_archive(path) == []
+
     def test_a_container_naming_no_rootfile_is_refused(self, tmp_path):
         container = (
             '<?xml version="1.0"?>\n'

@@ -107,6 +107,18 @@ EXPECTED = {
     "RerunPlanner.NumberedRemovalsCrowd": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
     ),
+    # A book with no identifier beside the numbered-looking archive a deleted
+    # book left: without asking what the file declares, it kept that file.
+    "RerunPlanner.NumberedLeftBehind": HOLDS,
+    "RerunPlanner.NumberedLeftBehindLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
+    # A namesake added beside a book exported alone: without asking whose
+    # the plain file is, the newcomer claimed it first.
+    "RerunPlanner.NamesakeAdded": HOLDS,
+    "RerunPlanner.NamesakeAddedLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
 }
 
 

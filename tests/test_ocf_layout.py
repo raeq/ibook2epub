@@ -98,6 +98,65 @@ class TestMimetypeIsPhysicallyFirst:
         assert validate.validate_archive(target) == []
 
 
+class TestMimetypeCarriesNoExtraField:
+    #: The timestamp field Info-ZIP adds to every member unless given -X.
+    TIMESTAMP = b"UT\x05\x00\x01" + (0).to_bytes(4, "little")
+
+    def _written(self, path: Path, extra: bytes) -> Path:
+        with ZipFile(path, "w") as archive:
+            mimetype = ZipInfo("mimetype")
+            mimetype.extra = extra
+            archive.writestr(mimetype, "application/epub+zip")
+            for name, body in MEMBERS.items():
+                archive.writestr(name, body)
+        return path
+
+    def test_an_extra_field_in_its_local_header_is_reported(self, tmp_path: Path):
+        # OCF forbids one, and epubcheck fails the book for it (PKG-005): the
+        # field sits between the name and the content, so the bytes a reader
+        # sniffs at offset 38 are no longer "application/epub+zip". zip given
+        # no -X writes exactly this, and the validator called it sound.
+        path = self._written(tmp_path / "Extra.epub", self.TIMESTAMP)
+        assert path.read_bytes()[38:58] != b"application/epub+zip"
+
+        problems = validate.validate_archive(path)
+
+        assert "mimetype carries a 9-byte extra field; it must carry none" in problems
+
+    def test_the_local_header_is_the_one_judged(self, tmp_path: Path):
+        # The central directory's copy is what zipfile reports, and the two
+        # need not agree. The one at offset 0 is the one a reader sees.
+        path = self._written(tmp_path / "LocalOnly.epub", self.TIMESTAMP)
+        raw = bytearray(path.read_bytes())
+        entry = raw.index(b"PK\x01\x02")  # mimetype's, the first listed
+        raw[entry + 30 : entry + 32] = b"\x00\x00"
+        raw[entry + 46 + 8 : entry + 46 + 8 + 9] = b""
+        # The end record's directory size, nine bytes shorter now.
+        raw[-10:-6] = (int.from_bytes(raw[-10:-6], "little") - 9).to_bytes(4, "little")
+        path.write_bytes(bytes(raw))
+        with ZipFile(path) as archive:
+            assert archive.getinfo("mimetype").extra == b""
+
+        problems = validate.validate_archive(path)
+
+        assert "mimetype carries a 9-byte extra field; it must carry none" in problems
+
+    def test_a_damaged_local_header_is_left_to_the_read(self, tmp_path: Path):
+        # No header, no extra field to measure: reading the member reports it.
+        path = self._written(tmp_path / "Damaged.epub", b"")
+        path.write_bytes(b"XX" + path.read_bytes()[2:])
+
+        problems = validate.validate_archive(path)
+
+        assert len(problems) == 1
+        assert problems[0].startswith("not a readable zip archive")
+
+    def test_none_is_not_reported(self, tmp_path: Path):
+        path = self._written(tmp_path / "Plain.epub", b"")
+
+        assert validate.validate_archive(path) == []
+
+
 class TestEveryMemberNameIsUnique:
     def test_two_members_with_one_name_are_reported(self, tmp_path: Path):
         # OCF requires unique names, and readers disagree about a duplicate:

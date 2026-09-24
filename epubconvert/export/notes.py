@@ -486,7 +486,7 @@ def write_vault(
         # Highlights were read and not one reached a note. Every book they
         # belong to is absent from the library this run walked, so nothing
         # was matched -- which said "Wrote 0 note(s)" and exited 0. The same
-        # shape as annotating._warn_about_stranded, and for the same reason:
+        # shape as stranded.warn_about_stranded, and for the same reason:
         # silence here reads as "you had nothing to export".
         #
         # Two counts that are true whatever narrowed the run, and no third
@@ -662,7 +662,7 @@ def _naming(names: list[str]) -> str:
 
     Named rather than counted, because a reader with several edited notes in a
     large vault would otherwise have to glob for them. The same shape
-    ``annotating._warn_about_stranded`` uses.
+    ``stranded.warn_about_stranded`` uses.
 
     :param names: The files this outcome applies to.
 
@@ -682,10 +682,10 @@ def _gather(
     only onto a name nothing is at. A sidecar beside it (``.md.new``) holds
     new highlights the reader has yet to merge, and would be left beside
     nothing: the note is not moved while one is there. Nor is a note
-    another book of the run is given, or one of two tagged for the book.
+    another book of the run is given, or one of two that are the book's.
 
     :param directory: The vault.
-    :param strays: The notes tagged for the book under other names.
+    :param strays: The book's notes under other names.
     :param name: The note name the book is given.
     :param given: Every note name the run gives.
 
@@ -697,7 +697,7 @@ def _gather(
     sidecar = sidecar_for(old)
     try:
         if len(strays) > 1:
-            reason = "another note is tagged for the same book"
+            reason = "another note is the same book's"
         elif filesystem_key(old.name) in others:
             reason = "another book is given that name"
         elif _present(target):
@@ -732,17 +732,16 @@ def _move(old: Path, target: Path) -> None:
     Checking the name and then renaming left a window: ``rename`` replaces
     whatever is there, so a note saved at that name in between was lost. A
     hard link claims the name only if it is still free (EEXIST otherwise),
-    and the old name is removed once it has. A volume without hard links,
-    or a rename that only changes case, falls back to ``rename``.
+    and the old name is removed once it has. A volume without hard links
+    falls back to ``rename``. Never asked to move a note to a name that
+    differs from its own only in case: naming gives a book the spelling on
+    disk, and passes over the note at it when it looks for strays.
 
     :param old: The note under the name its book had before.
     :param target: The name its book has now.
 
     :raises OSError: If the note could not be moved, the target included.
     """
-    if filesystem_key(old.name) == filesystem_key(target.name):
-        old.rename(target)
-        return
     try:
         os.link(old, target, follow_symlinks=False)
     except FileExistsError:

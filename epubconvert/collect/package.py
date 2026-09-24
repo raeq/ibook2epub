@@ -119,6 +119,38 @@ def disallowed_method(info: ZipInfo) -> str | None:
     )
 
 
+#: General-purpose flag bit 11: the member's name is encoded in UTF-8.
+_UTF8_NAME = 0x800
+
+
+def member_name(info: ZipInfo) -> str:
+    """
+    Name a member of an epub as OCF names it, in UTF-8, flagged or not.
+
+    The zip format reads a name without flag bit 11 as cp437, and zipfile does
+    just that. Info-ZIP -- the ``zip -X0``, ``zip -rX9`` recipe for making an
+    epub by hand -- writes the UTF-8 bytes of ``第1章.xhtml`` without the flag,
+    so zipfile handed back ``τ¼¼1τ½á.xhtml``: --verify called a sound book's
+    chapter missing, and a refresh rewrote it under that name, flagged UTF-8,
+    renaming it for good. OCF requires UTF-8 names, so an unflagged name is
+    read as UTF-8 when its bytes are UTF-8. One that is not was never an epub
+    name, and keeps the cp437 reading. ``ZipFile(metadata_encoding=)`` would
+    say this once per archive, but it arrived in Python 3.11.
+
+    :param info: The member, as the archive's directory describes it.
+
+    :return: Its name.
+    """
+    if info.flag_bits & _UTF8_NAME:
+        return info.filename
+    try:
+        # zipfile decoded the name as cp437, which maps every byte, so this
+        # recovers the bytes the archive holds.
+        return info.filename.encode("cp437").decode("utf-8")
+    except UnicodeError:
+        return info.filename
+
+
 def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
     """
     Open a member of an untrusted archive for streaming, if it can be bounded.
@@ -139,7 +171,7 @@ def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
     method = disallowed_method(info)
     if method is not None:
         raise NotImplementedError(
-            f"{printable(info.filename)} is compressed with {method}, "
+            f"{printable(member_name(info))} is compressed with {method}, "
             "which an epub may not use"
         )
     return archive.open(info)
@@ -169,7 +201,9 @@ def repeated_entries(archive: ZipFile) -> str | None:
     entries = archive.infolist()
     if len({info.header_offset for info in entries}) < len(entries):
         return SHARED_HEADER
-    counted = Counter(info.filename for info in entries)
+    # By the name OCF reads, as every other reader does: the same bytes flagged
+    # UTF-8 once and once not are one name, which zipfile reads two ways.
+    counted = Counter(member_name(info) for info in entries)
     repeated = sorted(name for name, times in counted.items() if times > 1)
     if repeated:
         shown = ", ".join(printable(name) for name in repeated[:5])
@@ -221,6 +255,9 @@ class _ArchiveMembers:  # pylint: disable=too-few-public-methods
 
     def __init__(self, archive: ZipFile) -> None:
         self.archive = archive
+        # Looked up by the name the book uses, not zipfile's: a package
+        # document at 本/content.opf, unflagged, was otherwise missing.
+        self.infos = {member_name(info): info for info in archive.infolist()}
 
     def read(self, name: str) -> bytes:
         """
@@ -230,10 +267,9 @@ class _ArchiveMembers:  # pylint: disable=too-few-public-methods
         inflated, and the read is bounded as well, because that declaration
         is the book's own claim about itself.
         """
-        try:
-            info = self.archive.getinfo(name)
-        except KeyError as exc:
-            raise ValidationError(f"missing {name}") from exc
+        info = self.infos.get(name)
+        if info is None:
+            raise ValidationError(f"missing {name}")
 
         method = disallowed_method(info)
         if method is not None:
@@ -484,8 +520,13 @@ def _opf_path(members: _Members) -> str:
     """
     Resolve the package document path from ``META-INF/container.xml``.
 
-    A container may list several rootfiles; one without a ``full-path`` is not
-    the one we want and is not a reason to give up.
+    A container may list several rootfiles, and OCF names the package document
+    as the first whose media-type is :data:`PACKAGE_MEDIA_TYPE`. Taking the
+    first rootfile of any kind parsed a PDF rendition listed ahead of it as the
+    package document, and called a sound book damaged. A container that
+    declares no media-type still names its package document, so without a
+    match the first rootfile is taken, as it always was. One without a
+    ``full-path`` is not the one we want and is not a reason to give up.
 
     :param members: The book being read.
 
@@ -495,14 +536,26 @@ def _opf_path(members: _Members) -> str:
         names one outside the book.
     """
     root = _element(members, CONTAINER_PATH)
+    first: str | None = None
     for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
         full_path = rootfile.get("full-path")
-        if full_path:
-            # Checked for both shapes. The directory reader joins the result
-            # onto a real directory, so a rootfile of "/etc/passwd" or
-            # "../../.." would be opened rather than merely missed.
+        if not full_path:
+            continue
+        # Media types are compared without regard to case (RFC 6838).
+        media_type = (rootfile.get("media-type") or "").strip().lower()
+        if media_type == PACKAGE_MEDIA_TYPE:
             return _checked_opf_path(full_path)
+        first = first or full_path
+    if first:
+        # Checked for both shapes, whichever rootfile it is. The directory
+        # reader joins the result onto a real directory, so a rootfile of
+        # "/etc/passwd" or "../../.." would be opened rather than merely missed.
+        return _checked_opf_path(first)
     raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+
+
+#: The media-type by which a container names its package document.
+PACKAGE_MEDIA_TYPE = "application/oebps-package+xml"
 
 
 def find_opf_path(archive: ZipFile) -> str:

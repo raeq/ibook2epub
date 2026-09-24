@@ -25,7 +25,8 @@ import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from zipfile import ZIP_STORED, BadZipFile, ZipFile
+from typing import IO
+from zipfile import ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 from ..utils.app_logger import logger
 from ..utils.display import printable
@@ -36,6 +37,7 @@ from .package import (
     UNREADABLE_MEMBER,
     ValidationError,
     disallowed_method,
+    member_name,
     open_member,
     open_regular,
     read_member,
@@ -44,6 +46,10 @@ from .package import (
 )
 
 EPUBCHECK = "epubcheck"
+
+#: A lone surrogate: what ``os.walk`` hands back for a byte of a file name it
+#: could not decode, and the one thing in a str that UTF-8 cannot spell.
+SURROGATE = re.compile(r"[\ud800-\udfff]")
 
 #: How much a CRC check inflates before the ratio below is asked about.
 #: Reading in chunks bounds the memory a check costs, not the time: a 4 MB
@@ -70,6 +76,25 @@ class ArchiveInvalidError(Exception):
         shown = "; ".join(problems[:3])
         extra = f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""
         super().__init__(f"{shown}{extra}")
+
+
+def storable(name: str, arcname: str) -> None:
+    """
+    Refuse a member name a zip cannot hold, naming it.
+
+    A member's name is stored as UTF-8, and a file name ``os.walk`` could not
+    decode comes back holding lone surrogates, which UTF-8 cannot spell.
+    zipfile raised a bare UnicodeEncodeError for it, and the book was reported
+    failed with a codec's complaint and no word of which file.
+
+    :param name: The archive's name, for the error message.
+    :param arcname: The member's path inside the archive.
+
+    :raises ArchiveInvalidError: If *arcname* is not text UTF-8 can hold.
+    """
+    if SURROGATE.search(arcname):
+        problem = f"member name is not UTF-8: {printable(arcname)}"
+        raise ArchiveInvalidError(name, [problem])
 
 
 @dataclass(frozen=True)
@@ -110,9 +135,13 @@ def validate_archive(path: Path) -> list[str]:
         # between the two was opened for reading, and waited for ever.
         with open_regular(path) as handle, ZipFile(handle) as archive:
             size = os.fstat(handle.fileno()).st_size
-            names = archive.namelist()
+            # The names OCF reads, not zipfile's cp437 reading of those
+            # Info-ZIP leaves unflagged: see member_name.
+            entries = archive.infolist()
+            names = [member_name(info) for info in entries]
             members = set(names)
-            problems.extend(_check_mimetype(archive, names))
+            by_name = dict(zip(names, entries, strict=True))
+            problems.extend(_check_mimetype(archive, by_name, handle))
             problems.extend(_check_unique(names))
             repeated = repeated_entries(archive)
             if repeated == SHARED_HEADER:
@@ -197,7 +226,7 @@ def _first_corrupt(archive: ZipFile) -> str | None:
                 while handle.read(_CHUNK_BYTES):
                     pass
         except BadZipFile:
-            return info.filename
+            return member_name(info)
     return None
 
 
@@ -292,7 +321,7 @@ def _check_methods(archive: ZipFile) -> list[str]:
     """
     disallowed = [
         f"member is compressed with {method}, which an epub may not use: "
-        f"{printable(info.filename)}"
+        f"{printable(member_name(info))}"
         for info in archive.infolist()
         if (method := disallowed_method(info)) is not None
     ]
@@ -305,18 +334,23 @@ def _check_methods(archive: ZipFile) -> list[str]:
     return disallowed
 
 
-def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
+def _check_mimetype(
+    archive: ZipFile, members: dict[str, ZipInfo], handle: IO[bytes]
+) -> list[str]:
     """
     Check the ``mimetype`` entry the epub specification mandates.
 
     :param archive: The open archive.
-    :param names: Its member names, built once by the caller.
+    :param members: Its members by name, built once by the caller; the last
+        listing of a name, as zipfile's own lookup keeps.
+    :param handle: The file the archive was opened from, to read the local
+        header zipfile does not report.
 
     :return: A list of problems.
     """
     problems: list[str] = []
 
-    if not names:
+    if not members:
         return ["archive is empty"]
     # First by position in the file, never by the central directory's order:
     # that index is written last, in whatever order the writer chose. OCF
@@ -326,19 +360,25 @@ def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
     # first but listing it later was reported damaged. zipfile reports offsets
     # from the start of the file, so bytes prepended to it are caught too.
     first = min(archive.infolist(), key=lambda member: member.header_offset)
-    if first.filename != MIMETYPE_NAME:
-        problems.append(f"first member is {first.filename!r}, not 'mimetype'")
-        if MIMETYPE_NAME not in names:
+    first_name = member_name(first)
+    if first_name != MIMETYPE_NAME:
+        problems.append(f"first member is {first_name!r}, not 'mimetype'")
+        if MIMETYPE_NAME not in members:
             return problems
 
-    info = archive.getinfo(MIMETYPE_NAME)
-    if first.filename == MIMETYPE_NAME and info.header_offset != 0:
+    info = members[MIMETYPE_NAME]
+    if first_name == MIMETYPE_NAME and info.header_offset != 0:
         problems.append(
             f"mimetype is stored at byte {info.header_offset}, not first in the file"
         )
     stored = info.compress_type == ZIP_STORED
     if not stored:
         problems.append("mimetype is compressed; it must be stored")
+    extra = _local_extra(handle, info)
+    if extra:
+        problems.append(
+            f"mimetype carries a {extra}-byte extra field; it must carry none"
+        )
     # The specification fixes this member's length exactly, so a declared size
     # that differs settles it without reading anything. --verify runs over
     # files this tool may not have written, and a member declaring 512 MiB was
@@ -351,6 +391,34 @@ def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
         problems.append("mimetype does not contain 'application/epub+zip'")
 
     return problems
+
+
+def _local_extra(handle: IO[bytes], info: ZipInfo) -> int:
+    """
+    Measure the extra field in a member's local header.
+
+    OCF forbids one on ``mimetype``: it sits between the name and the content,
+    so the content no longer starts at offset 38, where a reader sniffing the
+    file looks for ``application/epub+zip``. zip run without ``-X`` adds one,
+    and epubcheck fails the book for it. zipfile reports only the central
+    directory's extra field, which need not match, so the local header at the
+    front of the file, the one a reader sees, is read here.
+
+    :param handle: The file the archive was opened from.
+    :param info: The member.
+
+    :return: The extra field's length in bytes; 0 when there is none, or when
+        there is no local header to read, which reading the member reports.
+    """
+    handle.seek(info.header_offset)
+    header = handle.read(_LOCAL_HEADER_BYTES)
+    if len(header) < _LOCAL_HEADER_BYTES or not header.startswith(b"PK\x03\x04"):
+        return 0
+    return int.from_bytes(header[28:30], "little")
+
+
+#: The fixed part of a local file header, ending with the extra field's length.
+_LOCAL_HEADER_BYTES = 30
 
 
 def _check_manifest(members: set[str], package: Package) -> list[str]:

@@ -140,7 +140,10 @@ policy (unless `--skip-incomplete` leaves an evicted book unopened, which the
 model does not describe; the orphan check then lists no numbered or marked
 file of its name), or the file of its marked name once its crowd has left it; with no
 usable identifier, the one numbered file when no other package wants the name
-and nothing holds the plain name. A copy that keeps that file sends the
+and nothing holds the plain name, and with `AskNumbered` only when that file
+declares no usable identifier either. `KeepShared` asks the same where two
+packages want one name and no file of it is numbered: the one whose
+identifier the plain file declares keeps it. A copy that keeps that file sends the
 package back to claim a name (`_Claiming.reclaim`). `ReclaimOwn` widens that
 to any package given the name of a file the claim pass kept as a copy's own
 bytes: in suffix mode it claims its marked or numbered name, and in skip mode
@@ -177,6 +180,10 @@ size says so where no identifier can.
 | `NumberedRemovals` | `--match`, `--refresh`, suffix mode, named from the folder, two packages | removed with their archives | none | before a write | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `NumberedRemovalsStuck` | the same, without `KeepNumbered` | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 | `NumberedRemovalsCrowd` | `NumberedRemovals` with three packages | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `NumberedLeftBehind` | `--match`, `--refresh`, suffix mode, named from the folder, a package titled like the other's name numbered | books added and removed, archives left | the look-alike only | before a write | ExportedMeansTheBooksOwnFile and NoArchiveOfTheLibraryIsAnOrphan hold |
+| `NumberedLeftBehindLoose` | the same, without `AskNumbered` | books added and removed, archives left | the look-alike only | the same | **ExportedMeansTheBooksOwnFile violated** |
+| `NamesakeAdded` | `--match`, `--refresh`, suffix mode, named from the folder, two packages of one name | books added | all | before a write | all four hold |
+| `NamesakeAddedLoose` | the same, without `KeepShared` | books added | all | the same | **ExportedMeansTheBooksOwnFile violated** |
 
 What the configurations that fail show:
 
@@ -232,7 +239,9 @@ What the configurations that fail show:
   to avoid. So when the book holding a folder name leaves the library, or a
   `--match` run names only its namesake, the namesake is listed as
   `exported` from the other book's file and its archive is not reported as
-  an orphan. It is never written over.
+  an orphan. It is never written over. In suffix mode a namesake added
+  beside it no longer is, where both declare a usable identifier
+  (`NamesakeAdded`).
   `tests/test_planning.py::TestAFolderNameIsNotProofOfTheBook` replays the
   writes against the CLI.
 
@@ -309,6 +318,36 @@ What the configurations that fail show:
   packages and no usable identifier, once the first leaves, two books still
   want the plain name, and nothing says which numbered file is whose. The
   last takes the second's number, and its own archive is an orphan.
+
+- **`NumberedLeftBehindLoose`** is that rule before `AskNumbered`. It asked
+  nothing of the file: a book `Dune (1965)` with a real identifier was
+  deleted from the library and its archive `Dune (1965).epub` stayed, and a
+  book `Dune` declaring no usable identifier, added since, kept that file as
+  its own number. It was reported exported from it and never written, and
+  the deleted book's archive, maybe its last copy, was not listed as an
+  orphan. Now a book with no usable identifier keeps the one numbered file
+  only when the file declares none either; a file that declares one is
+  another book's. `NumberedLeftBehind` holds with it, and
+  `tests/test_numbered_names.py::TestABookWithNoIdentifier` replays it
+  against the CLI under the default policy and `--name-by author-title`.
+
+- **`NamesakeAddedLoose`** is that rule before `KeepShared`. Identifiers
+  were read only for a name with numbered files on the shelf, so when
+  `b/Dune.epub`, exported alone, was joined by `a/Dune.epub`, which sorts
+  first, nothing was read: the newcomer took the plain name, was reported
+  exported from the other book's archive and never written, and the other
+  was written again under a number. Named from the folder in suffix mode,
+  that was the `FolderNamedReports` limit. With a rename by case, which the
+  model does not describe, it did not settle either: `b/Cafe.epub` renamed to
+  `b/cAFE.epub` and `a/Cafe.epub` added under the old spelling, the renamed
+  book was written again as `cAFE (2).epub`, and the next run, which found
+  that number and read the identifiers, wrote the newcomer as
+  `Cafe (3).epub` and left the second copy an orphan. Now two packages whose
+  names are one file on the shelf read their identifiers, and the one the
+  file declares keeps it. `NamesakeAdded` holds with it;
+  `tests/test_numbered_names.py` and `tests/test_case_namesakes.py` replay
+  both against the CLI. Skip mode is unchanged: the `FolderNamedReports`
+  limit.
 
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.
