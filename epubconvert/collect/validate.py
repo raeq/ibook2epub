@@ -21,6 +21,7 @@ import re
 import shutil
 import stat
 import subprocess
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -173,7 +174,7 @@ _CHUNK_BYTES = 1024 * 1024
 
 def _check_unique(names: list[str]) -> list[str]:
     """
-    Report every member name the archive holds more than once.
+    Report every member name the archive holds more than once, or as good as.
 
     OCF requires unique names, and readers disagree about a duplicate: some
     take the first local header, some the last directory entry, so one book
@@ -185,9 +186,11 @@ def _check_unique(names: list[str]) -> list[str]:
 
     :param names: The archive's member names, in its own order.
 
-    :return: Up to five duplicated names, and a count of the rest.
+    :return: Up to five duplicated names, and a count of the rest; then the
+        same for names that differ only by case or normalization.
     """
-    repeated = [name for name, count in Counter(names).items() if count > 1]
+    counted = Counter(names)
+    repeated = [name for name, count in counted.items() if count > 1]
     problems = [
         f"member name appears more than once: {printable(name)}"
         for name in repeated[:5]
@@ -195,7 +198,70 @@ def _check_unique(names: list[str]) -> list[str]:
     if len(repeated) > 5:
         more = len(repeated) - 5
         problems.append(f"...and {more} more member name(s) appearing more than once")
+    return problems + _check_folded(counted)
+
+
+def folded(name: str) -> str:
+    """
+    Fold a member name the way a case-insensitive filesystem compares it.
+
+    The rule :func:`epubconvert.export.naming.filesystem_key` states for the
+    files this tool writes: NFC, then Unicode's full case folding. Restated
+    here because this layer may not import that one.
+
+    :param name: A member name.
+
+    :return: A key equal for any two names such a filesystem cannot tell apart.
+    """
+    return unicodedata.normalize("NFC", name).casefold()
+
+
+def _check_folded(counted: Counter[str]) -> list[str]:
+    """
+    Report distinct member names that differ only by case or normalization.
+
+    OCF requires names to stay unique after full case folding and NFC, since
+    a reader unpacking the book onto APFS, HFS+ or NTFS writes both to one
+    file, and which one survives is up to the order it writes them in.
+
+    :param counted: Each distinct member name, so an exact duplicate, which
+        :func:`_check_unique` reports, is not reported again here.
+
+    :return: Up to five colliding groups named, and a count of the rest.
+    """
+    groups: dict[str, list[str]] = {}
+    for name in counted:
+        groups.setdefault(folded(name), []).append(name)
+    colliding = [sorted(group) for group in groups.values() if len(group) > 1]
+    problems = [
+        "member names differ only by case or Unicode normalization: "
+        + ", ".join(_distinguished(group))
+        for group in colliding[:5]
+    ]
+    if len(colliding) > 5:
+        problems.append(
+            f"...and {len(colliding) - 5} more member name(s) "
+            "differing only by case or normalization"
+        )
     return problems
+
+
+def _distinguished(names: list[str]) -> list[str]:
+    """
+    Render names safe to print, and told apart even where they look alike.
+
+    A composed ``é`` and an ``e`` with a combining accent print the same, and
+    a report naming one file twice explains nothing, so names that would are
+    spelled with every character past ASCII escaped.
+
+    :param names: Distinct names.
+
+    :return: Their renderings, in the same order.
+    """
+    shown = [printable(name) for name in names]
+    if len({unicodedata.normalize("NFC", name) for name in shown}) == len(shown):
+        return shown
+    return [ascii(name)[1:-1] for name in names]
 
 
 def _check_methods(archive: ZipFile) -> list[str]:
