@@ -741,6 +741,19 @@ def _check_environment(args: argparse.Namespace) -> int | None:
             blocker,
         )
         return exits.NO_OUTPUT
+    # A shelf that cannot be listed reads as an empty one: --verify found "No
+    # archives", --list showed every book pending, and a run on a directory
+    # it could write but not read (mode 300) exported them all again.
+    if uses_shelf and args.output_dir.is_dir():
+        try:
+            os.scandir(args.output_dir).close()
+        except OSError as exc:
+            logger.critical(
+                "Cannot read output directory %s: %s",
+                printable(str(args.output_dir)),
+                printable(exc.strerror or str(exc)),
+            )
+            return exits.NO_OUTPUT
     unwritable = _unwritable_shelf(args)
     if unwritable is not None:
         logger.critical(

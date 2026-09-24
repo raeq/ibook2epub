@@ -297,6 +297,94 @@ class TestAReadOnlyShelfStopsTheRehearsalToo:
         assert str(shelf) in capsys.readouterr().err
 
 
+#: Every route that reads the shelf, as extra arguments after -s and -o.
+_SHELF_READERS = [
+    pytest.param(["--list"], id="list"),
+    pytest.param(["--verify"], id="verify"),
+    pytest.param(["-d"], id="dry-run"),
+    pytest.param([], id="convert"),
+    pytest.param(["-ae", "-ar"], id="refresh"),
+]
+
+
+def _refuse_listing(monkeypatch, shelf: Path) -> None:
+    """Make *shelf* unlistable, as mode 300 makes it for anyone but root."""
+    listable = os.scandir
+
+    def unlistable(path, *args, **kwargs):
+        if os.fspath(path) == str(shelf):
+            raise PermissionError(13, "Permission denied", str(path))
+        return listable(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", unlistable)
+
+
+class TestAnUnreadableShelfIsNotAnEmptyOne:
+    """
+    A shelf that could not be listed read as an empty one: --verify exited 0
+    with "No archives found", --list showed every book pending, and a real run
+    on a directory it could write but not read (mode 300) exported again every
+    book already there.
+    """
+
+    @staticmethod
+    def _shelf_with_a_book(tmp_path: Path) -> tuple[Path, Path]:
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        assert run.main(["-s", str(library), "-o", str(shelf), "-q"]) == 0
+        return library, shelf
+
+    @pytest.mark.parametrize("mode", _SHELF_READERS)
+    def test_every_route_that_reads_it_stops(self, tmp_path, monkeypatch, capsys, mode):
+        # Root reads a directory whatever its mode; an unlistable one stands
+        # in for it, so this runs under any user.
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        library, shelf = self._shelf_with_a_book(tmp_path)
+        before = (shelf / "Book.epub").stat().st_mtime_ns
+        _refuse_listing(monkeypatch, shelf)
+
+        code = run.main(["-s", str(library), "-o", str(shelf), "-q", *mode])
+
+        out, err = capsys.readouterr()
+        assert code == exits.NO_OUTPUT
+        assert f"Cannot read output directory {shelf}" in err
+        assert "No archives found" not in out
+        assert (shelf / "Book.epub").stat().st_mtime_ns == before
+
+    def test_the_directory_is_named_escaped(self, tmp_path, monkeypatch, capsys):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "my\x1b[2Kshelf"
+        shelf.mkdir()
+
+        _refuse_listing(monkeypatch, shelf)
+
+        code = run.main(["-s", str(library), "-o", str(shelf), "--list", "-q"])
+
+        err = capsys.readouterr().err
+        assert code == exits.NO_OUTPUT
+        assert "Cannot read output directory" in err
+        assert "\x1b" not in err
+
+    @needs_permissions
+    @pytest.mark.parametrize("mode", _SHELF_READERS)
+    def test_a_shelf_it_may_write_but_not_read(self, tmp_path, monkeypatch, mode):
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        library, shelf = self._shelf_with_a_book(tmp_path)
+        shelf.chmod(0o300)
+        try:
+            code = run.main(["-s", str(library), "-o", str(shelf), "-q", *mode])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.NO_OUTPUT
+
+
 @pytest.fixture(name="refused")
 def _refused(tmp_path):
     """A Books container this run may not read; chmod stands in for TCC."""
