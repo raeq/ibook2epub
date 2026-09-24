@@ -731,9 +731,12 @@ them there. So the file has four parts, and the tool owns exactly one of them:
 
 Only the middle part is ever rewritten. Tag a note, add an alias, write three
 paragraphs underneath — the next run still adds your new highlights and leaves
-all of it alone. Edit *inside* the highlights and the tool stops touching that
+all of it alone. An editor that trims trailing spaces on save is not an edit.
+Edit *inside* the highlights and the tool stops touching that
 note entirely, putting the new ones in a `.md.new` beside it so you never have
-to choose between keeping your edits and getting your highlights.
+to choose between keeping your edits and getting your highlights. Edit the
+`.md.new` too, part way through merging it, and it is left alone as well: the
+run names it and exits `1` until you merge it into the note or remove it.
 
 The middle part mirrors Books: a highlight you delete there leaves the note on
 the next run, as it leaves each book's embedded set. Only the JSON file of
@@ -743,14 +746,30 @@ is never touched either way.
 
 A file at a note's path that the tool did not write, or one it cannot read,
 is never touched either. That book's highlights then reach no file at all, so
-the run names the file and exits `1`; move it aside and rerun.
+the run names the file and exits `1`; move it aside and rerun. Under
+`--on-collision suffix` a book passes over a file it did not write and gets a
+numbered note beside it instead.
 
 The marker line also names the book the note is of, as a digest of Apple's id
 for it, so a note is never rewritten with another book's highlights, whatever
-a later run names it. Two editions of a book that want one note are a name
-collision: the note stays the first one's, the run names it and exits `1`, and
-`--on-collision suffix` gives each its own. Notes written before the marker
-named its book are still recognised, and are tagged the next time they change.
+a later run names it. Which note a book gets depends on your library, never on
+which books have highlights today. Two books that want one note — `Dune.epub`
+and `Dune.pdf` — are a name collision, settled the same way whether you have
+highlighted one of them or both: the note is the first one's, the other is
+named in the summary and gets none, and `--on-collision suffix` numbers it,
+`Dune (2).md`. A note already written for a book stays that book's, so a book
+gaining its first highlight, or losing its last, never moves another book's
+note. Notes written before the marker named its book are still recognised:
+each stays with the book whose highlights it holds, and is tagged the next
+time it changes.
+
+A note is another book's only when the book it names is one Books still
+knows — in your library, highlighted or not — or when its frontmatter names
+another edition's identifier. Such a note is left alone: without
+`--on-collision suffix` the run names it and exits `1`, and with it the book
+gets a numbered note of its own. A book you remove from Books and add again
+gets a new id from Apple; its note is still its own, and is re-tagged the
+next time it changes.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
@@ -913,7 +932,8 @@ what a current one would.
 A file at that path that the merge cannot account for in full is left exactly
 as it is, and the run stops with exit code `5` and names it: one that is not
 an export, an annotation with no id, two annotations sharing an id, or a
-top-level key the tool does not write. Merging any of those would drop
+key the tool does not write, at the top of the file, on an annotation or on
+an annotation's book. Merging any of those would drop
 something without a word, so move the file aside or fix it and rerun.
 
 [anno]: https://w3c.github.io/epub-specs/epub34/annotations/

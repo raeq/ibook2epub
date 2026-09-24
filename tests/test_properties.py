@@ -23,7 +23,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from epubconvert.collect import annotations, identifiers
-from epubconvert.export import notes
+from epubconvert.export import noteformat, notes
 from epubconvert.export.naming import encode_name, split_extension, truncate_bytes
 from epubconvert.run.claims import marked, suffixed
 from epubconvert.utils.display import printable, printable_json
@@ -114,16 +114,16 @@ def test_an_escaped_line_opens_no_block_and_forges_no_marker(line):
     escaped = notes._escape(line)
 
     assert not notes.BLOCK_OPENERS.match(escaped)
-    assert not notes.START_PATTERN.match(escaped)
-    assert not notes.END_PATTERN.match(escaped)
+    assert not noteformat.START_PATTERN.match(escaped)
+    assert not noteformat.END_PATTERN.match(escaped)
 
 
 @given(ANY_TEXT.map(lambda s: s.replace("\n", "").replace("\r", "")))
 def test_escaping_changes_only_a_line_that_needed_it(line):
     needed = bool(
         notes.BLOCK_OPENERS.match(line)
-        or notes.START_PATTERN.match(line)
-        or notes.END_PATTERN.match(line)
+        or noteformat.START_PATTERN.match(line)
+        or noteformat.END_PATTERN.match(line)
     )
 
     assert (notes._escape(line) != line) == needed
@@ -188,14 +188,41 @@ def test_indentation_that_opens_code_is_kept_as_columns_of_text(lead, rest):
         assert escaped.startswith(lead)
 
 
-# ------------------------------------------------------------- notes._quoted
+# ---------------------------------------------------------------- notes.compose
+
+#: Highlights and notes of any text, blank lines and trailing spaces included.
+HIGHLIGHTS = st.lists(
+    st.fixed_dictionaries(
+        {"id": st.just("x"), "text": ANY_TEXT, "book": st.just({"assetId": "A"})},
+        optional={"note": ANY_TEXT, "chapter": ANY_TEXT},
+    ),
+    min_size=1,
+    max_size=4,
+)
+
+
+@given(HIGHLIGHTS)
+def test_a_note_survives_an_editor_trimming_trailing_white_space(found):
+    note = notes.compose(found)
+    trimmed = "\n".join(line.rstrip(" \t") for line in note.split("\n"))
+
+    held = noteformat.split(note)
+    assert held is not None
+    assert held.generated == notes.body(found)
+    assert noteformat.is_ours(note) is True
+    assert notes.rewrite(note, found) == noteformat.normalise(note)
+    assert noteformat.is_ours(trimmed) is True
+    assert notes.rewrite(trimmed, found) == noteformat.normalise(trimmed)
+
+
+# ------------------------------------------------------------- noteformat.quoted
 
 
 @given(ANY_TEXT)
 def test_a_quoted_scalar_carries_only_what_yaml_allows_unescaped(value):
     # YAML 1.2 (5.1): one character outside this set invalidates the whole
     # frontmatter, and Obsidian then drops every property of the note.
-    quoted = notes._quoted(value)
+    quoted = noteformat.quoted(value)
 
     assert all(
         c in "\t\n\r\x85"

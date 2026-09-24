@@ -306,7 +306,9 @@ class TestTheCommandLineMode:
     @pytest.mark.parametrize(
         "content",
         [
-            '{"annotations": [{"id": "OLD", "\\udc80": "key"}]}',
+            # A key: under the generator, the one object whose keys the
+            # merge does not refuse, since it rebuilds it every write.
+            '{"generator": {"\\udc80": "key"}, "annotations": [{"id": "OLD"}]}',
             '{"annotations": [{"id": "OLD", "book": {"title": ["x", "\\ud83d"]}}]}',
         ],
     )

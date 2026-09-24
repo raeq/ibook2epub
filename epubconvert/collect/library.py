@@ -314,6 +314,31 @@ def index_assets(directory: Path) -> dict[str, dict[str, Any]]:
     return {row["ZASSETID"]: dict(row) for row in found}
 
 
+def asset_sources(container: Path | None = None) -> dict[str, str | None]:
+    """
+    Name every book in the library, highlighted or not, by Apple's id.
+
+    A vault note is tagged for its book's asset id, and whether a tag is
+    another book's can only be answered by a list of every book: the
+    highlights name only the books that have some today.
+
+    :param container: The Books container directory. Defaults to Apple's.
+
+    :return: Each asset id, and the package name it is read from, or None
+        when its path names none. Empty when the library cannot be read:
+        every tag then goes unrecognised rather than the export failing.
+    """
+    try:
+        directory = container_directory(container)
+    except ContainerUnavailableError:
+        return {}
+    return {
+        asset: source_name(row.get("ZPATH"))
+        for asset, row in index_assets(directory).items()
+        if isinstance(asset, str) and asset
+    }
+
+
 def collect(
     container: Path | None = None,
     policy: NamingPolicy | None = None,

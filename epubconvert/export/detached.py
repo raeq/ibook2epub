@@ -28,6 +28,7 @@ from ..collect.annotations import SCHEMA_PATH, STDOUT
 from ..collect.annotations import build_document as build_annotation_document
 from ..collect.annotations import merge as merge_annotations
 from ..collect.coredata import ContainerUnavailableError
+from ..collect.library import asset_sources
 from ..collect.library import collect as collect_library
 from ..utils import exits, schema
 from ..utils.app_logger import logger
@@ -67,12 +68,15 @@ def write_export(
     :return: A process exit code.
     """
     if args.annotations_format == "markdown":
+        # Every book in the library, not only the highlighted ones: a note
+        # tagged for a book with no highlights today is still that book's.
         return notes.write_vault(
             found,
             destination,
             named,
             copyable=copyable,
             suffix=args.on_collision == "suffix",
+            assets=asset_sources(),
         )
     return _write_detached(found, destination)
 
@@ -145,6 +149,8 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
 
     :raises ContainerUnavailableError: If it is there and is not one of ours.
     """
+    # Escaped: the name is the reader's, and every refusal below says it.
+    name = printable(target.name)
     try:
         text = _read_back(target)
         if text is None:
@@ -154,20 +160,20 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
         # RecursionError is neither: deeply nested JSON raises it out of
         # json.loads, and it used to escape as a traceback.
         raise ContainerUnavailableError(
-            f"{target.name} is already there and could not be read ({exc}); "
+            f"{name} is already there and could not be read ({exc}); "
             "move it aside rather than have this overwrite it"
         ) from exc
     # Checked on the parsed value, never on its truthiness: a file holding
     # "null" parses to None and would otherwise read as nothing to merge into.
     if not isinstance(loaded, dict) or not isinstance(loaded.get("annotations"), list):
         raise ContainerUnavailableError(
-            f"{target.name} is already there and is not an annotation export; "
+            f"{name} is already there and is not an annotation export; "
             "move it aside rather than have this overwrite it"
         )
     unmergeable = _unmergeable(loaded)
     if unmergeable is not None:
         raise ContainerUnavailableError(
-            f"{target.name} is already there and {unmergeable}, which a rerun "
+            f"{name} is already there and {unmergeable}, which a rerun "
             "would drop; move it aside rather than have this overwrite it"
         )
     # A "\ud83d" escape is valid JSON and decodes to a lone surrogate, which
@@ -178,7 +184,7 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
     # .encode() is what the surrogate-safe naming rule forbids.
     if _holds_lone_surrogate(loaded):
         raise ContainerUnavailableError(
-            f"{target.name} is already there and holds a lone surrogate, which "
+            f"{name} is already there and holds a lone surrogate, which "
             "is not valid Unicode; move it aside rather than have this "
             "overwrite it"
         )
@@ -195,8 +201,10 @@ def _unmergeable(document: dict[str, Any]) -> str | None:
     reader's own went with the old envelope. This file is the one place
     highlights deleted in Books are kept, so it is refused, as any other file
     that is not the document expected is, rather than rewritten less some of
-    what it held. The schema allows no other top-level key, so the reader's
-    are not carried through either.
+    what it held. The schema allows no other key -- at the top, on an entry
+    or on an entry's book -- so the reader's are not carried through either:
+    one on an entry or its book was dropped without a word while one at the
+    top was refused.
 
     :param document: The export read back, already known to be an object
         holding an ``annotations`` list.
@@ -214,11 +222,37 @@ def _unmergeable(document: dict[str, Any]) -> str | None:
         if key in seen:
             return f"two of its annotations share the id {key!r}"
         seen.add(key)
+        foreign = _foreign_key(entry)
+        if foreign is not None:
+            return f"its annotation {position} has {foreign}"
     return None
 
 
-#: The top-level keys the export's schema allows; it allows no others.
-ENVELOPE_KEYS = frozenset(schema.load(SCHEMA_PATH)["properties"])
+def _foreign_key(entry: dict[str, Any]) -> str | None:
+    """
+    Name a key on an entry, or on its book, that the schema does not allow.
+
+    :param entry: One annotation, already known to be an object.
+
+    :return: The key, as the end of a sentence, or None when there is none.
+    """
+    extra = sorted(set(entry) - ENTRY_KEYS)
+    if extra:
+        return f"a key this tool does not write ({extra[0]!r})"
+    book = entry.get("book")
+    extra = sorted(set(book) - BOOK_KEYS) if isinstance(book, dict) else []
+    if extra:
+        return f"a key on its book this tool does not write ({extra[0]!r})"
+    return None
+
+
+#: The keys the export's schema allows at each level: the envelope, an
+#: annotation and its book. Read from the schema, so a key added there is
+#: allowed here; it allows no others at any of them.
+_SCHEMA = schema.load(SCHEMA_PATH)
+ENVELOPE_KEYS = frozenset(_SCHEMA["properties"])
+ENTRY_KEYS = frozenset(_SCHEMA["$defs"]["annotation"]["properties"])
+BOOK_KEYS = frozenset(_SCHEMA["$defs"]["book"]["properties"])
 
 
 def _read_back(target: Path) -> str | None:

@@ -15,6 +15,34 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A vault note's name no longer depends on which books have highlights. Every
+  book in the library claims its note name, and a note already written for a
+  book stays that book's, so a book gaining its first highlight or losing its
+  last never moves or blocks another book's note.
+
+- A note is refused as another book's only when that book is still known to
+  Books. A book removed and re-added under a new asset id keeps its note,
+  which is re-tagged the next time it changes, and the refusal's advice fits
+  the case.
+
+- A `.md.new` sidecar the reader has edited is left alone and named, with
+  advice to merge or remove it; nothing is written to `.md.new.new`.
+
+- An editor trimming trailing white space no longer makes a note look edited:
+  the tool writes no trailing spaces, and notes from older versions are still
+  recognised.
+
+- `-ad`/`-ao` refuse an existing export (exit 5, untouched) holding a key of
+  the reader's own on an annotation or its book, as they did for a top-level
+  key.
+
+- A one-column table delimiter row without a pipe (`:---`, `---:`, `:-:`) in
+  a highlight or note is escaped, and an author of `*` or `***`, or one with a
+  leading or trailing star, no longer renders as a horizontal rule.
+
+- The free-space warning and the detached export's refusals escape the path
+  they print.
+
 - A lock file that is a symlink or a hard link is refused (exit 5, "not a
   plain file") instead of followed: a planted `.ibook2epub.lock` no longer
   truncates the file it points at, creates a file elsewhere, or truncates its

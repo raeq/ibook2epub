@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from epubconvert.collect import annotations
-from epubconvert.export import notes
+from epubconvert.export import noteformat, notes
 from epubconvert.run.run import main
 from epubconvert.utils import app_logger, exits
 from epubconvert.utils.policy import Assignment
@@ -36,11 +36,11 @@ def _highlight(asset: str | None, text: str) -> dict[str, Any]:
 
 def _untagged(note: str) -> str:
     """Render *note* as a version without book tags wrote it."""
-    return notes.BOOK_TAG.sub("", note, count=1)
+    return noteformat.BOOK_TAG.sub("", note, count=1)
 
 
 def _book(note: str) -> str | None:
-    held = notes.split(note)
+    held = noteformat.split(note)
     assert held is not None
     return held.book
 
@@ -55,8 +55,8 @@ class TestTheMarkerNamesTheBook:
     def test_the_tag_keeps_every_round_trip(self):
         note = notes.compose([_highlight("A", "hl")])
 
-        assert notes.is_ours(note) is True
-        assert notes.wrote_it(note) is True
+        assert noteformat.is_ours(note) is True
+        assert noteformat.wrote_it(note) is True
         assert notes.rewrite(note, [_highlight("A", "hl")]) == note
 
     def test_a_book_without_an_asset_id_gets_no_tag(self):
@@ -77,7 +77,7 @@ class TestAnOlderNoteWithoutATag:
         note = _untagged(notes.compose([_highlight("A", "hl")]))
 
         assert " book=" not in note
-        assert notes.is_ours(note) is True
+        assert noteformat.is_ours(note) is True
 
     def test_a_rerun_with_nothing_new_leaves_its_bytes_alone(self, tmp_path: Path):
         # A vault kept in git stays quiet: the tag alone is no reason to write.
@@ -128,8 +128,13 @@ class TestANoteTaggedForAnotherBook:
         (vault / "Dune.md").write_text(notes.compose([_highlight("A", "A TEXT")]))
         named = [Assignment(Path("Dune.epub"), "Dune.epub", "dune.epub")]
 
+        # A is another book in the library, with no highlights of its own.
         code = notes.write_vault(
-            [_highlight("B", "B TEXT")], str(vault), named, copyable=()
+            [_highlight("B", "B TEXT")],
+            str(vault),
+            named,
+            copyable=(),
+            assets={"A": "Dune Messiah.epub", "B": "Dune.epub"},
         )
 
         reported = capsys.readouterr().err
@@ -183,9 +188,11 @@ class TestAnnotationsOnlyNamesNotesFromTheShelf:
         [moved] = [p for p in output.glob("*.epub") if p.stem + ".md" != PLAIN_NOTE]
         assert "EDITION B TEXT" in (vault / (moved.stem + ".md")).read_text()
 
-    def test_without_the_shelf_the_other_editions_note_is_refused(
+    def test_without_the_shelf_the_other_editions_note_is_passed_over(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        # Named plainly without the shelf, B wants A's note. Under suffix it
+        # is numbered past it rather than written into it.
         library, _, vault = self._two_editions(tmp_path, monkeypatch)
         before = (vault / PLAIN_NOTE).read_text()
 
@@ -194,5 +201,7 @@ class TestAnnotationsOnlyNamesNotesFromTheShelf:
             + ["-ao", str(vault), *self.VAULT]
         )
 
-        assert code == exits.FAILED
+        assert code == exits.SUCCESS
         assert (vault / PLAIN_NOTE).read_text() == before
+        numbered = vault / PLAIN_NOTE.replace(".md", " (2).md")
+        assert "EDITION B TEXT" in numbered.read_text()
