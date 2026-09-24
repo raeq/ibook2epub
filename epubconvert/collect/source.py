@@ -17,6 +17,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from stat import S_ISREG
 from xml.etree import ElementTree
 
 from ..utils.app_logger import logger
@@ -74,6 +75,52 @@ class SourceStatus:
         return not (self.drm or self.incomplete)
 
 
+def _declaration(package: Path) -> bytes | None:
+    """
+    Read a package's ``encryption.xml``, failing closed on anything odd.
+
+    :param package: The ``*.epub/`` package directory.
+
+    :return: Its bytes, or None if there is no entry of that name at all.
+
+    :raises UnreadableEncryptionError: If there is one and it is not a plain,
+        readable file of a plausible size.
+    """
+    path = resolve(package, ENCRYPTION_PATH)
+    if path is None:
+        # A symlink here would let the book choose which file answers "is this
+        # protected", which is the question that decides whether it exports.
+        raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not a readable file")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
+    # Only absence answers "no declaration". A directory or a FIFO here was
+    # taken for no file, and so for no protection, where the symlink was
+    # refused: every state but a plain file fails closed, as that one does.
+    if not S_ISREG(info.st_mode):
+        raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not a regular file")
+    if info.st_size > MAX_ENCRYPTION_BYTES:
+        raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is implausibly large")
+
+    try:
+        with open_contained(path) as handle:
+            # Bounded, because the size above was measured before the open
+            # and a file can grow in between: unbounded, one that did was read
+            # whole however large it had become. validate's reader closed the
+            # same gap.
+            data = handle.read(MAX_ENCRYPTION_BYTES + 1)
+    except OSError as exc:
+        raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
+    if len(data) > MAX_ENCRYPTION_BYTES:
+        raise UnreadableEncryptionError(
+            f"{ENCRYPTION_PATH} is implausibly large (grew while read)"
+        )
+    return data
+
+
 def encryption_algorithms(package: Path) -> set[str]:
     """
     Read the algorithms declared in a package's ``encryption.xml``.
@@ -93,29 +140,9 @@ def encryption_algorithms(package: Path) -> set[str]:
         must not be read as "no protection", or a protected book is exported
         as an unopenable archive that no rerun will retry.
     """
-    path = resolve(package, ENCRYPTION_PATH)
-    if path is None:
-        # A symlink here would let the book choose which file answers "is this
-        # protected", which is the question that decides whether it exports.
-        raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not a readable file")
-    if not path.is_file():
+    data = _declaration(package)
+    if data is None:
         return set()
-
-    try:
-        if path.stat().st_size > MAX_ENCRYPTION_BYTES:
-            raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is implausibly large")
-        with open_contained(path) as handle:
-            # Bounded, because the size above was measured before the open
-            # and a file can grow in between: unbounded, one that did was read
-            # whole however large it had become. validate's reader closed the
-            # same gap.
-            data = handle.read(MAX_ENCRYPTION_BYTES + 1)
-    except OSError as exc:
-        raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
-    if len(data) > MAX_ENCRYPTION_BYTES:
-        raise UnreadableEncryptionError(
-            f"{ENCRYPTION_PATH} is implausibly large (grew while read)"
-        )
 
     try:
         # Through parse_xml, which turns a refused encoding into a ParseError:
@@ -184,7 +211,15 @@ def has_drm(package: Path) -> tuple[bool, str | None]:
         # something with it that cannot be interpreted. Fails closed, like
         # every other unreadable state here.
         return True, f"{SINF_PATH} could not be read"
-    if sinf.is_file():
+    # Any entry at all, not only a file: a directory or a FIFO of that name
+    # passed as no marker, and the protected book exported.
+    try:
+        sinf.lstat()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return True, f"{SINF_PATH} could not be read"
+    else:
         return True, "FairPlay protected (META-INF/sinf.xml)"
 
     try:

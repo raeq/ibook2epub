@@ -269,12 +269,16 @@ def _element(members: _Members, name: str) -> ElementTree.Element:
     :raises ValidationError: If the member is missing or not valid XML.
     """
     data = members.read(name)
-    if _declares_entities(data):
-        raise ValidationError(f"{name} declares XML entities, which are not allowed")
     try:
         return parse_xml(data)
+    except EntityDeclarationError as exc:
+        raise ValidationError(f"{name} {exc}") from exc
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{name} is not valid XML: {exc}") from exc
+
+
+class EntityDeclarationError(ElementTree.ParseError):
+    """Raised for a document from a book that declares an XML entity."""
 
 
 def parse_xml(data: bytes) -> ElementTree.Element:
@@ -288,13 +292,20 @@ def parse_xml(data: bytes) -> ElementTree.Element:
     whole run. Every reader of a book's XML parses through here, so there is
     one exception to catch.
 
+    A document that declares an entity is refused here too, for the same
+    reason: the rule was applied beside only two of the readers, and the
+    encryption declaration, parsed by the third, went without it.
+
     :param data: The raw bytes of the document.
 
     :return: The root element.
 
     :raises ElementTree.ParseError: If the document cannot be parsed, for
-        whatever reason.
+        whatever reason; :class:`EntityDeclarationError`, one of them, if it
+        declares an entity.
     """
+    if _declares_entities(data):
+        raise EntityDeclarationError("declares XML entities, which are not allowed")
     try:
         return ElementTree.fromstring(data)
     except (ValueError, LookupError) as exc:
