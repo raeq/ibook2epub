@@ -584,11 +584,16 @@ def write_vault(
 
     index = index_by_package(found, [item.package for item in named], copyable=copyable)
     tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
+    collided: list[str] = []
     for item in named:
-        if not item.filename:
-            continue
         mine = for_book(item.package.name, index)
         if not mine:
+            continue
+        if not item.filename:
+            # Lost a name collision, so it has no stem to share. Under -ao no
+            # planner runs to report the collision, and these highlights were
+            # dropped without a word.
+            collided.append(item.package.name)
             continue
         target = directory / (Path(item.filename).stem + ".md")
         tally[_write_one(target, mine)].append(target.name)
@@ -596,7 +601,20 @@ def write_vault(
     logger.info(
         "Wrote %d note(s) to %s.", len(tally["written"]), printable(str(directory))
     )
-    if found and not any(tally[outcome] for outcome in OUTCOMES):
+    if collided:
+        # Not a failure: a collision leaves the exit code alone everywhere
+        # else in this tool, the README's exit-code section says so, and the
+        # remedy is a flag rather than a retry. A scheduled run that treated
+        # it as one would fail every night for as long as the library held
+        # two copies of a book.
+        logger.warning(
+            "%d book(s) lost a name collision, so their highlights were not "
+            "written: %s. Rerun with --on-collision suffix to give each its "
+            "own note.",
+            len(collided),
+            _naming(collided),
+        )
+    if found and not collided and not any(tally[outcome] for outcome in OUTCOMES):
         # Highlights were read and not one reached a note. Every book they
         # belong to is absent from the library this run walked, so nothing
         # was matched -- which said "Wrote 0 note(s)" and exited 0. The same

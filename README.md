@@ -1010,7 +1010,9 @@ code that leads is the one that agrees with it; the other reason is on stderr.
 Name collisions do **not** change the exit code. If you run this from a script
 or a cron job and need to know that books were skipped, check the summary line
 or watch for `Name collision, skipping:` in the log — a run that skips books
-for that reason still exits `0`.
+for that reason still exits `0`. A vault run (`--annotations-format markdown`)
+has no note name for a book that lost a collision either, and names the ones
+whose highlights it therefore left out: watch for `lost a name collision`.
 
 ## Development
 
