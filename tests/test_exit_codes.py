@@ -152,6 +152,35 @@ class TestEachFailureHasItsOwnCode:
 
         assert code == exits.NO_OUTPUT
 
+    @pytest.mark.parametrize("mode", [[], ["-d"], ["--list"], ["--verify"]])
+    def test_a_file_where_the_shelf_should_be_is_the_same_code_in_every_mode(
+        self, tmp_path, mode
+    ):
+        # The real run failed at mkdir with 5, but a dry run and --list only
+        # read, found nothing on a "shelf" that was a file, and exited 0: the
+        # rehearsal said all was well for a run that could not start.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        blocked = tmp_path / "blocked"
+        blocked.write_text("not a directory", encoding="utf-8")
+
+        code = run.main(["-s", str(library), "-o", str(blocked), "-q", *mode])
+
+        assert code == exits.NO_OUTPUT
+
+    def test_a_run_that_never_touches_the_shelf_is_not_refused_over_it(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
+        )
+        blocked = tmp_path / "blocked"
+        blocked.write_text("not a directory", encoding="utf-8")
+
+        code = run.main(["-o", str(blocked), "-ao", str(tmp_path / "h.json"), "-q"])
+
+        assert code == exits.SUCCESS
+
     @pytest.mark.parametrize("name", ["out", "already using"])
     def test_an_unopenable_lock_file_is_not_a_held_lock(self, tmp_path, name):
         # The code was chosen by looking for "already using" in the message,

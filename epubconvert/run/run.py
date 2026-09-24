@@ -483,6 +483,15 @@ def _check_environment(args: argparse.Namespace) -> int | None:
             logger.critical("Source directory does not exist: %s", args.source_dir)
         return exits.NO_SOURCE
 
+    # A file where the shelf should be. The real run failed at mkdir with 5,
+    # but a dry run and --list only read, found an empty "shelf" and exited
+    # 0: the rehearsal said all was well for a run that could not start. The
+    # runs that read only Apple's container never touch the shelf.
+    uses_shelf = not (args.annotations_only or args.library_export)
+    if uses_shelf and args.output_dir.exists() and not args.output_dir.is_dir():
+        logger.critical("Output path is not a directory: %s", args.output_dir)
+        return exits.NO_OUTPUT
+
     if args.epubcheck and not epubcheck_available():
         logger.critical(
             "--epubcheck needs the 'epubcheck' tool on PATH "
