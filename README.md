@@ -743,14 +743,22 @@ is never touched either way.
 
 A file at a note's path that the tool did not write, or one it cannot read,
 is never touched either. That book's highlights then reach no file at all, so
-the run names the file and exits `1`; move it aside and rerun.
+the run names the file and exits `1`; move it aside and rerun. Under
+`--on-collision suffix` a book passes over a file it did not write and gets a
+numbered note beside it instead.
 
 The marker line also names the book the note is of, as a digest of Apple's id
 for it, so a note is never rewritten with another book's highlights, whatever
-a later run names it. Two editions of a book that want one note are a name
-collision: the note stays the first one's, the run names it and exits `1`, and
-`--on-collision suffix` gives each its own. Notes written before the marker
-named its book are still recognised, and are tagged the next time they change.
+a later run names it. Which note a book gets depends on your library, never on
+which books have highlights today. Two books that want one note — `Dune.epub`
+and `Dune.pdf` — are a name collision, settled the same way whether you have
+highlighted one of them or both: the note is the first one's, the other is
+named in the summary and gets none, and `--on-collision suffix` numbers it,
+`Dune (2).md`. A note already written for a book stays that book's, so a book
+gaining its first highlight, or losing its last, never moves another book's
+note. Notes written before the marker named its book are still recognised:
+each stays with the book whose highlights it holds, and is tagged the next
+time it changes.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 

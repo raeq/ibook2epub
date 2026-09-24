@@ -97,7 +97,7 @@ def split(text: str) -> Split | None:
     :return: The regions, or None when this file is not one of ours.
     """
     lines = normalise(text).split("\n")
-    start = _first_start(lines)
+    start = first_start(lines)
     if start is None:
         return None
     index, found = start
@@ -105,7 +105,7 @@ def split(text: str) -> Split | None:
     return _regions(head, found, lines[index + 1 :])
 
 
-def _first_start(lines: list[str]) -> tuple[int, re.Match[str]] | None:
+def first_start(lines: list[str]) -> tuple[int, re.Match[str]] | None:
     """Find the first start marker, and the line it is on, if any line is one."""
     for index, line in enumerate(lines):
         found = START_PATTERN.match(line)
@@ -221,7 +221,7 @@ def start_marker_of(existing: str) -> re.Match[str] | None:
 
     :return: The first start marker, or None.
     """
-    start = _first_start(normalise(existing).split("\n"))
+    start = first_start(normalise(existing).split("\n"))
     return None if start is None else start[1]
 
 

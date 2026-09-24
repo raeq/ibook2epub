@@ -56,7 +56,7 @@ from .noteformat import (
     start_marker_of,
     wrote_it,
 )
-from .notenames import note_names
+from .notenames import Vault, note_names
 
 #: Suffix for the copy written when a reader has edited the note itself. Not
 #: ``.new.md``: a book titled "Foo.new" is named ``Foo.new.md``, which was
@@ -473,11 +473,7 @@ def write_vault(
     index = index_by_package(found, [item.package for item in named], copyable=copyable)
     tally, collided = _write_notes(
         directory,
-        [
-            (item, mine)
-            for item in named
-            if (mine := for_book(item.package.name, index))
-        ],
+        [(item, for_book(item.package.name, index)) for item in named],
         suffix=suffix,
     )
 
@@ -532,16 +528,28 @@ def _write_notes(
     """
     Write each book's note, and name the books that have none to write.
 
+    Every book is named, and only the books with highlights written. Only
+    the books with highlights were named, so a note's name moved between
+    books as one gained its first highlight or lost its last, and the
+    reader's writing in it went with the name or was stranded.
+
     :param directory: The vault.
-    :param wanted: Each book with highlights, and its highlights.
+    :param wanted: Every book of the run, and its highlights, if any.
     :param suffix: Whether a book that loses its note's name is numbered.
 
     :return: The notes by outcome, and the books that lost a name collision.
     """
     tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
-    names = note_names([item for item, _ in wanted if item.filename], suffix=suffix)
+    names = note_names(
+        [item for item, _ in wanted if item.filename],
+        suffix=suffix,
+        highlights={item.package: mine for item, mine in wanted if mine},
+        vault=Vault(directory),
+    )
     collided: list[str] = []
     for item, mine in wanted:
+        if not mine:
+            continue
         name = names[item.package] if item.filename else None
         if name is None:
             # Lost a name collision: the book's own, which leaves it no stem to

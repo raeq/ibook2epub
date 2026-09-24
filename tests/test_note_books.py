@@ -183,9 +183,11 @@ class TestAnnotationsOnlyNamesNotesFromTheShelf:
         [moved] = [p for p in output.glob("*.epub") if p.stem + ".md" != PLAIN_NOTE]
         assert "EDITION B TEXT" in (vault / (moved.stem + ".md")).read_text()
 
-    def test_without_the_shelf_the_other_editions_note_is_refused(
+    def test_without_the_shelf_the_other_editions_note_is_passed_over(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        # Named plainly without the shelf, B wants A's note. Under suffix it
+        # is numbered past it rather than written into it.
         library, _, vault = self._two_editions(tmp_path, monkeypatch)
         before = (vault / PLAIN_NOTE).read_text()
 
@@ -194,5 +196,7 @@ class TestAnnotationsOnlyNamesNotesFromTheShelf:
             + ["-ao", str(vault), *self.VAULT]
         )
 
-        assert code == exits.FAILED
+        assert code == exits.SUCCESS
         assert (vault / PLAIN_NOTE).read_text() == before
+        numbered = vault / PLAIN_NOTE.replace(".md", " (2).md")
+        assert "EDITION B TEXT" in numbered.read_text()
