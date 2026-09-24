@@ -28,13 +28,22 @@ def fold_name(name: str) -> str:
     """
     Fold a name the way a case-insensitive filesystem compares it.
 
-    NFC, then Unicode's full case folding, as case-insensitive APFS does. Here
-    because the writer (:func:`epubconvert.export.naming.filesystem_key`) and
-    the validator's duplicate check must fold alike, and were two copies of
-    one rule held together only by a test.
+    Unicode's canonical caseless match (D145), with full case folding, as
+    case-insensitive APFS compares names. Here because the writer
+    (:func:`epubconvert.export.naming.filesystem_key`) and the validator's
+    duplicate check must fold alike, and were two copies of one rule held
+    together only by a test.
+
+    Decomposed before folding and recomposed after, not folded once composed:
+    folding composed text can leave it uncomposed. Upper-case H-circumflex
+    with a macron below folded to ``ĥ`` and the macron, while its lower-case
+    form, ``ẖ`` and a circumflex, stayed as it was, so two names differing
+    only by case were given two keys. Recomposed rather than left decomposed
+    so that an ordinary name -- ASCII, precomposed Latin, Hangul -- keeps the
+    key it always had.
 
     :param name: A filename or an archive member name.
 
     :return: A key equal for any two names such a filesystem cannot tell apart.
     """
-    return unicodedata.normalize("NFC", name).casefold()
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFD", name).casefold())
