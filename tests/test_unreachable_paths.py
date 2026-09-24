@@ -188,3 +188,43 @@ class TestALibraryItMayNotSearch:
 
         assert code == exits.DAMAGED
         assert "Move each of these out of" in capsys.readouterr().out
+
+
+class TestAShelfItMayListButNotSearch:
+    """
+    Mode 600 or 400: its names can be read, but nothing under them. The
+    check listed it and let it pass, and --list and --verify then died on
+    the first stat, in a traceback.
+    """
+
+    @staticmethod
+    def _shelf(tmp_path: Path) -> tuple[Path, Path]:
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        assert run.main(["-s", str(library), "-o", str(shelf), "-q"]) == 0
+        return library, shelf
+
+    @pytest.mark.parametrize("mode", SHELF_READERS)
+    def test_is_refused_by_every_route(self, tmp_path, monkeypatch, capsys, mode):
+        library, shelf = self._shelf(tmp_path)
+        refuse_below(monkeypatch, shelf)
+
+        code = run.main(["-s", str(library), "-o", str(shelf), *mode])
+
+        assert code == exits.NO_OUTPUT
+        assert f"Cannot read output directory {shelf}" in capsys.readouterr().err
+
+    @needs_permissions
+    @pytest.mark.parametrize("permissions", [0o600, 0o400])
+    @pytest.mark.parametrize("mode", SHELF_READERS)
+    def test_for_real(self, tmp_path, capsys, permissions, mode):
+        library, shelf = self._shelf(tmp_path)
+        shelf.chmod(permissions)
+        try:
+            code = run.main(["-s", str(library), "-o", str(shelf), *mode])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.NO_OUTPUT
+        assert "Cannot read output directory" in capsys.readouterr().err
