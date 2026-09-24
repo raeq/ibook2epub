@@ -549,6 +549,48 @@ class TestTheSidecarCannotTakeAnotherBooksName:
         # primary note on a later run.
         assert not notes.sidecar_for(Path("Foo.md")).name.endswith(".new.md")
 
+    def test_a_note_at_the_name_limit_still_gets_its_sidecar(self, tmp_path: Path):
+        # A 255-byte "<stem>.epub" -- what --name-by author-title clamps a long
+        # title to -- gives a 253-byte note, and "<note>.new" is 257 bytes.
+        # exists() on it raised ENAMETOOLONG out of the whole vault write.
+        stem = "A" * 250
+        named = [
+            Assignment(Path(f"{stem}.epub"), f"{stem}.epub", "long"),
+            Assignment(Path("Short.epub"), "Short.epub", "short"),
+        ]
+
+        def mine(source: str, text: str) -> dict[str, Any]:
+            return _annotation(id=text, text=text, book={"source": source})
+
+        vault = tmp_path / "vault"
+        notes.write_vault([mine(f"{stem}.epub", "first")], str(vault), named)
+        note = vault / f"{stem}.md"
+        note.write_text(
+            note.read_text(encoding="utf-8").replace("> first", "> mine"),
+            encoding="utf-8",
+        )
+
+        found = [
+            mine(f"{stem}.epub", "first"),
+            mine(f"{stem}.epub", "second"),
+            mine("Short.epub", "short"),
+        ]
+        code = notes.write_vault(found, str(vault), named)
+
+        sidecar = notes.sidecar_for(note)
+        assert code == 0
+        assert "second" in sidecar.read_text(encoding="utf-8")
+        assert sidecar.name.endswith(notes.SIDECAR_SUFFIX)
+        assert (vault / "Short.md").is_file()
+
+    def test_two_long_notes_sharing_a_prefix_do_not_share_a_sidecar(self):
+        # Clamping alone would cut both names back to the same bytes, and one
+        # book's sidecar would be rewritten with the other book's highlights.
+        first = notes.sidecar_for(Path("A" * 250 + "1.md"))
+        second = notes.sidecar_for(Path("A" * 250 + "2.md"))
+
+        assert first != second
+
 
 class TestFailuresThatDoNotNeedAPermissionBit:
     """
@@ -583,6 +625,15 @@ class TestFailuresThatDoNotNeedAPermissionBit:
             raise OSError(5, "Input/output error")
 
         monkeypatch.setattr(Path, "read_text", refuse)
+
+        assert notes._write_one(target, self._annotations()) == "unreadable"
+
+    def test_a_name_the_filesystem_refuses_costs_one_note_not_the_run(
+        self, tmp_path: Path
+    ):
+        # exists() raises ENAMETOOLONG rather than answering False, and it was
+        # called outside any handler.
+        target = tmp_path / ("A" * 300 + ".md")
 
         assert notes._write_one(target, self._annotations()) == "unreadable"
 

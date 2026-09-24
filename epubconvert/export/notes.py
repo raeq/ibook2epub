@@ -37,7 +37,12 @@ from ..utils.app_logger import logger
 from ..utils.display import collapse, printable
 from ..utils.policy import Assignment
 from .archive import write_atomically
-from .naming import encode_name
+from .naming import (
+    MAX_FILENAME_BYTES,
+    disambiguator,
+    encode_name,
+    truncate_bytes,
+)
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
 #: copied through untouched. Written from the first run even when there is
@@ -313,11 +318,26 @@ def sidecar_for(target: Path) -> Path:
     """
     Name the copy written when the reader has edited the note itself.
 
+    A note shares its stem with its epub, and an epub name can be the full
+    255 bytes -- ``--name-by author-title`` clamps a long title to exactly
+    that. Its note is then 253 bytes and the plain sidecar name 257, which no
+    filesystem will create, so the reader's new highlights had nowhere to go.
+    Such a name is cut back to fit and marked with a digest of the note's
+    full name: two long titles sharing their first 240 bytes would otherwise
+    share a sidecar, and one book's would be rewritten with the other's
+    highlights.
+
     :param target: The note that is being left alone.
 
     :return: A path beside it that no book can be named.
     """
-    return target.with_name(target.name + SIDECAR_SUFFIX[len(".md") :])
+    name = target.name + SIDECAR_SUFFIX[len(".md") :]
+    if len(encode_name(name)) <= MAX_FILENAME_BYTES:
+        return target.with_name(name)
+    marker = f" {disambiguator(target.name)}"
+    budget = MAX_FILENAME_BYTES - len(encode_name(marker + SIDECAR_SUFFIX))
+    stem = target.name.removesuffix(".md")
+    return target.with_name(truncate_bytes(stem, budget) + marker + SIDECAR_SUFFIX)
 
 
 def readable(target: Path) -> bool:
@@ -548,16 +568,21 @@ def _write_one(  # pylint: disable=too-many-return-statements
 
     :return: One of :data:`OUTCOMES`.
     """
-    if target.exists() and not readable(target):
-        # A FIFO blocks read_text until a writer appears, which is never; an
-        # oversized file costs twice its size to read. Neither is a note.
-        logger.error(
-            "Skipped %s: not a readable note of a plausible size.",
-            printable(target.name),
-        )
-        return "unreadable"
     try:
-        existing = target.read_text(encoding="utf-8-sig") if target.exists() else None
+        # Inside the handler: exists() answers False only for a few errors
+        # and raises the rest. A name past NAME_MAX raised ENAMETOOLONG from
+        # here, outside any handler, and took the whole vault with it.
+        present = target.exists()
+        if present and not readable(target):
+            # A FIFO blocks read_text until a writer appears, which is never;
+            # an oversized file costs twice its size to read. Neither is a
+            # note.
+            logger.error(
+                "Skipped %s: not a readable note of a plausible size.",
+                printable(target.name),
+            )
+            return "unreadable"
+        existing = target.read_text(encoding="utf-8-sig") if present else None
     except OSError as exc:
         # Not "foreign": this may well be a note this tool wrote. All that is
         # known is that it could not be checked, and saying otherwise put a
