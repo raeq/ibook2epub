@@ -10,6 +10,7 @@ still decides which of these a run does.
 from __future__ import annotations
 
 import argparse
+import os
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -360,7 +361,8 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
             policy,
             _named(args, policy),
             copyable,
-            shelf=args.output_dir.is_dir(),
+            # Never raises: a shelf it may not search is placed on as none.
+            shelf=os.path.isdir(args.output_dir),  # noqa: PTH112
             highlighted={_source_of(item) for item in found},
         )
         if markdown
@@ -641,7 +643,9 @@ def _before_writing(args: argparse.Namespace) -> int | None:
     # every book it found, having looked at none. Checked before the dry run
     # returns, for the same reason as the read: it returned first, and "-d"
     # exited 0 over the typo the real run exited 5 for.
-    if args.annotations_embedded and not args.output_dir.is_dir():
+    # os.path.isdir, which never raises, where Path.is_dir raised
+    # PermissionError for a shelf in a directory the run may not search.
+    if args.annotations_embedded and not os.path.isdir(args.output_dir):  # noqa: PTH112
         logger.critical(
             "Output directory does not exist: %s", printable(str(args.output_dir))
         )

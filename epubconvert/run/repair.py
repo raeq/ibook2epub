@@ -77,7 +77,10 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
     """
     # Read only now, and only if it is there: --verify checks a shelf on a
     # machine that may never have had a library.
-    packages = collect_package_dirs(args.source_dir) if args.source_dir.is_dir() else []
+    # os.path.isdir, which never raises: Path.is_dir raised PermissionError
+    # for a library behind Full Disk Access, and the advice was a traceback.
+    found = os.path.isdir(args.source_dir)  # noqa: PTH112
+    packages = collect_package_dirs(args.source_dir) if found else []
     patterns = {name: _repair_pattern(name, packages) for name in broken}
     forced = [name for name in broken if patterns[name] is not None]
     aside = [name for name in broken if patterns[name] is None]

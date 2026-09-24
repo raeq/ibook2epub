@@ -15,6 +15,7 @@ import os
 import stat
 from pathlib import Path
 
+from ..collect.coredata import FULL_DISK_ACCESS
 from ..collect.validate import epubcheck_available
 from ..export.detached import vault_of
 from ..utils import exits
@@ -39,7 +40,12 @@ def _file_in_the_way(output_dir: Path) -> Path | None:
         otherwise None.
     """
     nearest = _nearest_existing(output_dir)
-    return None if nearest is None or nearest.is_dir() else nearest
+    try:
+        return None if nearest is None or nearest.is_dir() else nearest
+    except OSError:
+        # A link into a directory the run may not search: whether it is one
+        # cannot be told, and the probe that reads the shelf says why.
+        return None
 
 
 def _nearest_existing(output_dir: Path) -> Path | None:
@@ -104,6 +110,30 @@ def check_environment(args: argparse.Namespace) -> int | None:
 
     :return: An exit code, or None when the environment is usable.
     """
+    unusable = _check_source(args)
+    if unusable is None:
+        unusable = _check_shelf(args)
+    if unusable is not None:
+        return unusable
+
+    if args.epubcheck and not epubcheck_available():
+        logger.critical(
+            "--epubcheck needs the 'epubcheck' tool on PATH "
+            "(brew install epubcheck, or see w3c.github.io/epubcheck)"
+        )
+        return exits.MISSING_TOOL
+
+    return None
+
+
+def _check_source(args: argparse.Namespace) -> int | None:
+    """
+    Check the library is there, when the run reads it.
+
+    :param args: Parsed command line arguments.
+
+    :return: An exit code, or None when the library can be read.
+    """
     # A vault names its notes the way the shelf names its books, so writing
     # one needs the library even though -ao otherwise does not. Without this
     # the run reported "Wrote 0 note(s)" and exited 0, having written none.
@@ -113,23 +143,51 @@ def check_environment(args: argparse.Namespace) -> int | None:
     # cancelled it and the empty vault came back.
     writes_a_vault = vault_of(args) is not None
     converts = not (args.verify or args.annotations_only or args.library_export)
-    if (converts or writes_a_vault) and not args.source_dir.is_dir():
-        if args.source_auto:
-            # Both known homes were probed and neither held books. Naming only
-            # the fallback reads as "this one path is wrong" rather than "we
-            # looked in these places, and here is what to do about it".
-            probed = "\n".join(f"  {path}" for path in SOURCE_CANDIDATES)
-            logger.critical(
-                "No Apple Books library found. Looked in:\n%s\n"
-                "If your books are somewhere else, pass -s DIR.",
-                probed,
-            )
-        else:
-            logger.critical(
-                "Source directory does not exist: %s", printable(str(args.source_dir))
-            )
-        return exits.NO_SOURCE
+    if not (converts or writes_a_vault):
+        return None
+    try:
+        # Asked of stat rather than Path.is_dir, which raises everything
+        # but "absent": a library in a directory the run may not search --
+        # behind Full Disk Access, on macOS -- was a traceback and exit 1.
+        found = stat.S_ISDIR(args.source_dir.stat().st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        found = False
+    except OSError as exc:
+        refused = isinstance(exc, PermissionError)
+        logger.critical(
+            "Cannot read source directory %s: %s%s",
+            printable(str(args.source_dir)),
+            printable(exc.strerror or str(exc)),
+            f". {FULL_DISK_ACCESS}." if refused else "",
+        )
+        return exits.NO_PERMISSION if refused else exits.NO_SOURCE
+    if found:
+        return None
+    if args.source_auto:
+        # Both known homes were probed and neither held books. Naming only
+        # the fallback reads as "this one path is wrong" rather than "we
+        # looked in these places, and here is what to do about it".
+        probed = "\n".join(f"  {path}" for path in SOURCE_CANDIDATES)
+        logger.critical(
+            "No Apple Books library found. Looked in:\n%s\n"
+            "If your books are somewhere else, pass -s DIR.",
+            probed,
+        )
+    else:
+        logger.critical(
+            "Source directory does not exist: %s", printable(str(args.source_dir))
+        )
+    return exits.NO_SOURCE
 
+
+def _check_shelf(args: argparse.Namespace) -> int | None:
+    """
+    Check the shelf can be read, and written when the run writes it.
+
+    :param args: Parsed command line arguments.
+
+    :return: An exit code, or None when the shelf is usable.
+    """
     # A file where the shelf should be. The real run failed at mkdir with 5,
     # but a dry run and --list only read, found an empty "shelf" and exited
     # 0: the rehearsal said all was well for a run that could not start. The
@@ -154,19 +212,14 @@ def check_environment(args: argparse.Namespace) -> int | None:
             kind,
         )
         return exits.NO_OUTPUT
-    # A shelf that cannot be listed reads as an empty one: --verify found "No
-    # archives", --list showed every book pending, and a run on a directory
-    # it could write but not read (mode 300) exported them all again.
-    if uses_shelf and args.output_dir.is_dir():
-        try:
-            os.scandir(args.output_dir).close()
-        except OSError as exc:
-            logger.critical(
-                "Cannot read output directory %s: %s",
-                printable(str(args.output_dir)),
-                printable(exc.strerror or str(exc)),
-            )
-            return exits.NO_OUTPUT
+    unreadable = _unreadable(args.output_dir) if uses_shelf else None
+    if unreadable is not None:
+        logger.critical(
+            "Cannot read output directory %s: %s",
+            printable(str(args.output_dir)),
+            printable(unreadable.strerror or str(unreadable)),
+        )
+        return exits.NO_OUTPUT
     unwritable = _unwritable_shelf(args)
     if unwritable is not None:
         logger.critical(
@@ -176,12 +229,33 @@ def check_environment(args: argparse.Namespace) -> int | None:
             unwritable[1],
         )
         return exits.NO_OUTPUT
+    return None
 
-    if args.epubcheck and not epubcheck_available():
-        logger.critical(
-            "--epubcheck needs the 'epubcheck' tool on PATH "
-            "(brew install epubcheck, or see w3c.github.io/epubcheck)"
-        )
-        return exits.MISSING_TOOL
 
+def _unreadable(output_dir: Path) -> OSError | None:
+    """
+    Find why the shelf cannot be read, if it cannot.
+
+    A shelf that cannot be listed read as an empty one: --verify found "No
+    archives", --list showed every book pending, and a run on a directory it
+    could write but not read (mode 300) exported them all again. Listing is
+    not enough either: one that can be listed but not searched (mode 600)
+    passed, and --list and --verify then died on the first stat. And a shelf
+    in a directory the run may not search made ``Path.is_dir`` raise, in a
+    traceback, where this probe gives the reason.
+
+    :param output_dir: The output directory as given.
+
+    :return: Why not, or None when it can be listed and searched, or is not
+        there yet: a run that writes creates it, and one that reads says so.
+    """
+    try:
+        os.scandir(output_dir).close()
+        # A name inside it, which only searching reaches. Spelt as a string:
+        # a Path drops the ".", and stats the directory from its parent.
+        os.stat(os.path.join(output_dir, os.curdir))  # noqa: PTH116, PTH118
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return exc
     return None
