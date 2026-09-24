@@ -350,6 +350,65 @@ class TestEscaping:
         # "[[" is no longer a link. Only a line that opens a block is touched.
         assert notes._escape(line) == line
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            pytest.param("**bold** start", id="strong emphasis"),
+            pytest.param("*emphasis* first", id="emphasis"),
+            pytest.param("#idea", id="obsidian tag"),
+            pytest.param("#1 fan", id="hash then digit"),
+            pytest.param("####### seven", id="seven hashes"),
+            pytest.param("2.5 million", id="decimal number"),
+            pytest.param("1234567890. ten digits", id="ten-digit number"),
+            pytest.param("-5 degrees", id="negative number"),
+            pytest.param("+1 agreed", id="plus one"),
+            pytest.param("--> an arrow", id="arrow"),
+            pytest.param("-- an aside", id="dash aside"),
+        ],
+    )
+    def test_a_line_led_by_an_openers_character_but_opening_nothing_is_left_alone(
+        self, line
+    ):
+        # The openers were matched by their first character, so "**bold**"
+        # became "\\**bold**", which renders as "*" and an emphasised "bold*";
+        # "#idea" lost its Obsidian tag; "2.5 million" showed a backslash.
+        assert notes._escape(line) == line
+
+    @pytest.mark.parametrize(
+        ("line", "escaped"),
+        [
+            pytest.param("#", "\\#", id="empty heading"),
+            pytest.param("###### six", "\\###### six", id="sixth-level heading"),
+            pytest.param("#\tx", "\\#\tx", id="heading after a tab"),
+            pytest.param("-", "\\-", id="empty list item"),
+            pytest.param("*\tx", "\\*\tx", id="list item after a tab"),
+            pytest.param("--", "\\--", id="setext underline"),
+            pytest.param("---  ", "\\---  ", id="dash thematic break"),
+            pytest.param("-- -", "\\-- -", id="spaced dash thematic break"),
+            pytest.param("***", "\\***", id="star thematic break"),
+            pytest.param("** *", "\\** *", id="spaced star thematic break"),
+            pytest.param("1.", "1\\.", id="empty ordered item"),
+            pytest.param("123456789) x", "123456789\\) x", id="nine-digit number"),
+        ],
+    )
+    def test_each_openers_exact_form_is_escaped(self, line, escaped):
+        assert notes._escape(line) == escaped
+
+    @pytest.mark.parametrize("first", ["# not a heading", "**bold** start", "#idea"])
+    def test_a_notes_first_line_is_not_escaped_because_no_line_starts_with_it(
+        self, first
+    ):
+        # It follows "**Note:** " on the same line, so it can open nothing,
+        # and a backslash there only showed.
+        body = notes.body([_annotation(note=first)])
+
+        assert f"**Note:** {first}\n" in body
+
+    def test_a_notes_first_line_still_cannot_forge_a_marker(self):
+        body = notes.body([_annotation(note=notes.END_MARKER)])
+
+        assert f"**Note:** \\{notes.END_MARKER}" in body
+
     def test_a_note_that_opens_a_fence_leaves_the_next_highlight_quoted(self):
         body = notes.body(
             [

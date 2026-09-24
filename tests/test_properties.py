@@ -130,18 +130,36 @@ def test_escaping_an_escaped_line_changes_nothing(line):
 
 @given(
     st.sampled_from(
-        ["# ", "> ", "- ", "+ ", "* ", "1. ", "12) ", "  3. "]
+        ["# ", "###### ", "#\t", "> ", ">", "- ", "+ ", "*\t", "1. ", "12) ", "  3. "]
         + ["```", "~~~", "<!--", "<div", "| ", "[x]: "]
     ),
     st.text(),
 )
-def test_the_backslash_goes_on_the_openers_punctuation(opener, rest):
-    # CommonMark escapes only ASCII punctuation, so a backslash in front of a
-    # list number's digits escapes nothing and shows.
+def test_every_opener_is_escaped_whatever_follows_it(opener, rest):
     escaped = notes._escape(opener + rest)
 
-    backslash = escaped.index("\\")
-    assert escaped[backslash + 1] in "#>+-*.)`~<|["
+    assert escaped != opener + rest
+
+
+#: Lines built from the characters that open blocks, so that the pattern is
+#: exercised far more often than arbitrary text would exercise it.
+OPENER_TEXT = st.text(alphabet="#>+-*:|=_`~<[]!/\\ \t019.)x")
+
+
+@given(OPENER_TEXT)
+def test_the_backslash_goes_on_the_openers_punctuation(line):
+    # CommonMark escapes only ASCII punctuation, so a backslash in front of a
+    # list number's digits escapes nothing and shows. An indented code block
+    # is neutralised by its indentation, with no backslash at all.
+    escaped = notes._escape(line)
+    if escaped == line or escaped.startswith(notes.INDENT):
+        return
+
+    # Exactly one character was inserted: the first place the two differ.
+    at = next(i for i, (a, b) in enumerate(zip(escaped, line, strict=False)) if a != b)
+    assert escaped[at] == "\\"
+    assert escaped[:at] + escaped[at + 1 :] == line
+    assert escaped[at + 1] in "#>+-*:|=_`~<[.)"
 
 
 @given(

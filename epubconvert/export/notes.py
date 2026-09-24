@@ -87,17 +87,27 @@ DIGEST_LENGTH = 16
 #: ``<!--`` in a note swallowed every highlight after it, ``===`` turned the
 #: line above into a heading, and a link reference definition vanished.
 #:
-#: Each opener is matched as CommonMark (4.1-4.9) and GFM tables define it, not
-#: by its first character, because every backslash shows in Obsidian's source
-#: view and an escaped ``[[`` is no longer a link: ``~~struck~~``,
-#: ``_emphasis_`` and ``<3`` open nothing and are left alone. A link label may
-#: continue onto the next line, so an unfinished one counts.
+#: Each opener is matched as CommonMark (4.1-4.9, 5.1-5.2) and GFM tables
+#: define it, not by its first character, because every backslash shows in
+#: Obsidian's source view and an escaped ``[[`` is no longer a link:
+#: ``~~struck~~``, ``_emphasis_`` and ``<3`` open nothing and are left alone.
+#: ``#``, ``*``, ``-``, ``+`` and list numbers were still matched by their
+#: first character, so ``**bold** start`` became ``\**bold**``, which renders
+#: a literal star and an emphasised ``bold*``; ``#idea`` lost its Obsidian
+#: tag; ``2.5 million``, ``-5 degrees`` and ``+1 agreed`` showed a backslash.
+#: A heading's hashes, a bullet and a list number open a block only when white
+#: space or the end of the line follows them. ``*`` and ``-`` also open a
+#: thematic break, and ``-`` a setext underline and a table's delimiter row;
+#: each of those is spelled out, as ``_`` and ``=`` already were. A link label
+#: may continue onto the next line, so an unfinished one counts. ``>`` opens a
+#: quote whatever follows it.
 #:
 #: Indentation is up to three spaces and nothing else. A fourth column, or a
 #: tab, opens an indented code block (``code``); a line led by any other white
 #: space opens nothing, and escaping behind one showed the backslash. An
-#: ordered list is numbered in ASCII digits (CommonMark 5.2); ``\d`` also
-#: matches digits in other scripts, which open nothing.
+#: ordered list is numbered in one to nine ASCII digits (CommonMark 5.2);
+#: ``\d`` also matches digits in other scripts, which open nothing, and a
+#: tenth digit makes the line text.
 BLOCK_OPENERS = re.compile(
     r"""
     ^(?:
@@ -105,14 +115,22 @@ BLOCK_OPENERS = re.compile(
       | (?P<indent>\ {0,3})
         (?:
             (?P<mark>
-                [#>+*|-]                    # heading, quote, list, rule, table
+                \#(?=\#{0,5}(?:[ \t]|$))      # ATX heading
+              | >                            # block quote
+              | [-+*](?=[ \t]|$)             # bullet list item
+              | \*(?=(?:[ \t]*\*){2}[ \t*]*$)  # thematic break
+              | -(?=(?:[ \t]*-){2}[ \t-]*$)    # thematic break
+              | -(?=-*[ \t]*$)               # setext underline
+              | -(?=-*:?[ \t]*\|(?:[ \t]*:?-+:?[ \t]*\|)*(?:[ \t]*:?-+:?)?[ \t]*$)
+                                             # table delimiter row, no pipe first
+              | \|                           # table row
               | `(?=``) | ~(?=~~)            # code fence
               | <(?=[A-Za-z/!?])            # HTML block, either marker included
               | =(?==*[ \t]*$)              # setext underline
               | _(?=(?:[ \t]*_){2}[ \t_]*$)  # thematic break
               | \[(?=(?:[^\[\]\\]|\\.)*(?:\]:|\\?$))  # link reference definition
             )
-          | (?P<number>[0-9]+)(?P<delimiter>[.)])  # ordered list
+          | (?P<number>[0-9]{1,9})(?P<delimiter>[.)])(?=[ \t]|$)  # ordered list
         )
     )
     """,
@@ -143,15 +161,30 @@ def _escape(line: str) -> str:
 
     :return: The line, escaped.
     """
-    # A forged end marker would hand the rest of the generated body to the
-    # reader's region on the next run. Highlights are already safe because
-    # every line carries "> ", but nothing else was.
-    if END_PATTERN.match(line) or START_PATTERN.match(line):
-        return "\\" + line
+    unforged = _unforged(line)
+    if unforged != line:
+        return unforged
     # CommonMark escapes only ASCII punctuation, so the backslash goes on the
     # opener's punctuation: in front of a list number's digits it escapes
     # nothing and shows, as "\1. first". "1\. first" is the literal text.
     return BLOCK_OPENERS.sub(_escape_opener, line, count=1)
+
+
+def _unforged(line: str) -> str:
+    """
+    Neutralise a line that would pass for one of this tool's markers.
+
+    A forged end marker would hand the rest of the generated body to the
+    reader's region on the next run. Highlights are already safe because every
+    line carries "> ", but nothing else was.
+
+    :param line: One line of book- or reader-derived text.
+
+    :return: The line, behind a backslash if it forges a marker.
+    """
+    if END_PATTERN.match(line) or START_PATTERN.match(line):
+        return "\\" + line
+    return line
 
 
 def _escape_opener(match: re.Match[str]) -> str:
@@ -164,16 +197,26 @@ def _escape_opener(match: re.Match[str]) -> str:
     return f"{indent}{number}\\{delimiter}"
 
 
+def _raw_lines(value: object) -> list[str]:
+    """
+    Split a value into lines, newlines normalised and nothing escaped.
+
+    :param value: Whatever the book or the reader supplied.
+
+    :return: The lines as given.
+    """
+    return str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def _lines(value: object) -> list[str]:
     """
     Split a value into escaped lines, newlines normalised.
 
     :param value: Whatever the book or the reader supplied.
 
-    :return: The lines, each safe to emit.
+    :return: The lines, each safe to emit at the start of a line.
     """
-    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
-    return [_escape(line) for line in text.split("\n")]
+    return [_escape(line) for line in _raw_lines(value)]
 
 
 def _quoted(value: object) -> str:
@@ -259,9 +302,13 @@ def body(found: list[dict[str, Any]]) -> str:
         lines.extend(f"> {line}" for line in _lines(item.get("text", "")))
         if item.get("note"):
             lines.append("")
-            note = _lines(item["note"])
-            lines.append(f"**Note:** {note[0]}")
-            lines.extend(note[1:])
+            first, *rest = _raw_lines(item["note"])
+            # The first line follows "**Note:** ", so it never starts a line
+            # and can open no block: escaping it as an opener only showed a
+            # backslash. The marker rule is about the text, not where it
+            # sits, so that one still applies.
+            lines.append(f"**Note:** {_unforged(first)}")
+            lines.extend(_escape(line) for line in rest)
     return "\n".join(lines) + "\n"
 
 
