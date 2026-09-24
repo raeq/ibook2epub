@@ -35,6 +35,31 @@ class TestTheSchemaCheckActuallyChecks:
 
         assert annotations.schema_problems(document) == ["missing generator"]
 
+    def test_a_trailing_newline_does_not_satisfy_a_pattern(self):
+        # re.match lets "$" match before a final newline; the schema's
+        # patterns are JSON Schema's, which do not.
+        document = annotations.build_document([])
+        document["generated"] = f"{document['generated']}\n"
+
+        assert annotations.schema_problems(document) == [
+            f"generated is not an instant: {document['generated']!r}"
+        ]
+
+    def test_a_field_with_a_trailing_newline_is_reported(self):
+        rules = {"properties": {"year": {"pattern": "^[0-9]{4}$"}}}
+        schema: dict[str, dict[str, object]] = {"$defs": {}}
+
+        assert epubconvert_schema.object_problems(
+            {"year": "2026\n"}, rules, "x", schema
+        ) == ["x.year does not match ^[0-9]{4}$"]
+
+    def test_a_document_that_is_not_an_object_is_reported(self):
+        # A hand-edited file can hold any JSON; the checker raised on a list
+        # rather than saying what was wrong with it.
+        problems = annotations.schema_problems([])  # type: ignore[arg-type]
+
+        assert problems == ["document is a list, not an object"]
+
     def test_a_set_with_no_generation_stamp_is_still_valid(self):
         # An embedded set carries none: a stamp that moves on every run makes
         # the archive holding it stop being byte-reproducible.

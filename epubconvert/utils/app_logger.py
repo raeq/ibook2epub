@@ -115,7 +115,12 @@ def configure(verbosity: int = 1, log_file: Path | None = None) -> TraceLogger:
         log_path = Path(log_file)
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.FileHandler(log_path, encoding="utf-8")
+            # backslashreplace: os.walk hands back an undecodable filename
+            # as lone surrogates, which strict UTF-8 cannot write, and the
+            # handler dropped the whole line for a traceback on stderr.
+            file_handler = logging.FileHandler(
+                log_path, encoding="utf-8", errors="backslashreplace"
+            )
         except OSError as exc:
             logger.warning("Not logging to %s: %s", log_path, exc)
         else:

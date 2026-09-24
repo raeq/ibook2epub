@@ -112,6 +112,7 @@ jobs:
     # Proves the default install stays pure standard library: no disarm, no
     # compiled wheel. The portable-naming tests skip themselves here.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v7
     - name: Set up Python
