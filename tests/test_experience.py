@@ -518,6 +518,24 @@ class TestTheLibraryNotFoundListingLinesUp:
         assert {len(line) - len(line.lstrip()) for line in listed} == {2}
 
 
+class TestAReportSaysItOnlyReads:
+    """
+    ``--list`` and ``--verify`` announced "Writing output to" a directory
+    they only read.
+    """
+
+    @pytest.mark.parametrize("mode", ["--list", "--verify"])
+    def test_it_announces_reading_the_shelf(self, tmp_path, output_dir, capsys, mode):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), mode])
+
+        err = capsys.readouterr().err
+        assert "Writing output to" not in err
+        assert f"Reading output directory: {output_dir}" in err
+
+
 @pytest.fixture(name="closed_stdout")
 def _closed_stdout():
     """

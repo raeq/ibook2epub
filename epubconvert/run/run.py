@@ -107,7 +107,10 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
             logger.info("Using discovered iBooks library: %s", args.source_dir)
         else:
             logger.info("Examining source: %s", args.source_dir)
-    if not converts_nothing:
+    if args.list_only or args.verify:
+        # Both only read the shelf, and "Writing" said otherwise.
+        logger.info("Reading output directory: %s", args.output_dir)
+    elif not converts_nothing:
         logger.info("Writing output to: %s", args.output_dir)
     # Keyed off the policy object rather than re-derived from the raw argument.
     # Two independent statements of one fact drift apart the moment
