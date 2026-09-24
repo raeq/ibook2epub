@@ -869,7 +869,7 @@ class TestMatchingABookWithoutASource:
         found = [
             {
                 "id": "A",
-                "book": {"title": "Leviathan Wakes"},
+                "book": {"title": "Leviathan Wakes", "assetId": "A1"},
                 "text": "x",
                 "created": "2018-12-25T22:44:28Z",
             }

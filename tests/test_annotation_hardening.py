@@ -475,7 +475,7 @@ class TestPickingOutOneBook:
         assert annotations.for_book("Other.epub", index) == []
 
     def test_a_book_the_library_forgot_still_matches_on_its_title(self):
-        orphan = _annotation(book={"title": "Leviathan Wakes"})
+        orphan = _annotation(book={"title": "Leviathan Wakes", "assetId": "A1"})
         index = annotations.index_by_book([orphan])
 
         assert annotations.for_book("Leviathan Wakes.epub", index) == [orphan]

@@ -427,3 +427,72 @@ class TestAZippedBookSharesItsNameWithAPackage:
         main([*argv, route, str(vault), "--annotations-format", "markdown"])
 
         assert list(vault.glob("*.md")) == []
+
+
+class TestAHighlightWithNoBookGoesToNoBook:
+    """
+    A highlight Apple recorded against no asset is exported under "Unknown
+    book", and a book with no source was matched on its title as a package
+    name. So every such highlight, from any number of books, was embedded in
+    whichever package happened to be called ``Unknown book.epub``.
+    """
+
+    @pytest.fixture(name="unowned")
+    def _unowned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        library = tmp_path / "lib"
+        package = make_metadata_package(
+            library, "Unknown book.epub", title="My Own Notes"
+        )
+        make_databases(
+            tmp_path / "container",
+            rows=[
+                highlight(uuid="A", asset=None, text="from some other book"),
+                highlight(uuid="B", asset=None, text="and from yet another"),
+            ],
+            books=[library_row(asset="X", path=str(package), title="My Own Notes")],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+        return library
+
+    def test_it_is_not_matched_on_the_title_it_was_given(self):
+        unowned = {"id": "A", "book": {"title": "Unknown book"}, "text": "x"}
+
+        index = annotations.index_by_book([unowned])
+
+        assert annotations.for_book("Unknown book.epub", index) == []
+
+    def test_a_book_with_an_asset_id_still_matches_on_its_title(self):
+        forgotten = {"id": "A", "book": {"title": "Dune", "assetId": "A1"}, "text": "x"}
+
+        index = annotations.index_by_book([forgotten])
+
+        assert annotations.for_book("Dune.epub", index) == [forgotten]
+
+    def test_the_conversion_embeds_it_in_no_book(self, unowned, output_dir):
+        main(["-s", str(unowned), "-o", str(output_dir), "-m", "0", "-ae", "-q"])
+
+        assert list(output_dir.glob("*.epub")) == [output_dir / "Unknown book.epub"]
+        assert _embedded(output_dir) == []
+
+    def test_a_vault_gives_it_to_no_book(self, unowned, tmp_path):
+        vault = tmp_path / "vault"
+
+        main(
+            ["-s", str(unowned), "-ao", str(vault), "--annotations-format", "markdown"]
+        )
+
+        assert list(vault.glob("*.md")) == []
+
+    def test_a_detached_export_still_carries_it(self, unowned, tmp_path):
+        exported = tmp_path / "annotations.json"
+
+        main(["-s", str(unowned), "-ao", str(exported), "-q"])
+
+        held = json.loads(exported.read_text(encoding="utf-8"))["annotations"]
+        assert sorted((a["id"], a["book"]["title"]) for a in held) == [
+            ("A", "Unknown book"),
+            ("B", "Unknown book"),
+        ]
