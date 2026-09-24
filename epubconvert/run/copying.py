@@ -19,7 +19,14 @@ from ..export.naming import filesystem_key
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
-from .convert import _REPORT_LOCK, Report, _Progress, default_workers, progress_for
+from .convert import (
+    _REPORT_LOCK,
+    Report,
+    _Progress,
+    default_workers,
+    matches_pattern,
+    progress_for,
+)
 from .planning import copy_name_opens_file, copy_target_name
 
 
@@ -177,6 +184,34 @@ def placed_copies(plan: CopyPlan, copies: Sequence[Assignment]) -> CopyPlan:
         else:
             lost.append((source, item.reason or "another book claims this name"))
     return CopyPlan(tuple(named), plan.evicted, tuple(lost))
+
+
+def select_copies(plan: CopyPlan, pattern: str | None) -> CopyPlan:
+    """
+    Narrow the copying to the files a ``--match`` pattern names.
+
+    ``--match hobbit -m 1`` converted one book and copied every PDF and zipped
+    book in the library, which on an iCloud library is a download of all of
+    them. Only the copying is narrowed: the names were claimed against the
+    whole library (:func:`~epubconvert.run.copynames.claim_copies`), so a
+    matched file is written under the name a full run gives it.
+
+    :param plan: The whole library's copies, under the names they are written
+        to.
+    :param pattern: The ``--match`` pattern, or None for every file.
+
+    :return: The plan for the matching files.
+    """
+    if pattern is None:
+        return plan
+    chosen = {
+        source for source in plan.sources if matches_pattern(source.name, pattern)
+    }
+    return CopyPlan(
+        tuple(entry for entry in plan.named if entry[0] in chosen),
+        plan.evicted & chosen,
+        tuple(entry for entry in plan.lost if entry[0] in chosen),
+    )
 
 
 def _group_copies(

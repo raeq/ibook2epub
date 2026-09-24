@@ -441,6 +441,11 @@ ibook2epub --match hobbit -m 0      # The Hobbit.epub, Hobbit Notes.epub
 ibook2epub --match "The Lord*" -m 0 # anchored glob
 ```
 
+`--match` narrows the PDFs and already-zipped books copied through too, by the
+same rule, so converting one book does not download every copy in an iCloud
+library. `--max-export-files` does not: it caps the books converted, and a
+copy is not one, so every matching file is copied whatever `-m` says.
+
 ### Re-exporting
 
 A book already in the output directory is skipped. Pass `-f` / `--force` to

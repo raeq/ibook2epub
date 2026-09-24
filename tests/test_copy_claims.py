@@ -343,3 +343,66 @@ class TestTheClaimPass:
         plan = copying.CopyPlan(((unnamed, None),), frozenset({unnamed}))
 
         assert copying.placed_copies(plan, []) == plan
+
+
+class TestMatchNarrowsTheCopies:
+    """
+    ``--match hobbit -m 1`` converted one book and copied every PDF and
+    zipped book in the library: on an iCloud library, a full download for
+    "convert one book". The match narrows the copying; the names are still
+    claimed against the whole library, so a matched copy gets the name a full
+    run gives it.
+    """
+
+    @staticmethod
+    def _library(tmp_path: Path) -> Path:
+        library = tmp_path / "lib"
+        make_package(library, "The Hobbit.epub")
+        make_package(library, "Dune.epub")
+        for index in range(3):
+            (library / f"unrelated{index}.pdf").write_bytes(b"%PDF-1.4 fake")
+        (library / "Hobbit Maps.pdf").write_bytes(b"%PDF-1.4 maps")
+        return library
+
+    def test_only_the_matching_files_are_copied(self, tmp_path, output_dir, capsys):
+        library = self._library(tmp_path)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "--match", "hobbit", "-m", "1"]
+        )
+
+        assert code == 0
+        assert sorted(path.name for path in output_dir.iterdir()) == [
+            ".ibook2epub.lock",
+            "Hobbit Maps.pdf",
+            "The Hobbit.epub",
+        ]
+        assert "1 copied" in capsys.readouterr().out
+
+    def test_the_cap_on_exports_does_not_hold_copies_back(self, tmp_path, output_dir):
+        # -m counts books to convert, the slow part; a copy is not one.
+        library = self._library(tmp_path)
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "1", "-q"])
+
+        assert len(list(output_dir.glob("*.pdf"))) == 4
+        assert len(list(output_dir.glob("*.epub"))) == 1
+
+    def test_a_matched_copy_is_named_against_the_whole_library(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = TestTwoCopiesOfOneName._editions(  # pylint: disable=protected-access
+            tmp_path
+        )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+        argv += TestTwoCopiesOfOneName.AUTHOR_TITLE
+
+        run.main([*argv, "--match", "dune b"])
+        narrowed = capsys.readouterr()
+        run.main([*argv, "-q"])
+
+        assert "Name collision, skipping: Dune b.epub" in narrowed.err
+        assert "Dune a.epub" not in narrowed.err
+        assert identifier_of(output_dir / "Frank Herbert - Dune.epub") == (
+            "urn:uuid:1965"
+        )

@@ -68,7 +68,13 @@ from .convert import (
     output_lock,
     sweep_partials,
 )
-from .copying import CopyPlan, copy_through_all, placed_copies, plan_copies
+from .copying import (
+    CopyPlan,
+    copy_through_all,
+    placed_copies,
+    plan_copies,
+    select_copies,
+)
 from .copynames import Names, claim_copies
 from .placing import settled
 from .planning import (
@@ -213,7 +219,8 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     )
     # The copies that lost their name, as the run reports them.
     decisions += [
-        Decision(source, COLLISION, reason=reason) for source, reason in copies.lost
+        Decision(source, COLLISION, reason=reason)
+        for source, reason in select_copies(copies, args.match).lost
     ]
     # Orphans come from the whole library, not this run's filtered subset:
     # --match narrows a run, not the shelf. Files copied through claim their
@@ -465,7 +472,7 @@ def _run_export(
                 sweep_partials(args.output_dir)
             if not args.dry_run:
                 copy_through_all(
-                    copies,
+                    select_copies(copies, args.match),
                     args.output_dir,
                     report,
                     max_workers=args.workers,
