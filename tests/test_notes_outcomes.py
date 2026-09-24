@@ -98,3 +98,74 @@ class TestABookThatLostACollision:
         reported = capsys.readouterr().err
         assert "none of them has a highlight" not in reported
         assert "Two.epub" in reported
+
+
+#: One book, named as the planner names it.
+ALONE = [Assignment(Path("Alpha.epub"), "Alpha.epub", "alpha")]
+
+
+class TestNothingSavedForABookFailsTheRun:
+    """
+    Every outcome that leaves a book's highlights in no file counts toward the
+    exit code, whichever file it was that stood in the way.
+
+    An unreadable note exited 0 while an unreadable sidecar exited 1, and a
+    file somebody else wrote at a note's path exited 0 while one at its
+    sidecar's path exited 1. The book was equally unsaved in each pair, and a
+    cron run that wrote no notes at all reported success.
+    """
+
+    def _run(self, vault: Path) -> int:
+        return notes.write_vault([_highlight("Alpha.epub", "hl")], str(vault), ALONE)
+
+    def test_a_directory_where_the_note_should_be_fails_the_run(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        (vault / "Alpha.md").mkdir(parents=True)
+
+        assert self._run(vault) == exits.FAILED
+
+    def test_a_note_that_cannot_be_read_fails_the_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "Alpha.md").write_text("mine", encoding="utf-8")
+
+        def refuse(*_args: object, **_kwargs: object) -> str:
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(Path, "read_text", refuse)
+
+        assert self._run(vault) == exits.FAILED
+
+    def test_a_file_this_tool_did_not_write_fails_the_run_and_is_kept(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        # Decided, not inherited: the book's highlights reach no file, exactly
+        # as when the same file sits at the sidecar's path, which already
+        # failed the run. The file is still never touched.
+        app_logger.configure(verbosity=0)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        mine = vault / "Alpha.md"
+        mine.write_text("# My own note\n", encoding="utf-8")
+
+        code = self._run(vault)
+
+        assert code == exits.FAILED
+        assert mine.read_text(encoding="utf-8") == "# My own note\n"
+        assert "highlights were not written" in capsys.readouterr().err
+
+    def test_an_edited_note_whose_sidecar_was_written_is_not_a_failure(
+        self, tmp_path: Path
+    ):
+        vault = tmp_path / "vault"
+        self._run(vault)
+        note = vault / "Alpha.md"
+        note.write_text(
+            note.read_text(encoding="utf-8").replace("> hl", "> edited"),
+            encoding="utf-8",
+        )
+
+        assert self._run(vault) == exits.SUCCESS
+        assert notes.sidecar_for(note).is_file()

@@ -636,7 +636,8 @@ def write_vault(
     for outcome, sentence in REPORTS.items():
         if tally[outcome]:
             logger.warning(sentence, len(tally[outcome]), _naming(tally[outcome]))
-    return exits.FAILED if tally["failed"] or tally["blocked"] else exits.SUCCESS
+    unsaved = any(tally[outcome] for outcome in UNSAVED)
+    return exits.FAILED if unsaved else exits.SUCCESS
 
 
 #: Everything :func:`_write_one` can report, so the tally cannot be typo'd into
@@ -651,6 +652,16 @@ OUTCOMES = (
     "failed",
 )
 
+#: The outcomes that leave a book's highlights in no file at all, each of
+#: which fails the run. Only ``failed`` and ``blocked`` did, so the same
+#: obstacle exited 1 at a sidecar's path and 0 at the note's own: an
+#: unreadable note, or a file somebody else wrote there, left a cron run that
+#: wrote no notes reporting success. ``foreign`` is here by decision, not by
+#: default: the file is the reader's and is never touched, but the book is
+#: exactly as unsaved as when the same file sits at the sidecar's path, and
+#: moving it aside is a fix only the reader can make.
+UNSAVED = ("foreign", "unreadable", "blocked", "failed")
+
 #: What the reader is told about each outcome worth mentioning. Every sentence
 #: has to be true of every file it counts: "not written by ibook2epub" was
 #: being said about notes this tool wrote but could not read.
@@ -659,9 +670,10 @@ REPORTS = {
     "are in a file beside each one: %s",
     "blocked": "%d note(s) you have edited were left alone, and their new "
     "highlights could not be written beside them either: %s",
-    "unreadable": "%d file(s) could not be read and were left alone; see the "
-    "errors above: %s",
-    "foreign": "%d file(s) were not written by ibook2epub and were left alone: %s",
+    "unreadable": "%d file(s) could not be read and were left alone, so their "
+    "books' highlights were not written; see the errors above: %s",
+    "foreign": "%d file(s) were not written by ibook2epub and were left alone, "
+    "so their books' highlights were not written; move them aside and rerun: %s",
     "failed": "%d note(s) could not be written: %s",
 }
 

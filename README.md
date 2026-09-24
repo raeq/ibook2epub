@@ -707,6 +707,10 @@ all of it alone. Edit *inside* the highlights and the tool stops touching that
 note entirely, putting the new ones in a `.md.new` beside it so you never have
 to choose between keeping your edits and getting your highlights.
 
+A file at a note's path that the tool did not write, or one it cannot read,
+is never touched either. That book's highlights then reach no file at all, so
+the run names the file and exits `1`; move it aside and rerun.
+
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
 One consequence worth knowing: the frontmatter is written once and never

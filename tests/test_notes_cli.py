@@ -582,7 +582,9 @@ class TestWhenTheVaultCannotBeWritten:
         )
 
         unreadable.chmod(0o600)
-        assert code == 0
+        # Left alone, and the run fails: this book's highlights reached no
+        # file, which an unreadable sidecar already reported with exit 1.
+        assert code == 1
         assert unreadable.read_text(encoding="utf-8") == "# mine\n"
 
     def test_a_book_that_lost_a_collision_is_skipped(
