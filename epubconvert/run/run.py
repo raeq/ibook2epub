@@ -19,6 +19,7 @@ import shlex
 import sys
 from collections.abc import Sequence
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -448,6 +449,7 @@ def _run_export(
     # different libraries; planning outside the lock would let a concurrent
     # run move the output directory underneath the decisions.
     pending_before = 0
+    decisions: list[Decision] = []
     # The guard covers taking the lock and the sweep too. They were outside
     # it, and a Ctrl-C there escaped to main's last resort: 130, but no
     # summary, and nothing on stdout at all under -q.
@@ -509,7 +511,7 @@ def _run_export(
     return (
         report,
         max(0, pending_before - done),
-        _selected(assigned, packages),
+        _selected(assigned, packages, decisions),
         copyable,
     )
 
@@ -535,21 +537,44 @@ def _copyable(args: argparse.Namespace, copies: CopyPlan) -> list[Path]:
 
 
 def _selected(
-    assigned: Sequence[Assignment], packages: Sequence[Path]
+    assigned: Sequence[Assignment],
+    packages: Sequence[Path],
+    decisions: Sequence[Decision],
 ) -> list[Assignment]:
     """
-    Keep the assignments of this run's own books.
+    Keep the assignments of this run's own books, as the plan left them.
 
     The assignment names the whole library, and ``--match`` narrows what the
     run touches: only the books it selected go on to the annotation step.
 
+    A book the plan found to be a collision has no name there either. Under a
+    policy that names from the folder the plan reads a book's identifier only
+    before it writes, so ``--force`` and ``--refresh`` could call a book a
+    collision whose name the annotation step then trusted: its highlights
+    reached no file, and the warning, finding a file of that name, said
+    nothing.
+
     :param assigned: The assignment of every package in the library.
     :param packages: The packages this run selected.
+    :param decisions: What the plan decided about them, where it got that far.
 
     :return: Their assignments, in the library's order.
     """
     chosen = set(packages)
-    return [entry for entry in assigned if entry.package in chosen]
+    collided = {
+        decision.package: decision.reason
+        for decision in decisions
+        if decision.status == COLLISION
+    }
+    return [
+        (
+            replace(entry, filename="", reason=collided[entry.package])
+            if entry.package in collided
+            else entry
+        )
+        for entry in assigned
+        if entry.package in chosen
+    ]
 
 
 def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:

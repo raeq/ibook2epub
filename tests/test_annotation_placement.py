@@ -16,6 +16,7 @@ that had moved on never got its own.
 # pylint: disable=too-few-public-methods
 
 import json
+import os
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -121,3 +122,41 @@ class TestAHighlightWithNoArchiveOfItsOwnIsReported:
         warned = capsys.readouterr().err
         assert "reached no file: Dune (Ace).epub" in warned
         assert _embedded(output / PLAIN) is None
+
+    @pytest.mark.parametrize("flag", ["--force", "--refresh"])
+    def test_a_folder_named_collision_before_a_write_is_reported(
+        self, tmp_path, monkeypatch, capsys, flag
+    ):
+        # Named from the folder, so the plan reads the identifier only before
+        # it writes: --force and --refresh found the name held by another
+        # book and called it a collision, while the warning trusted the name
+        # and said nothing.
+        library, output = tmp_path / "lib", tmp_path / "out"
+        make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:1"
+        )
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-q"])
+        remove_tree(library / "a")
+        make_metadata_package(
+            library / "b", "Dune.epub", title="Dune", identifier="urn:uuid:2"
+        )
+        make_databases(
+            tmp_path / "container",
+            rows=[highlight()],
+            books=[library_row(path="/x/Dune.epub", title="Dune")],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+        if flag == "--refresh":
+            later = (output / "Dune.epub").stat().st_mtime + 60
+            os.utime(library / "b" / "Dune.epub", (later, later))
+        capsys.readouterr()
+
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-ae", flag])
+
+        warned = capsys.readouterr().err
+        assert "Name collision, skipping: Dune.epub" in warned
+        assert "reached no file: Dune.epub" in warned
+        assert _embedded(output / "Dune.epub") is None
