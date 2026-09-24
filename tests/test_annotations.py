@@ -240,6 +240,38 @@ class TestWhatIsSkipped:
         assert len(found) == 1
         assert found[0]["book"]["title"] == "GONE"
 
+    @pytest.mark.parametrize("column", ["note", "chapter"])
+    def test_a_blob_beside_the_highlight_costs_that_field_not_the_export(
+        self, tmp_path, column
+    ):
+        # Only the selected text was type-checked. A BLOB in the note or the
+        # chapter passed through to json.dumps, which raised outside every
+        # per-row guard and took the whole export down.
+        make_databases(
+            tmp_path, rows=[highlight(**{column: b"\xff\xfe"}), highlight(uuid="U2")]
+        )
+
+        found = annotations.collect(tmp_path)
+
+        json.dumps(annotations.build_document(found))
+        assert sorted(item["id"] for item in found) == ["U1", "U2"]
+        assert all(column not in item for item in found if item["id"] == "U1")
+
+    @pytest.mark.parametrize("column", ["uuid", "asset"])
+    def test_a_blob_where_an_id_belongs_costs_one_annotation(
+        self, tmp_path, column, caplog
+    ):
+        # An annotation without a usable id, or a book to belong to, cannot be
+        # matched on a rerun: the row is dropped, and only that row.
+        bad: dict[str, object] = {"uuid": "BAD", column: b"\x00"}
+        make_databases(tmp_path, rows=[highlight(**bad), highlight()])
+
+        found = annotations.collect(tmp_path)
+
+        json.dumps(annotations.build_document(found))
+        assert [item["id"] for item in found] == ["U1"]
+        assert "not text" in caplog.text
+
 
 class TestTheLocator:
     """
