@@ -52,6 +52,10 @@ class Assignment:
     #: shelf under its name, or any of its numbers: every file it is placed
     #: at is another book's, whatever the identifiers can say.
     not_own: bool = False
+    #: A package with no identifier to go by that kept the one numbered file
+    #: of its name on the shelf (claims.kept_numbers), rather than claiming
+    #: the first free name.
+    kept_number: bool = False
 
 
 @runtime_checkable

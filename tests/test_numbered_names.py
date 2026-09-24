@@ -88,6 +88,34 @@ class TestNamedFromTheFolder:
         assert identifier_of(output_dir / "Dune.epub") == "urn:uuid:P"
         assert identifier_of(output_dir / "Dune (2).epub") == "urn:uuid:Z"
 
+    def test_nor_one_that_leaves_the_plain_name_to_a_copy(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Two zipped books and a package that -p strip names alike. A run
+        # narrowed to the first copy put it at "Dune (2)"; one narrowed to
+        # the package kept that numbered file, found it the copy's, and
+        # moved on to "Dune (3)", past the plain name the second copy had
+        # claimed. The next run found two numbered files, kept neither, and
+        # listed the package's only archive as an orphan.
+        # formal/RerunPlanner.tla found it.
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "Dune<.epub", "urn:uuid:A")
+        zipped_book(tmp_path, library / "Dune>.epub", "urn:uuid:B")
+        make_metadata_package(
+            library / "p", "Dune.epub", title="Dune", identifier="urn:uuid:P"
+        )
+        argv = [*_argv(library, output_dir, "-p", "strip"), "-q", "--match"]
+        run.main([*argv, "dune<"])
+        run.main([*argv, "dune.epub"])
+        capsys.readouterr()
+
+        run.main([*argv[:-2], "--match", "dune<"])
+        ran = capsys.readouterr()
+
+        assert identifier_of(output_dir / "Dune.epub") == "urn:uuid:P"
+        assert identifier_of(output_dir / "Dune (2).epub") == "urn:uuid:A"
+        assert "orphan" not in ran.out
+
     def test_a_rerun_reads_nothing(self, tmp_path, output_dir, monkeypatch):
         library = tmp_path / "lib"
         for folder in ("a", "b", "c"):

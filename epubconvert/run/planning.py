@@ -373,6 +373,7 @@ def _assign_one(
         # the shelf keeps its file (copynames.claim_copies), and a package
         # with nowhere to go was a collision on every run in suffix mode.
         stable if setup.on_collision == SUFFIX else None,
+        kept_number=filename == kept and usable_identifier(metadata) is None,
     )
 
 

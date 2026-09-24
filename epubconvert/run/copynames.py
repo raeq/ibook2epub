@@ -118,9 +118,10 @@ def claim_copies(
             claiming.holders[filesystem_key(item.identity)] = item.filename
             claiming.packaged[filesystem_key(item.identity)] = item
 
-    named = claiming.settle(
-        wanting, claim_order([name for _, name in wanting], shelf_names(output_dir))
-    )
+    order = claim_order([name for _, name in wanting], shelf_names(output_dir))
+    kept = claiming.keep_all(wanting, order)
+    assigned = [claiming.reclaim(item) for item in assigned]
+    named = claiming.settle(wanting, order, kept)
     wanted = {filesystem_key(policy.identity(name)) for _, name in copies if name}
     # And the file a copy keeps: a package with no identifier to go by keeps
     # the one numbered file of its name (claims.kept_numbers), which can be a
@@ -172,32 +173,97 @@ class _Claiming:
                 plain = marked["stem"] + (marked["extension"] or "")
                 self.marked.setdefault(plain, []).append((marked["digest"], found))
 
-    def settle(
+    def keep_all(
         self, wanting: Sequence[tuple[Path, str]], order: Sequence[int]
-    ) -> list[Assignment]:
+    ) -> dict[int, Assignment]:
         """
-        Name every copy, in the order to claim.
+        Keep every copy whose own file is on the shelf at that file.
 
         A copy whose own bytes are on the shelf under its name or one of its
         numbers claims first: two PDFs of one name have no identifier to tell
         them apart, and the first in sorted order took the other's file for
         its own copy and was never copied. Of those, one whose file stat says
         is its copy before one whose file only declares its identifier,
-        which two copies of one book share. Then one whose name is on the shelf, as a
-        package does. Each file is kept by one copy at most, so one that
-        finds its file already kept claims a name with the rest.
+        which two copies of one book share. Each file is kept by one copy at
+        most, so one that finds its file already kept claims a name with the
+        rest (:meth:`settle`).
 
         :param wanting: Each copy and the name it wants, in sorted order.
         :param order: Indices into *wanting*, from
             :func:`~epubconvert.run.claims.claim_order`.
 
-        :return: Each copy's assignment, in the order of *wanting*.
+        :return: The copies kept, by index into *wanting*.
         """
         claimed: dict[int, Assignment] = {}
         for exact in (True, False):
             for index in order:
                 if index not in claimed and (kept := self.keep(*wanting[index], exact)):
                     claimed[index] = kept
+        return claimed
+
+    def reclaim(self, item: Assignment) -> Assignment:
+        """
+        Name a package again that kept a numbered file a copy keeps.
+
+        A package with no identifier to go by keeps the one numbered file of
+        its name when no other package wants the name and nothing holds the
+        plain one (claims.kept_numbers). The copies were not asked, and the
+        file can be a copy's: the package kept it and moved on past it, a
+        copy claimed the plain name the package had left, and a later run
+        found two numbered files where the package had one, kept neither,
+        and listed the package's only archive as an orphan.
+        formal/RerunPlanner.tla found it. The file stays the copy's; the
+        package claims the first free name of its own, as before it kept any.
+
+        :param item: A package's assignment.
+
+        :return: It, or when a copy keeps the numbered file it kept, its
+            first free name, or no name and the reason.
+        """
+        if not item.kept_number or item.marked is None:
+            return item
+        key = filesystem_key(item.identity)
+        policy = self.setup.policy
+        if not any(
+            filesystem_key(policy.identity(found.name)) == key for found in self.taken
+        ):
+            return item
+        self.packaged.pop(key, None)
+        wanted = item.marked
+        taken = _claim(self.claims, wanted, policy.identity(wanted), setup=self.setup)
+        if taken is None:  # pragma: no cover - every " (n)" spoken for
+            return replace(
+                item,
+                filename="",
+                identity=policy.identity(wanted),
+                reason=lost_to(
+                    self.claims.holder(policy.identity(wanted), wanted), None
+                ),
+            )
+        filename, identity = taken
+        self.holders[filesystem_key(identity)] = filename
+        self.packaged[filesystem_key(identity)] = item
+        return replace(item, filename=filename, identity=identity, kept_number=False)
+
+    def settle(
+        self,
+        wanting: Sequence[tuple[Path, str]],
+        order: Sequence[int],
+        kept: dict[int, Assignment],
+    ) -> list[Assignment]:
+        """
+        Name every copy :meth:`keep_all` did not keep, in the order to claim.
+
+        One whose name is on the shelf claims first, as a package does.
+
+        :param wanting: Each copy and the name it wants, in sorted order.
+        :param order: Indices into *wanting*, from
+            :func:`~epubconvert.run.claims.claim_order`.
+        :param kept: The copies kept at their own files.
+
+        :return: Each copy's assignment, in the order of *wanting*.
+        """
+        claimed = dict(kept)
         for index in order:
             if index not in claimed:
                 source, name = wanting[index]
