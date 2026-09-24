@@ -21,7 +21,7 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 from epubconvert.collect import validate
-from epubconvert.export.archive import zip_package
+from epubconvert.export.archive import replace_annotations, zip_package
 from epubconvert.export.naming import filesystem_key
 from epubconvert.run.run import main
 from epubconvert.utils import exits
@@ -83,6 +83,33 @@ class TestMimetypeIsPhysicallyFirst:
             assert archive.namelist()[-1] == "mimetype"
             assert archive.getinfo("mimetype").header_offset == 0
 
+        assert validate.validate_archive(path) == []
+
+    def test_a_refresh_keeps_mimetype_first_whatever_the_index_says(
+        self, tmp_path: Path
+    ):
+        # The refresh copied members in the central directory's order, so a
+        # book storing mimetype first but listing it last passed --verify,
+        # and was rewritten with mimetype last, which --verify then rejected.
+        path = tmp_path / "IndexedLater.epub"
+        with ZipFile(path, "w") as archive:
+            archive.writestr(
+                ZipInfo("mimetype"), "application/epub+zip", compress_type=ZIP_STORED
+            )
+            for name, body in MEMBERS.items():
+                archive.writestr(name, body)
+            archive.filelist.append(archive.filelist.pop(0))
+        assert validate.validate_archive(path) == []
+
+        assert replace_annotations(path, [{"id": "A", "text": "hi"}])
+
+        with ZipFile(path) as archive:
+            first = min(archive.infolist(), key=lambda info: info.header_offset)
+            assert first.filename == "mimetype"
+            assert [info.filename for info in archive.infolist()][:-1] == [
+                "mimetype",
+                *MEMBERS,
+            ]
         assert validate.validate_archive(path) == []
 
     def test_an_archive_written_properly_still_passes(self, tmp_path: Path):

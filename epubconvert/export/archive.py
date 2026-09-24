@@ -891,12 +891,12 @@ def _rebuild(
     with the same annotations in the first place.
 
     :param reading: The archive being refreshed, open for reading.
-    :param members: The members to carry across, in order.
+    :param members: The members to carry across, written in the file's order.
     :param partial: The new archive to write.
     :param embedded: The annotation document to store after the members.
     """
     with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
-        for info in members:
+        for info in sorted(members, key=lambda info: info.header_offset):
             member = entry(member_name(info), info.compress_type)
             _size_ahead(member, info.file_size)
             with (
