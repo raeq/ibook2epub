@@ -16,9 +16,11 @@ it read are two modules rather than one that does both.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
+import stat
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -39,6 +41,13 @@ from . import catalogue, notes
 from .archive import write_atomically
 from .naming import encode_name, filesystem_key
 from .notes import SIDECAR_SUFFIX
+
+#: Said when a composed ``-ao --library-export`` run skips the catalogue
+#: because the highlights could not be written.
+LIBRARY_SKIPPED = (
+    "The library was not exported, because the highlights above could not be "
+    "written. Fix that, or run --library-export on its own."
+)
 
 
 def write_export(
@@ -116,7 +125,9 @@ def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
             + "\n",
         )
     except OSError as exc:
-        logger.critical("Could not write %s: %s", printable(str(target)), exc)
+        # The reason alone: the error names the temporary written beside the
+        # file, which the reader never asked for and cannot find.
+        logger.critical("%s", _cannot_write(target, exc.strerror or str(exc)))
         return exits.NO_OUTPUT
 
     logger.info("Wrote %d annotation(s) to %s", len(merged), printable(str(target)))
@@ -129,6 +140,57 @@ def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
             tally["kept"],
         )
     return exits.SUCCESS
+
+
+def annotations_refusal(target: Path, *, pending: Sequence[Path] = ()) -> str | None:
+    """
+    Say why the annotation export cannot be written to a file, if it cannot.
+
+    Asked before anything is read or converted, by the dry run and the real
+    run alike. The file was judged only as it was written, after every book
+    had been converted: a dry run never got that far and exited 0, and the
+    real run converted the library and then exited 5. The same refusals, in
+    the same words, as the write would make; the write still makes them, for
+    a destination that changes in between.
+
+    :param target: The file the run would write.
+    :param pending: Directories the run makes before it writes this, so a
+        file inside a shelf the run is about to create is not refused for
+        being judged before the shelf exists.
+
+    :return: The reason, or None when the write can go ahead.
+    """
+    try:
+        _existing_annotations(target)
+    except ContainerUnavailableError as exc:
+        return str(exc)
+    # Where the write lands: through a link, beside the file it resolves to.
+    folder = Path(os.path.realpath(target)).parent
+    if str(folder) in {os.path.realpath(path) for path in pending}:
+        return None
+    try:
+        # os.stat, as the shelf is judged: Path.stat is its own binding on
+        # 3.10 and 3.14.
+        mode = os.stat(folder).st_mode  # noqa: PTH116
+    except OSError as exc:
+        return _cannot_write(target, exc.strerror or str(exc))
+    if not stat.S_ISDIR(mode):
+        return _cannot_write(target, os.strerror(errno.ENOTDIR))
+    if not os.access(folder, os.W_OK | os.X_OK):
+        return _cannot_write(target, os.strerror(errno.EACCES))
+    return None
+
+
+def _cannot_write(target: Path, reason: str) -> str:
+    """
+    Say that the export could not be written, and why.
+
+    :param target: The file the reader named.
+    :param reason: Why, as the operating system puts it.
+
+    :return: The message.
+    """
+    return f"Could not write {printable(str(target))}: {printable(reason)}"
 
 
 def _existing_annotations(target: Path) -> dict[str, Any] | None:
@@ -528,7 +590,9 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
     try:
         write_atomically(target, text)
     except OSError as exc:
-        logger.critical("Could not write %s: %s", printable(str(target)), exc)
+        # The reason alone: the error names the temporary written beside the
+        # file, which the reader never asked for and cannot find.
+        logger.critical("%s", _cannot_write(target, exc.strerror or str(exc)))
         return exits.NO_OUTPUT
     logger.info("Wrote %d book(s) to %s", len(found), printable(str(target)))
     return exits.SUCCESS

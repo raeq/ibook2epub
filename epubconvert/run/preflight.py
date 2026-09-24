@@ -16,9 +16,10 @@ import os
 import stat
 from pathlib import Path
 
+from ..collect.annotations import STDOUT
 from ..collect.coredata import FULL_DISK_ACCESS
 from ..collect.validate import epubcheck_available
-from ..export.detached import vault_of
+from ..export.detached import LIBRARY_SKIPPED, annotations_refusal, vault_of
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.defaults import SOURCE_CANDIDATES
@@ -126,6 +127,8 @@ def check_environment(args: argparse.Namespace) -> int | None:
     unusable = _check_source(args)
     if unusable is None:
         unusable = _check_shelf(args)
+    if unusable is None:
+        unusable = _check_detached(args)
     if unusable is not None:
         return unusable
 
@@ -249,6 +252,45 @@ def _check_shelf(args: argparse.Namespace) -> int | None:
         )
         return exits.NO_OUTPUT
     return None
+
+
+def _check_detached(args: argparse.Namespace) -> int | None:
+    """
+    Check the highlights file can be written, when the run writes one.
+
+    Judged here, before a book is read or converted, as the shelf is: a run
+    with ``-ad`` into a directory that is not there converted the whole
+    library and then exited 5, and its dry run exited 0. Standard output
+    has nothing to judge, and a vault is its own route
+    (:func:`~epubconvert.export.notes.write_vault`).
+
+    :param args: Parsed command line arguments.
+
+    :return: An exit code, or None when the file can be written.
+    """
+    destination = args.annotations_only or args.annotations_detached
+    if not destination or destination == STDOUT or vault_of(args) is not None:
+        return None
+    # A conversion makes its shelf, and the directories above it, before it
+    # writes the file; -ar refreshes a shelf that must already be there.
+    makes = (
+        []
+        if args.annotations_only or args.annotations_refresh
+        else [
+            path
+            for path in (args.output_dir, *args.output_dir.parents)
+            if not os.path.lexists(path)
+        ]
+    )
+    refusal = annotations_refusal(Path(destination), pending=makes)
+    if refusal is None:
+        return None
+    logger.critical("%s", refusal)
+    if args.library_export:
+        # Said as when the highlights fail as they are written: the reader
+        # repeating the composed command sees why the catalogue is not there.
+        logger.error("%s", LIBRARY_SKIPPED)
+    return exits.NO_OUTPUT
 
 
 def _unreadable(output_dir: Path) -> OSError | None:

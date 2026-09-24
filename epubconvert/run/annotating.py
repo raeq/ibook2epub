@@ -30,7 +30,13 @@ from ..export.archive import (
     index_by_package,
     replace_annotations,
 )
-from ..export.detached import library_export, library_refusal, vault_of, write_export
+from ..export.detached import (
+    LIBRARY_SKIPPED,
+    library_export,
+    library_refusal,
+    vault_of,
+    write_export,
+)
 from ..export.naming import filesystem_key
 from ..utils import exits
 from ..utils.app_logger import logger
@@ -770,11 +776,7 @@ def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
                 # reader edited whose sidecar is itself foreign is blocked on
                 # every run -- and the catalogue then never appeared at all
                 # with nothing said about why.
-                logger.error(
-                    "The library was not exported, because the highlights "
-                    "above could not be written. Fix that, or run "
-                    "--library-export on its own."
-                )
+                logger.error("%s", LIBRARY_SKIPPED)
             return code
         if not args.library_export:
             return code
@@ -785,10 +787,9 @@ def _unwritable_destination(args: argparse.Namespace) -> str | None:
     """
     Judge where a convert-nothing run would write, before it writes anything.
 
-    Only the library export is judged here. The annotation export's own check
-    reads the file back to merge into it, which is the read it exists for and
-    not a check that can be lifted out of it; but it is written first, and it
-    merges, so a refusal after it costs a rerun rather than a file.
+    Only the library export is judged here. The annotation export is judged
+    before the run, by the check every route that writes one makes
+    (:func:`~epubconvert.run.preflight.check_environment`).
 
     :param args: Parsed command line arguments.
 

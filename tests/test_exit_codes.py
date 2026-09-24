@@ -817,11 +817,15 @@ class TestTheExitCodeAgreesWithTheSummary:
     """
 
     @pytest.fixture(name="unwritable")
-    def _unwritable(self, tmp_path: Path) -> Path:
-        # Not JSON, so the detached export will not merge into it.
-        destination = tmp_path / "highlights.json"
-        destination.write_text("not json", encoding="utf-8")
-        return destination
+    def _unwritable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        # A destination that passes the check before the run and fails as it
+        # is written, as a volume that fills up during the run does: one the
+        # check refuses stops the run before any book is written.
+        def full(*_args: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr("epubconvert.export.detached.write_atomically", full)
+        return tmp_path / "highlights.json"
 
     def test_the_destination_alone_gives_its_own_code(
         self, annotated, output_dir, unwritable
