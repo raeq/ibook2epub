@@ -15,6 +15,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A book whose container, package document or encryption.xml declares a DTD
+  internal subset is refused: an `<!ATTLIST>` default was copied onto every
+  element it named, so a 1.6 KB book reached 2.9 GB and `--verify` and
+  `--list` crashed with MemoryError. A book's XML may also no longer hold more
+  than 200,000 elements or nest deeper than 1,000 levels.
+
+- Names differing only by case are treated as one name even when they carry
+  combining marks (Unicode canonical caseless matching), so `--verify` reports
+  such members and the writer never puts two books on one case-insensitive
+  path.
+
+- `-ar` no longer hangs when a FIFO is swapped in for a book on the shelf; the
+  book is counted as not refreshed.
+
+- A vault run reads the Books library once, so an unreadable library is warned
+  about once.
+
+- A detached export whose `generator` holds a key this tool does not write, or
+  is not an object, is refused rather than having it dropped.
+
+- `--verify` no longer inflates a book whose members declare more than 1 GiB
+  and more than 32 times the book's size; it reports it as too large to check.
+
 - Two zipped copies of one book, a zipped copy and a package of one book, or
   two PDFs of one size, no longer both take one file on the shelf for their
   own: the collision no longer disappears on the next run, and in suffix mode
