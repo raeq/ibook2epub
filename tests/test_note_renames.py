@@ -102,6 +102,23 @@ class TestABookWhoseNameChanged:
         assert _names(vault) == [f"{RENAMED}.md", f"{RENAMED}.md.new"]
         assert "as I read it" in (vault / f"{RENAMED}.md").read_text()
 
+    @pytest.mark.parametrize("legacy", [False, True])
+    def test_a_rename_only_in_case_writes_the_note_where_it_is(
+        self, vault: Path, legacy: bool
+    ):
+        # The book is given the spelling on disk, so the note is its own
+        # where it lies and nothing is moved: a move to a name differing only
+        # in case is never asked for.
+        if legacy:
+            _legacy(vault / "Dune.md")
+
+        assert _write(vault, "DUNE", "x", "y") == exits.SUCCESS
+
+        assert _names(vault) == ["Dune.md"]
+        text = (vault / "Dune.md").read_text(encoding="utf-8")
+        assert "> y" in text
+        assert text.endswith(MINE)
+
 
 class TestANoteThatCannotBeMoved:
     """It is named, and the book's highlights wait for it rather than start

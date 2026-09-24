@@ -732,17 +732,16 @@ def _move(old: Path, target: Path) -> None:
     Checking the name and then renaming left a window: ``rename`` replaces
     whatever is there, so a note saved at that name in between was lost. A
     hard link claims the name only if it is still free (EEXIST otherwise),
-    and the old name is removed once it has. A volume without hard links,
-    or a rename that only changes case, falls back to ``rename``.
+    and the old name is removed once it has. A volume without hard links
+    falls back to ``rename``. Never asked to move a note to a name that
+    differs from its own only in case: naming gives a book the spelling on
+    disk, and passes over the note at it when it looks for strays.
 
     :param old: The note under the name its book had before.
     :param target: The name its book has now.
 
     :raises OSError: If the note could not be moved, the target included.
     """
-    if filesystem_key(old.name) == filesystem_key(target.name):
-        old.rename(target)
-        return
     try:
         os.link(old, target, follow_symlinks=False)
     except FileExistsError:
