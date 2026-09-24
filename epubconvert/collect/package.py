@@ -306,14 +306,18 @@ def _element(members: _Members, name: str) -> ElementTree.Element:
     data = members.read(name)
     try:
         return parse_xml(data)
-    except EntityDeclarationError as exc:
+    except RefusedDocumentError as exc:
         raise ValidationError(f"{name} {exc}") from exc
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{name} is not valid XML: {exc}") from exc
 
 
-class EntityDeclarationError(ElementTree.ParseError):
-    """Raised for a document from a book that declares an XML entity."""
+class RefusedDocumentError(ElementTree.ParseError):
+    """Raised for a document from a book that is refused before it is parsed."""
+
+
+#: Why a document with an internal DTD subset is refused.
+INTERNAL_SUBSET = "declares a DTD internal subset, which is not allowed"
 
 
 def parse_xml(data: bytes) -> ElementTree.Element:
@@ -327,7 +331,7 @@ def parse_xml(data: bytes) -> ElementTree.Element:
     whole run. Every reader of a book's XML parses through here, so there is
     one exception to catch.
 
-    A document that declares an entity is refused here too, for the same
+    A document :func:`_refusal` refuses is refused here too, for the same
     reason: the rule was applied beside only two of the readers, and the
     encryption declaration, parsed by the third, went without it.
 
@@ -336,30 +340,44 @@ def parse_xml(data: bytes) -> ElementTree.Element:
     :return: The root element.
 
     :raises ElementTree.ParseError: If the document cannot be parsed, for
-        whatever reason; :class:`EntityDeclarationError`, one of them, if it
-        declares an entity.
+        whatever reason; :class:`RefusedDocumentError`, one of them, if it is
+        refused unparsed.
     """
-    if _declares_entities(data):
-        raise EntityDeclarationError("declares XML entities, which are not allowed")
+    refusal = _refusal(data)
+    if refusal is not None:
+        raise RefusedDocumentError(refusal)
     try:
         return ElementTree.fromstring(data)
     except (ValueError, LookupError) as exc:
         raise ElementTree.ParseError(f"unreadable encoding: {exc}") from exc
 
 
-def _declares_entities(data: bytes) -> bool:
+def _refusal(data: bytes) -> str | None:
     """
-    Report whether a document declares XML entities.
+    Say why a document must not be parsed into a tree, if it must not.
 
-    A package document is attacker-controlled, and an entity declaration lets a
-    small file expand into a large one. :data:`MAX_XML_BYTES` cannot see it: the
-    cap measures the file, and the expansion happens after it is read.
+    A package document is attacker-controlled, and an internal DTD subset lets
+    a small file build a large tree. An entity declaration expands a reference
+    into as much text as it likes; an ``ATTLIST`` default is copied onto every
+    element it names, so a 1.6 KB book declaring a 1 MB default for
+    ``<item>`` reached 2.9 GB, and --verify and --list died of MemoryError.
+    Only entity declarations were refused, so that one went straight past.
+    :data:`MAX_XML_BYTES` sees neither: the cap measures the file, and the
+    expansion happens after it is read.
 
-    expat has capped the amplification factor since 2.4, so a current Python
-    already refuses the classic attack. That protection is implicit, silent and
-    version-dependent, and this tool supports Python 3.10 and newer. The rule is
-    stated here so it belongs to the tool rather than to whichever expat the
-    interpreter was built against.
+    So the internal subset is refused whole, whatever it declares -- entities,
+    attribute defaults, elements, notations -- rather than one declaration at
+    a time. A package document, ``container.xml`` and ``encryption.xml`` have
+    no use for one: of 2,804 package documents in a real library, one carries
+    a DOCTYPE, bare, and none declares anything. A bare ``<!DOCTYPE html>``
+    or one naming only an external DTD is still read, since expat never loads
+    an external subset.
+
+    expat has capped entity amplification since 2.4, so a current Python
+    already refuses the classic attack. That protection is implicit, silent,
+    version-dependent and says nothing of attribute defaults, and this tool
+    supports Python 3.10 and newer. The rule is stated here so it belongs to
+    the tool rather than to whichever expat the interpreter was built against.
 
     Asked of the parser rather than worked out by reading the bytes. Two
     hand-written scans of the ``DOCTYPE`` declaration were defeated in turn --
@@ -367,43 +385,47 @@ def _declares_entities(data: bytes) -> bool:
     a decoy ``<!DOCTYPE`` -- because each had to re-derive where the declaration
     starts and ends. expat already knows, so it is asked.
 
-    The parse stops at the first declaration. Parsed to the end, it expanded
-    every reference it met before the answer was given, so the one check
-    meant to spare the tool an expansion performed it, and a billion-laughs
-    document was stopped only by expat's own limit where it has one.
+    The parse stops at the start of the subset, before anything in it is
+    declared. Parsed to the end, it expanded every reference it met before the
+    answer was given, so the one check meant to spare the tool an expansion
+    performed it.
 
     A malformed document is left alone here and refused by the parse that
     follows, which reports it better.
 
     :param data: The raw bytes of the document.
 
-    :return: True if the document declares any entity.
+    :return: Why the document is refused, or None if it may be parsed.
     """
     parser = expat.ParserCreate()
-    parser.EntityDeclHandler = _stop_at_declaration
+    parser.StartDoctypeDeclHandler = _doctype
     try:
         parser.Parse(data, True)
-    except _EntityDeclaredError:
-        return True
+    except _RefusedError as refused:
+        return str(refused)
     except (expat.ExpatError, ValueError, LookupError):
         # An encoding expat refuses is malformed for this purpose too, and
         # raised LookupError from here, ahead of the parse that reports it.
-        return False
-    return False
+        return None
+    return None
 
 
-class _EntityDeclaredError(Exception):
-    """Raised out of expat to stop a parse at an entity declaration."""
+class _RefusedError(Exception):
+    """Raised out of expat to stop a parse at what refuses the document."""
 
 
-def _stop_at_declaration(*_args: object) -> None:
+def _doctype(
+    _name: str, _system: str | None, _public: str | None, has_internal_subset: int
+) -> None:
     """
-    Stop the parse: an entity has been declared, and nothing more is needed.
+    Stop the parse at the start of an internal subset.
 
-    :raises _EntityDeclaredError: Always. expat abandons the parse and ``Parse``
-        raises it, before any content, and so any reference, is reached.
+    :raises _RefusedError: If the declaration has one. expat abandons the
+        parse and ``Parse`` raises it, before anything in the subset is
+        declared, and so before any content is reached.
     """
-    raise _EntityDeclaredError
+    if has_internal_subset:
+        raise _RefusedError(INTERNAL_SUBSET)
 
 
 def _opf_path(members: _Members) -> str:
