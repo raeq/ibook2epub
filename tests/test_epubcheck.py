@@ -14,7 +14,10 @@ what the tool says.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import logging
+import os
 import subprocess
+
+import pytest
 
 from epubconvert.collect import validate
 from epubconvert.run import cli, run
@@ -246,3 +249,31 @@ class TestEpubcheckOutputIsEscaped:
 
         assert "epubcheck exited 1 for \\x1b[2KBook.epub" in caplog.text
         assert "\x1b" not in caplog.text
+
+
+@pytest.mark.skipif(os.name != "posix", reason="the stand-in tool is a shell script")
+class TestEpubcheckOutputIsNotTrustedToBeUtf8:
+    """
+    A JVM writes in its own locale's encoding, not Python's. A tool reporting
+    a member named "Chapître.xhtml" in ISO-8859-1 made the strict decode raise
+    UnicodeDecodeError, which is neither an OSError nor a SubprocessError, so
+    it left run_epubcheck and ended the run.
+    """
+
+    def test_an_undecodable_line_is_reported_not_raised(self, tmp_path, monkeypatch):
+        tool = tmp_path / "epubcheck"
+        tool.write_text(
+            "#!/bin/sh\n"
+            "printf 'ERROR(RSC-001): File \"OEBPS/Chap\\356\\201tre.xhtml\"'\n"
+            "exit 1\n",
+            encoding="ascii",
+        )
+        tool.chmod(0o755)
+        monkeypatch.setattr(
+            "epubconvert.collect.validate.shutil.which", lambda _name: str(tool)
+        )
+
+        problems = validate.run_epubcheck(tmp_path / "Book.epub")
+
+        assert len(problems) == 1
+        assert problems[0].startswith('ERROR(RSC-001): File "OEBPS/Chap')

@@ -10,8 +10,8 @@ module, so this map saves a search:
 ``test_export.py``           archive writing (``archive``), determinism,
                              interrupts, the disk floor, covers
                              (``inspect_output.extract_cover``)
-``test_validate.py``         ``validate``, and ``--verify``
-                             (``inspect_output.verify_output``)
+``test_validate.py``         ``validate``, ``package``, ``identifiers``, and
+                             ``--verify`` (``inspect_output.verify_output``)
 ``test_ocf_layout.py``       where an archive's bytes sit: ``mimetype``
                              physically first, not merely indexed first
 ``test_planning.py``         ``planning``: collisions, refresh, the listings
@@ -25,6 +25,8 @@ module, so this map saves a search:
 ``test_integrity.py``        the guarantees that keep the output directory
                              trustworthy
 ``test_hardening.py``        untrusted input and hostile filesystems
+``test_hostile_archives.py`` archives that claim less than they hold, or
+                             cannot be opened at all
 ``test_efficiency.py``       work done per book, and work declined
 ``test_containment.py``      the one path-trust rule (``contained``)
 ``test_rules.py``            one class per rule, one test per call site
@@ -54,7 +56,7 @@ from zipfile import ZIP_DEFLATED, ZIP_LZMA, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert.collect.validate import UNREADABLE_MEMBER
+from epubconvert.collect.package import UNREADABLE_MEMBER
 from epubconvert.export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX
 from epubconvert.run.convert import STALE_PARTIAL_SECONDS
 

@@ -21,7 +21,8 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert.collect import annotations, source, validate
+from epubconvert.collect import annotations, source
+from epubconvert.collect import package as package_reader
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
 from epubconvert.run import claims, convert, holders, placing, planning, run
@@ -242,7 +243,7 @@ class TestThePackageDocumentIsReadOnce:
     @staticmethod
     def _reads(monkeypatch, library: Path, output_dir: Path, *extra: str) -> list[Path]:
         seen: list[Path] = []
-        original = validate.read_package_dir
+        original = package_reader.read_package_dir
 
         def counting(package: Path):
             seen.append(package)

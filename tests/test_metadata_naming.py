@@ -18,7 +18,7 @@ than guessed. Where a number appears in a comment, that is where it came from.
 
 from pathlib import Path
 
-from epubconvert.collect import validate
+from epubconvert.collect import package as package_reader
 from epubconvert.export import archive
 from epubconvert.export.naming import (
     MAX_FILENAME_BYTES,
@@ -472,7 +472,7 @@ class TestThePlannerSuppliesTheMetadata:
         for index in range(3):
             make_metadata_package(library, f"Book {index}.epub", title=f"Book {index}")
         reads: list[Path] = []
-        original = validate.read_package_dir
+        original = package_reader.read_package_dir
 
         def counting(package: Path) -> Package:
             reads.append(package)

@@ -22,6 +22,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from epubconvert.collect import source as source_module
+from epubconvert.collect.package import read_archive_package
 from epubconvert.export import archive, naming
 from epubconvert.run import convert, copying, planning, run
 from tests.conftest import corrupt_member, damaged_streams, make_package, recompress
@@ -735,13 +736,13 @@ class TestSkipIncompleteCoversCopies:
         _book_with_metadata(evicted)
         _evict(monkeypatch, evicted)
         opened: list[str] = []
-        real_zip = ZipFile
+        real_read = read_archive_package
 
-        def recording(file, *args, **kwargs):
+        def recording(file):
             opened.append(str(file))
-            return real_zip(file, *args, **kwargs)
+            return real_read(file)
 
-        monkeypatch.setattr(planning, "ZipFile", recording)
+        monkeypatch.setattr(planning, "read_archive_package", recording)
         report = convert.Report()
 
         plan = copying.plan_copies(
@@ -760,12 +761,13 @@ AUTHOR_TITLE = ["--name-by", "author-title"]
 def _count_opens(monkeypatch) -> list[str]:
     """Record every zip the planner opens to name a copy, and still open it."""
     opened: list[str] = []
+    real_read = read_archive_package
 
-    def recording(file, *args, **kwargs):
+    def recording(file):
         opened.append(str(file))
-        return ZipFile(file, *args, **kwargs)
+        return real_read(file)
 
-    monkeypatch.setattr(planning, "ZipFile", recording)
+    monkeypatch.setattr(planning, "read_archive_package", recording)
     return opened
 
 
@@ -806,11 +808,13 @@ class TestCopiesAreNamedOnce:
             _book_with_metadata(library / name)
         both_opened = threading.Barrier(2, timeout=5)
 
-        def meet_then_open(file, *args, **kwargs):
-            both_opened.wait()
-            return ZipFile(file, *args, **kwargs)
+        real_read = read_archive_package
 
-        monkeypatch.setattr(planning, "ZipFile", meet_then_open)
+        def meet_then_open(file):
+            both_opened.wait()
+            return real_read(file)
+
+        monkeypatch.setattr(planning, "read_archive_package", meet_then_open)
 
         code = run.main(
             [

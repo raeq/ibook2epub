@@ -25,10 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..collect.annotations import STDOUT
-from ..collect.validate import (
-    ValidationOptions,
-    epubcheck_available,
-)
+from ..collect.validate import ValidationOptions, epubcheck_available
 from ..export.archive import (
     collect_copyable,
     collect_package_dirs,

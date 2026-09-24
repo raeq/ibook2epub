@@ -909,9 +909,10 @@ class TestFailuresThatDoNotNeedAPermissionBit:
             )
         ]
 
-        code = notes.write_vault(
-            self._annotations(), str(tmp_path / "v"), named, copyable=()
-        )
+        # Matched on its title, as a book with an asset id and no source is.
+        mine = [_annotation(book={"title": "Leviathan Wakes", "assetId": "A1"})]
+
+        code = notes.write_vault(mine, str(tmp_path / "v"), named, copyable=())
 
         assert code != 0
         assert "could not be written" in capsys.readouterr().err

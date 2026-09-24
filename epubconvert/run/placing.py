@@ -16,7 +16,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
-from ..collect.validate import ValidationError, read_package_dir, usable_identifier
+from ..collect.identifiers import usable_identifier
+from ..collect.package import ValidationError, read_package_dir
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX

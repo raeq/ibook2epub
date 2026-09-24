@@ -37,8 +37,8 @@ import pytest
 
 from epubconvert import __version__
 from epubconvert.collect import annotations, coredata
+from epubconvert.collect.identifiers import canonical_identifier
 from epubconvert.collect.library import describe_book
-from epubconvert.collect.validate import canonical_identifier
 from epubconvert.export import archive, detached
 from epubconvert.run import cli
 from epubconvert.run.run import main
@@ -475,7 +475,7 @@ class TestPickingOutOneBook:
         assert annotations.for_book("Other.epub", index) == []
 
     def test_a_book_the_library_forgot_still_matches_on_its_title(self):
-        orphan = _annotation(book={"title": "Leviathan Wakes"})
+        orphan = _annotation(book={"title": "Leviathan Wakes", "assetId": "A1"})
         index = annotations.index_by_book([orphan])
 
         assert annotations.for_book("Leviathan Wakes.epub", index) == [orphan]

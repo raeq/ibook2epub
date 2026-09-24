@@ -19,6 +19,7 @@ from zipfile import ZipFile
 
 import pytest
 
+from epubconvert.collect import package as package_reader
 from epubconvert.collect import validate
 from epubconvert.export.archive import zip_package
 from epubconvert.run import run
@@ -132,7 +133,7 @@ class TestAnHrefUrlsplitRefusesIsStillAPath:
         path = write_epub(tmp_path / "Book.epub", members)
 
         with ZipFile(path) as opened:
-            package = validate.read_package(opened)
+            package = package_reader.read_package(opened)
 
         assert package.manifest["odd"] == _resolved(name)
 
@@ -153,22 +154,25 @@ class TestAnHrefUrlsplitRefusesIsStillAPath:
         def refuse(base, href):
             raise ValueError("Invalid IPv6 URL")
 
-        monkeypatch.setattr(validate, "_resolve", refuse)
+        monkeypatch.setattr(package_reader, "_resolve", refuse)
         path = write_epub(tmp_path / "Book.epub")
 
-        with ZipFile(path) as opened, pytest.raises(validate.ValidationError):
-            validate.read_package(opened)
+        with ZipFile(path) as opened, pytest.raises(package_reader.ValidationError):
+            package_reader.read_package(opened)
 
     def test_its_message_reaches_the_terminal_escaped(self, tmp_path, monkeypatch):
         # A ValueError's text can quote the href it choked on.
         def refuse(base, href):
             raise ValueError(f"bad href {href}\x1b[2K\r")
 
-        monkeypatch.setattr(validate, "_resolve", refuse)
+        monkeypatch.setattr(package_reader, "_resolve", refuse)
         path = write_epub(tmp_path / "Book.epub")
 
-        with ZipFile(path) as opened, pytest.raises(validate.ValidationError) as err:
-            validate.read_package(opened)
+        with (
+            ZipFile(path) as opened,
+            pytest.raises(package_reader.ValidationError) as err,
+        ):
+            package_reader.read_package(opened)
 
         assert "\x1b" not in str(err.value) and "\r" not in str(err.value)
 

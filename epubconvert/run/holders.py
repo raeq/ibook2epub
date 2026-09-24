@@ -39,9 +39,9 @@ from __future__ import annotations
 import unicodedata
 from functools import lru_cache
 from pathlib import Path
-from zipfile import BadZipFile, ZipFile
 
-from ..collect.validate import ValidationError, read_package, usable_identifier
+from ..collect.identifiers import usable_identifier
+from ..collect.package import ValidationError, read_archive_package
 
 
 def same_identity(first: str, second: str) -> bool:
@@ -95,9 +95,8 @@ def identifier_on_shelf(archive_path: Path) -> str | None:
 def _identifier_of(archive_path: Path, _stamp: tuple[int, int, int]) -> str | None:
     """Read an archive's identifier; *_stamp* only keys what is remembered."""
     try:
-        with ZipFile(archive_path) as archive:
-            return usable_identifier(read_package(archive))
-    except (ValidationError, BadZipFile, OSError):
+        return usable_identifier(read_archive_package(archive_path))
+    except ValidationError:
         return None
 
 

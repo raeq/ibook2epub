@@ -22,7 +22,7 @@ import re
 from hypothesis import given
 from hypothesis import strategies as st
 
-from epubconvert.collect import annotations, validate
+from epubconvert.collect import annotations, identifiers
 from epubconvert.export import notes
 from epubconvert.export.naming import encode_name, split_extension, truncate_bytes
 from epubconvert.run.claims import marked, suffixed
@@ -41,6 +41,9 @@ BIDI_CONTROLS = frozenset(
 
 #: Nine ASCII digits: the body every ISBN-10 and 978 ISBN-13 shares.
 BODY = st.text(alphabet="0123456789", min_size=9, max_size=9)
+
+#: A body a book could have: not a converter's filler, which is no ISBN.
+BOOK_BODY = BODY.filter(lambda body: not identifiers._placeholder(body))
 
 
 # ------------------------------------------------------------- truncate_bytes
@@ -213,26 +216,34 @@ def _isbn10(body: str) -> str:
     return body + ("X" if check == 10 else str(check))
 
 
-@given(BODY)
+@given(BOOK_BODY)
 def test_an_isbn10_becomes_a_valid_isbn13_that_leads_back_to_it(body):
     isbn10 = _isbn10(body)
 
-    isbn13 = validate._as_isbn13(isbn10)
+    isbn13 = identifiers._as_isbn13(isbn10)
 
-    assert validate._is_isbn13(isbn13)
-    assert validate.isbn10_of(isbn13) == isbn10
+    assert identifiers._is_isbn13(isbn13)
+    assert identifiers.isbn10_of(isbn13) == isbn10
 
 
-@given(BODY, st.sampled_from("0123456789X"))
+@given(BOOK_BODY, st.sampled_from("0123456789X"))
 def test_exactly_one_check_character_makes_an_isbn10(body, check):
-    assert validate._is_isbn10(body + check) == (body + check == _isbn10(body))
+    assert identifiers._is_isbn10(body + check) == (body + check == _isbn10(body))
+
+
+@given(st.sampled_from("0123456789"))
+def test_a_repeated_digit_is_no_isbn_in_either_form(digit):
+    isbn10 = _isbn10(digit * 9)
+
+    assert identifiers.canonical_identifier(isbn10) == isbn10
+    assert identifiers.isbn13_of(f"urn:isbn:{identifiers._as_isbn13(isbn10)}") is None
 
 
 @given(ANY_TEXT)
 def test_canonicalising_an_identifier_twice_changes_nothing(value):
-    once = validate.canonical_identifier(value)
+    once = identifiers.canonical_identifier(value)
 
-    assert validate.canonical_identifier(once) == once
+    assert identifiers.canonical_identifier(once) == once
 
 
 #: Ten or thirteen characters that str.isdigit() accepts, in any script:
@@ -250,20 +261,20 @@ def test_only_ascii_digits_make_an_isbn(value):
     # str.isdigit() accepts a superscript two, which int() refuses, and
     # Arabic-Indic digits, which int() reads: the one raised out of the run,
     # the other was written back as an ISBN in those digits.
-    canonical = validate.canonical_identifier(value)
+    canonical = identifiers.canonical_identifier(value)
 
     if canonical.startswith("urn:isbn:"):
         assert canonical.removeprefix("urn:isbn:").isascii()
         assert value.isascii()
 
 
-@given(BODY, st.lists(st.sampled_from(["-", " "]), min_size=9, max_size=9))
+@given(BOOK_BODY, st.lists(st.sampled_from(["-", " "]), min_size=9, max_size=9))
 def test_a_hyphenated_isbn_is_the_same_book(body, separators):
     isbn10 = _isbn10(body)
     written = "".join(d + s for d, s in zip(isbn10, [*separators, ""], strict=True))
 
-    assert validate.canonical_identifier(f"ISBN {written}") == (
-        validate.canonical_identifier(isbn10)
+    assert identifiers.canonical_identifier(f"ISBN {written}") == (
+        identifiers.canonical_identifier(isbn10)
     )
 
 

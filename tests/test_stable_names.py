@@ -21,7 +21,7 @@ called, and nothing else.
 
 from pathlib import Path
 
-from epubconvert.collect.validate import usable_identifier
+from epubconvert.collect.identifiers import usable_identifier
 from epubconvert.export import archive
 from epubconvert.export.naming import (
     MAX_FILENAME_BYTES,

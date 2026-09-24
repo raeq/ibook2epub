@@ -19,7 +19,8 @@ from ..collect.annotations import STDOUT
 from ..collect.annotations import collect as collect_annotations
 from ..collect.annotations import for_book as annotations_for_book
 from ..collect.coredata import ContainerUnavailableError
-from ..collect.validate import UNREADABLE_MEMBER, ArchiveInvalidError
+from ..collect.package import UNREADABLE_MEMBER
+from ..collect.validate import ArchiveInvalidError
 from ..export.archive import (
     NoRoomError,
     collect_copyable,

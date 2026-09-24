@@ -664,7 +664,14 @@ def index_by_book(found: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]
         # and falls back to its title. Weaker -- two books can share a title --
         # but the alternative was such a book being silently unembeddable
         # while looking like a book with no annotations.
-        key = book.get("source") or _title_key(book.get("title"))
+        #
+        # Only a book Apple has an id for, though. A highlight recorded
+        # against no asset is titled "Unknown book", which names no book, and
+        # every one of them, from any number of books, was embedded in a
+        # package that happened to be called "Unknown book.epub". Left out of
+        # the index, it reaches the detached export and nothing else.
+        title = _title_key(book.get("title")) if book.get("assetId") else ""
+        key = book.get("source") or title
         if key:
             index.setdefault(str(key), []).append(item)
     return index

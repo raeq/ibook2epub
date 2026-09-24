@@ -22,6 +22,7 @@ from typing import Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
+from ..collect.package import open_member, read_member
 from ..collect.validate import ArchiveInvalidError, ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
@@ -708,6 +709,12 @@ def _same_annotations(
     return bool(stored == list(annotations))
 
 
+#: The most of an embedded annotation set a refresh reads to compare it. The
+#: archive may not be one this tool wrote, and its declared size is no bound.
+#: A set larger than this is replaced rather than read, as a malformed one is.
+MAX_EMBEDDED_BYTES = 64 * 1024 * 1024
+
+
 class NoRoomError(Exception):
     """
     Raised when a rebuild was due and the volume is below the floor.
@@ -757,7 +764,11 @@ def replace_annotations(
     try:
         with ZipFile(target_archive) as reading:
             names = reading.namelist()
-            held = reading.read(EMBEDDED_PATH) if EMBEDDED_PATH in names else None
+            held = (
+                read_member(reading, reading.getinfo(EMBEDDED_PATH), MAX_EMBEDDED_BYTES)
+                if EMBEDDED_PATH in names
+                else None
+            )
 
             # Compared before the members are read, not after. Every member was
             # being decompressed into memory to reach a comparison that only
@@ -818,7 +829,10 @@ def _rebuild(
         for info in members:
             member = entry(info.filename, info.compress_type)
             _size_ahead(member, info.file_size)
-            with reading.open(info) as source, writing.open(member, "w") as target:
+            with (
+                open_member(reading, info) as source,
+                writing.open(member, "w") as target,
+            ):
                 shutil.copyfileobj(source, target)
         writing.writestr(entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), embedded)
 
