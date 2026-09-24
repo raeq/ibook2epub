@@ -36,6 +36,7 @@ from ..utils.display import printable, printable_json
 from ..utils.policy import Assignment, NamingPolicy
 from . import catalogue, notes
 from .archive import write_atomically
+from .naming import encode_name
 from .notes import SIDECAR_SUFFIX
 
 
@@ -245,13 +246,28 @@ def _read_back(target: Path) -> str | None:
 
 def _emit(text: str) -> None:
     """
-    Write a document to standard output.
+    Write a document to standard output, as UTF-8 whatever it is set to.
+
+    Through the text layer, a locale or ``PYTHONIOENCODING`` that is not
+    UTF-8 raised UnicodeEncodeError out of the run at the first title in
+    another script. JSON is UTF-8 by definition (RFC 8259), and the CSV is
+    the file a tracker imports, which expects UTF-8 too, so the bytes go out
+    as UTF-8 under the text layer. A stream with no bytes layer -- one a
+    caller swapped in -- is written as text.
 
     :param text: The whole document, ending in a newline.
     """
+    stream = sys.stdout
+    raw = getattr(stream, "buffer", None)
     try:
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        if raw is None:
+            stream.write(text)
+        else:
+            # Whatever already went through the text layer goes out first.
+            stream.flush()
+            raw.write(encode_name(text))
+            raw.flush()
+        stream.flush()
     except BrokenPipeError:
         # "-ao - | head" and "| less" then q are how the flag's own help text
         # says to use it. Closing the pipe is the reader saying they have seen
