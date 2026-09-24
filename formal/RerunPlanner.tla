@@ -59,7 +59,8 @@
  * also gives a package with no digest marker somewhere to move on to in
  * suffix mode, its own name numbered, as a copy has. KeepNumbered is
  * claims.kept_numbers: in suffix mode a package keeps the numbered file of
- * its name that declares its identifier, which is read for this whatever
+ * its name that declares its identifier (with KeepShared, the plain one too
+ * where another package wants its name and no file is numbered), which is read for this whatever
  * the policy (unless --skip-incomplete leaves the book unopened, which is
  * not modelled: then no numbered or marked file of its name is an orphan),
  * or the file of its marked name once its crowd has left it;
@@ -119,8 +120,10 @@ CONSTANTS
                    \* person deletes both; otherwise the archive stays
     ReclaimOwn,    \* _Claiming.reclaim: a package given the name of a file
                    \* that is a copy's own bytes claims a name again
-    AskNumbered    \* with KeepNumbered, a package with no usable identifier
+    AskNumbered,   \* with KeepNumbered, a package with no usable identifier
                    \* keeps no numbered file that declares one
+    KeepShared     \* with KeepNumbered, packages whose names are one file
+                   \* ask whose it is, numbered files on the shelf or not
 
 Books == 1..N
 
@@ -179,7 +182,9 @@ Sorted(S) ==
 
 (* kept_numbers, in suffix mode with KeepNumbered: the numbered file of its
    name each package keeps, in sorted order, never one another kept or one
-   under a name another package wants. Where it has a usable identifier,
+   under a name another package wants: with numbered files of its name on
+   the shelf, a file of its marked name, or with KeepShared another package
+   of its name. Where it has a usable identifier,
    read for this even where naming read none (a book --skip-incomplete
    leaves unopened is not modelled), the lowest-numbered file
    declaring it, and, once its crowd has left it, one of its marked name
@@ -202,9 +207,12 @@ Numbered(S, order, taken) ==
              there  == Forms(base)
              marked == IF stable # base THEN Forms(stable) ELSE {}
              Mine(nm, T) == {k \in T : Mate(shelf[Suffixed(nm, k)], b)}
+             shared == Cardinality({d \in S : Base(S, d) = base}) > 1
              look   == /\ KeepNumbered
                        /\ OnCollision = "suffix"
-                       /\ (\E k \in there : k > 1) \/ marked # {}
+                       /\ \/ \E k \in there : k > 1
+                          \/ marked # {}
+                          \/ KeepShared /\ shared
              name   == IF ~look THEN ""
                        ELSE IF b \in Usable
                          THEN IF Mine(base, there) # {}

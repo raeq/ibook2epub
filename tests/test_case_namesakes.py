@@ -241,6 +241,35 @@ class TestABookRenamedByCaseOnly:
         assert "Exported 1 epub file(s)" in captured.out
         assert "collision" not in captured.out
 
+    def test_a_namesake_of_its_old_spelling_takes_no_file_of_it(
+        self, tmp_path, output_dir, capsys
+    ):
+        # a/dune.epub, added under the old spelling, claimed first by its
+        # exact name: reported exported from the renamed book's archive,
+        # which was written again as "Dune (2)", and the next run wrote the
+        # newcomer as "dune (3)" and left that second copy as an orphan.
+        library, argv = _exported_then_renamed(tmp_path, output_dir, "suffix")
+        make_metadata_package(
+            library / "a", "dune.epub", title="Dune", identifier="urn:a"
+        )
+        capsys.readouterr()
+
+        run.main([*argv, "--list", "--json"])
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-m", "0"])
+        first = capsys.readouterr()
+        run.main([*argv, "-m", "0"])
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["target"]).name, Path(row["source"]).parent.name)
+            for row in rows
+        ) == [("exported", "dune.epub", "b"), ("pending", "dune (2).epub", "a")]
+        assert files(output_dir) == {"dune.epub": "urn:b", "dune (2).epub": "urn:a"}
+        assert "Exported 1 epub file(s)" in first.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in first.out + again.out
+
     def test_without_an_identifier_the_name_is_trusted(
         self, tmp_path, output_dir, capsys
     ):

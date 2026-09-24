@@ -73,6 +73,41 @@ class TestNamedFromTheFolder:
 
         assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
 
+    def test_a_namesake_added_later_takes_no_file_of_the_other(
+        self, tmp_path, output_dir, capsys
+    ):
+        # b/Dune.epub was exported alone, then a/Dune.epub added: sorting
+        # first, it took the plain name and was reported exported from b's
+        # archive, never written, and b was written again as "Dune (2)".
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "b", "Dune.epub", title="Dune", identifier="urn:uuid:B"
+        )
+        run.main([*_argv(library, output_dir), "-q"])
+        make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:A"
+        )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main(_argv(library, output_dir))
+        first = capsys.readouterr()
+        run.main(_argv(library, output_dir))
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["target"]).name, Path(row["source"]).parent.name)
+            for row in rows
+        ) == [("exported", "Dune.epub", "b"), ("pending", "Dune (2).epub", "a")]
+        assert identifier_of(output_dir / "Dune.epub") == "urn:uuid:B"
+        assert identifier_of(output_dir / "Dune (2).epub") == "urn:uuid:A"
+        assert "Exported 1 epub file(s)" in first.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in first.out + again.out
+
     def test_not_a_numbered_file_a_copy_keeps(self, tmp_path, output_dir, capsys):
         # A zipped book copied as "Dune (2)" while a package of its name was
         # left out of a run: the package, alone among the packages, kept the

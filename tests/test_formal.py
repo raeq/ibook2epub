@@ -113,6 +113,12 @@ EXPECTED = {
     "RerunPlanner.NumberedLeftBehindLoose": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
+    # A namesake added beside a book exported alone: without asking whose
+    # the plain file is, the newcomer claimed it first.
+    "RerunPlanner.NamesakeAdded": HOLDS,
+    "RerunPlanner.NamesakeAddedLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
 }
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Collection, Container, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -322,15 +323,26 @@ def kept_numbers(
     A file under a name another book wants is never kept, as for a title
     that looks like a number (``Dune (2)``).
 
+    Two books whose names are one file on the shelf ask the same, numbered
+    files or not: ``b/Cafe.epub``, exported and renamed by case to
+    ``b/cAFE.epub``, or exported alone, and ``a/Cafe.epub`` added since,
+    which sorts first and claims first by its exact name
+    (:func:`claim_order`). Nothing was read without a numbered file, so the
+    newcomer was reported exported from the other's archive and never
+    written, the other was written again under a number, and the next run
+    wrote the newcomer too, leaving that copy an orphan. Now the book whose
+    identifier the file declares keeps it.
+
     A book that has left its crowd wants its plain name again, and its
     archive is under its marked name, or that name numbered where it shares
     its identifier: it keeps that too, rather than being written again
     under the plain name and its archive listed as an orphan.
 
     Identifiers are read only for a name with numbered files on the shelf,
-    or a marked name with any: under a policy that names from the folder,
-    the book's own too, unless the run leaves it unopened. A rerun over a
-    shelf with neither reads nothing. A copy's own bytes are its own whatever an
+    a marked name with any, or a name two books want with a file: under a
+    policy that names from the folder, the book's own too, unless the run
+    leaves it unopened. A rerun over a shelf with none of these reads
+    nothing. A copy's own bytes are its own whatever an
     identifier says, so a copy that keeps the file sends the package back to
     claim a name (copynames._Claiming.reclaim).
 
@@ -346,7 +358,8 @@ def kept_numbers(
     :return: The file kept, by index into *books*.
     """
     index = numbered_names(shelf, policy)
-    wanted = {filesystem_key(policy.identity(book.base)) for book in books}
+    sharing = Counter(filesystem_key(policy.identity(book.base)) for book in books)
+    wanted = set(sharing)
     directory = getattr(shelf, "directory", None)
     kept: dict[int, str] = {}
 
@@ -361,7 +374,12 @@ def kept_numbers(
     for position, book in enumerate(books):
         numbers = forms(book.base)
         marked_forms = forms(book.stable) if book.stable != book.base else []
-        if directory is None or (all(n == 1 for n, _ in numbers) and not marked_forms):
+        shared = (
+            bool(numbers) and sharing[filesystem_key(policy.identity(book.base))] > 1
+        )
+        if directory is None or (
+            all(n == 1 for n, _ in numbers) and not marked_forms and not shared
+        ):
             continue
         identifier = book.identifier
         unknown = identifier is None and book.unread in unopened
