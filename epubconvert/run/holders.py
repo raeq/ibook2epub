@@ -118,7 +118,11 @@ def holds_another_book(found: Path, identifier: str | None) -> str | None:
     """
     if identifier is None:
         return None
-    holder = identifier_on_shelf(found)
+    return _held_by(found, identifier_on_shelf(found), identifier)
+
+
+def _held_by(found: Path, holder: str | None, identifier: str) -> str | None:
+    """Explain a mismatch between the shelf's identifier and this book's."""
     if holder is None or holder == identifier:
         return None
     return f"{found.name} holds another book, {holder}; this book is {identifier}"
@@ -171,8 +175,9 @@ def foreign(
     if identifier is None:
         identifier = source_identifier(source)
     holder = identifier_on_shelf(found) if identifier is not None else None
-    if holder is not None:
-        return holds_another_book(found, identifier)
+    if holder is not None and identifier is not None:
+        # Read once: holds_another_book would stat the archive again.
+        return _held_by(found, holder, identifier)
     return taken if unicodedata.normalize("NFC", found_identity) in live else None
 
 
