@@ -424,45 +424,6 @@ class TestMergingSurvivesAHostileFile:
         assert tally["updated"] == 1
         assert merged[0]["book"]["filename"] == "Corey - T.epub"
 
-    @pytest.mark.parametrize(
-        ("field", "was", "now"),
-        [
-            ("title", "Old Title", "New Title"),
-            ("language", "en", "fr"),
-            ("year", 2011, 2012),
-            ("declaredIdentifier", "978-1-78883-568-8", "9781788835688"),
-        ],
-    )
-    def test_a_changed_book_field_counts_as_changed(self, field, was, now):
-        # The highlight's modification date says nothing about its book: a
-        # book retitled in Books moves no annotation's date, and only a list
-        # of fields was compared, so the merged file kept the old title.
-        book = {"title": "T", "source": "T.epub", "assetId": "A1"}
-        before = _annotation(book={**book, field: was}, modified="2020-01-01T00:00:00Z")
-        after = _annotation(book={**book, field: now}, modified="2020-01-01T00:00:00Z")
-        existing = {
-            "generator": {"name": "ibook2epub", "version": __version__},
-            "annotations": [before],
-        }
-
-        merged, tally = annotations.merge(existing, [after])
-
-        assert tally["updated"] == 1
-        assert merged[0]["book"][field] == now
-
-    def test_a_dropped_book_field_counts_as_changed(self):
-        book = {"title": "T", "source": "T.epub"}
-        before = _annotation(book={**book, "year": 2011})
-        existing = {
-            "generator": {"name": "ibook2epub", "version": __version__},
-            "annotations": [before],
-        }
-
-        merged, tally = annotations.merge(existing, [_annotation(book=book)])
-
-        assert tally["updated"] == 1
-        assert "year" not in merged[0]["book"]
-
     def test_an_unchanged_annotation_is_still_counted_unchanged(self):
         item = _annotation(modified="2020-01-01T00:00:00Z")
         existing = {

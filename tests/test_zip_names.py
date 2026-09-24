@@ -88,9 +88,14 @@ def unflagged(
         for name, text in listed:
             chosen = ZIP_STORED if name == "mimetype" else method
             writing.writestr(name, text, compress_type=chosen)
-    raw = bytearray(path.read_bytes())
     with ZipFile(path) as reading:
         entries = reading.infolist()
+    path.write_bytes(_cleared(bytearray(path.read_bytes()), entries, only))
+    return path
+
+
+def _cleared(raw: bytearray, entries: list[ZipInfo], only: int | None) -> bytes:
+    """Clear the UTF-8 flag of *entries* (or the one at *only*) in *raw*."""
     end = raw.rindex(b"PK\x05\x06")
     offset = int.from_bytes(raw[end + 16 : end + 20], "little")
     for position, info in enumerate(entries):
@@ -102,8 +107,7 @@ def unflagged(
         lengths = (raw[offset + 28 : offset + 30], raw[offset + 30 : offset + 32])
         comment = raw[offset + 32 : offset + 34]
         offset += 46 + sum(int.from_bytes(n, "little") for n in (*lengths, comment))
-    path.write_bytes(bytes(raw))
-    return path
+    return bytes(raw)
 
 
 def names(path: Path) -> list[str]:
