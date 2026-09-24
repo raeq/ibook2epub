@@ -226,6 +226,20 @@ def _write_new(source: Path, target: Path) -> bool:
         partial.unlink(missing_ok=True)
 
 
+def _entries(directory: Path) -> list[Path]:
+    """
+    List a directory, or nothing when it cannot be listed, as a glob would.
+
+    :param directory: The directory.
+
+    :return: Its entries.
+    """
+    try:
+        return list(directory.iterdir())
+    except OSError:
+        return []
+
+
 def verify_output(
     output_dir: Path, epubcheck: bool = False
 ) -> tuple[int, int, list[str]]:
@@ -244,9 +258,15 @@ def verify_output(
     """
     options = ValidationOptions(enabled=True, epubcheck=epubcheck)
     # Files only, as the planner reads the shelf: a directory of this name was
-    # reported damaged, and a FIFO froze the whole check.
+    # reported damaged, and a FIFO froze the whole check. The extension in any
+    # case: a book copied through keeps the name it arrived with, and a glob
+    # for "*.epub" never read "Foo.EPUB". A partial is never a finished book.
     archives = sorted(
-        found for found in output_dir.glob(f"*{PACKAGE_SUFFIX}") if found.is_file()
+        found
+        for found in _entries(output_dir)
+        if found.suffix.lower() == PACKAGE_SUFFIX
+        and not found.name.startswith(PARTIAL_PREFIX)
+        and found.is_file()
     )
     damaged = 0
     broken: list[str] = []
