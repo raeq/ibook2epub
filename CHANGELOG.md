@@ -123,6 +123,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   and only onto a name that is still free; if it cannot be moved the run names
   the old file and exits 1 instead of starting a second note.
 
+- That now holds for a note written by 2.3.1 or earlier, which names no book,
+  and for the note of a book removed from Books and added again, tagged for
+  its old id: each moves with its renamed book instead of being left behind
+  while a second note is started. A namesake that keeps the old name (a
+  `Dune.pdf` beside the renamed `Dune.epub`) is no longer handed such a note
+  to write its own highlights over; the run names the note and exits 1, or
+  under `--on-collision suffix` numbers the namesake.
+
+- A package holding a file whose name is not valid UTF-8 is reported failed
+  with that file's name ("member name is not UTF-8"), instead of a bare codec
+  error that named no file.
+
 - A re-imported book whose note was adopted under different letter case has
   its highlights written into that note, and an older note whose `# `/`## `
   heading an editor trimmed is still recognised.
