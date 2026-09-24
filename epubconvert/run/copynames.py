@@ -122,6 +122,12 @@ def claim_copies(
         wanting, claim_order([name for _, name in wanting], shelf_names(output_dir))
     )
     wanted = {filesystem_key(policy.identity(name)) for _, name in copies if name}
+    # And the file a copy keeps: a package with no identifier to go by keeps
+    # the one numbered file of its name (claims.kept_numbers), which can be a
+    # copy's. Read, its identifier moves it on (placing.place); unread, it
+    # was reported exported from the copy's file. formal/RerunPlanner.tla
+    # found it.
+    wanted.update(filesystem_key(item.identity) for item in named if item.filename)
     return Names(_identified(assigned, wanted, policy, unopened), named)
 
 

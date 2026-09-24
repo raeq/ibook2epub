@@ -13,6 +13,7 @@ written again, and its own archive was listed as an orphan.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import shutil
 from collections import Counter
 from pathlib import Path
 from zipfile import ZipFile
@@ -20,7 +21,7 @@ from zipfile import ZipFile
 from epubconvert.collect import package as package_reader
 from epubconvert.run import run
 from tests.conftest import make_metadata_package, make_package, remove_tree
-from tests.test_copy_claims import SUFFIX, listing, shelf
+from tests.test_copy_claims import SUFFIX, identifier_of, listing, shelf, zipped_book
 
 AUTHOR_TITLE = ["--name-by", "author-title"]
 
@@ -66,6 +67,26 @@ class TestNamedFromTheFolder:
         run.main([*_argv(library, output_dir), "-q"])
 
         assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
+
+    def test_not_a_numbered_file_a_copy_keeps(self, tmp_path, output_dir, capsys):
+        # A zipped book copied as "Dune (2)" while a package of its name was
+        # left out of a run: the package, alone among the packages, kept the
+        # copy's file and was reported exported from it.
+        # formal/RerunPlanner.tla found it.
+        library = tmp_path / "lib"
+        zipped = zipped_book(tmp_path, library / "z" / "Dune.epub", "urn:uuid:Z")
+        shutil.copy2(zipped, output_dir / "Dune (2).epub")
+        make_metadata_package(
+            library / "p", "Dune.epub", title="Dune", identifier="urn:uuid:P"
+        )
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, *SUFFIX)
+        run.main([*_argv(library, output_dir), "-q"])
+
+        assert sorted(listed) == [("Dune.epub", "copied"), ("Dune.epub", "pending")]
+        assert identifier_of(output_dir / "Dune.epub") == "urn:uuid:P"
+        assert identifier_of(output_dir / "Dune (2).epub") == "urn:uuid:Z"
 
     def test_a_rerun_reads_nothing(self, tmp_path, output_dir, monkeypatch):
         library = tmp_path / "lib"
