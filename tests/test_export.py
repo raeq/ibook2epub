@@ -561,6 +561,64 @@ class TestACoverIsWrittenWholeOrNotAtAll:
         ]
 
 
+class TestACoverSuffixComesFromAShortList:
+    """
+    The cover's extension is taken from an href the book chose, and it names a
+    file in the output directory.
+    """
+
+    @staticmethod
+    def _book(tmp_path: Path, href: str) -> tuple[Path, Path]:
+        package = _cover_package(tmp_path / "lib" / "Book.epub")
+        images = package / "OEBPS" / "images"
+        (images / "cover.jpg").rename(images / href)
+        opf = package / "OEBPS" / "content.opf"
+        opf.write_text(
+            opf.read_text(encoding="utf-8").replace("cover.jpg", href),
+            encoding="utf-8",
+        )
+        target = tmp_path / "out" / "Book.epub"
+        target.parent.mkdir()
+        target.write_bytes(b"the book")
+        return package, target
+
+    @pytest.mark.parametrize("href", ["cover.EPUB", "cover.Epub"])
+    def test_a_cover_cannot_take_the_book_suffix_in_another_case(self, tmp_path, href):
+        # Regression: only cover == target_archive was refused, and that
+        # comparison is case-sensitive. Book.EPUB beside Book.epub is one file
+        # on a case-insensitive volume, so copying the shelf to one replaced
+        # the book with the image, or the image with the book.
+        package, target = self._book(tmp_path, href)
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert sorted(p.name for p in target.parent.iterdir()) == ["Book.epub"]
+
+    @pytest.mark.parametrize("href", ["cover.exe", "cover.html", "cover.plist"])
+    def test_a_suffix_that_is_not_an_image_is_refused(self, tmp_path, href):
+        package, target = self._book(tmp_path, href)
+
+        assert inspect_output.extract_cover(package, target) is None
+        assert sorted(p.name for p in target.parent.iterdir()) == ["Book.epub"]
+
+    @pytest.mark.parametrize(
+        ("href", "written"),
+        [
+            ("cover.JPG", "Book.jpg"),
+            ("cover.jpeg", "Book.jpeg"),
+            ("cover.PNG", "Book.png"),
+            ("cover.gif", "Book.gif"),
+            ("cover.webp", "Book.webp"),
+            ("cover.svg", "Book.svg"),
+        ],
+    )
+    def test_an_image_suffix_is_kept_in_lower_case(self, tmp_path, href, written):
+        package, target = self._book(tmp_path, href)
+
+        cover = inspect_output.extract_cover(package, target)
+
+        assert cover == target.with_name(written)
+
+
 def _cover_package(package: Path) -> Path:
     """Build a package whose OPF declares a cover image."""
     opf = """<?xml version="1.0"?>

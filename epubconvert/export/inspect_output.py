@@ -26,6 +26,13 @@ from ..utils.display import printable
 from ..utils.spec import PACKAGE_SUFFIX
 from .archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, file_mode
 
+#: Extensions a cover may be written under: the EPUB 3.3 core media types for
+#: images (GIF, JPEG, PNG, SVG, WebP), so every reader can show what lands
+#: beside a book. Never :data:`~epubconvert.utils.spec.PACKAGE_SUFFIX`, which
+#: would make the cover a second book -- or, on a case-insensitive volume, the
+#: book itself.
+COVER_SUFFIXES = frozenset({".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
+
 #: Guards the "cannot measure free space" warning so it is said once per
 #: process rather than once per sampling interval.
 _warned_about_free_space: set[bool] = set()
@@ -103,9 +110,23 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         # ".epub" would resolve to the archive itself and overwrite the book
         # with image bytes. Build the name from the stem instead, and refuse
         # any path that is not a new file beside the archive.
-        suffix = Path(href).suffix or ".jpg"
+        #
+        # The suffix is the book's choice, so it is lower-cased and held to
+        # the image types a reader must support. Refusing only the exact
+        # archive name was case-sensitive: "cover.EPUB" wrote Book.EPUB beside
+        # Book.epub, one file on the case-insensitive volume the shelf is
+        # copied to, and any other suffix put a file of the book's choosing
+        # -- ".html", ".exe" -- into the output directory.
+        suffix = (Path(href).suffix or ".jpg").lower()
+        if suffix not in COVER_SUFFIXES:
+            logger.debug(
+                "Not writing cover for %s: %s is not an image suffix",
+                target_archive.name,
+                printable(suffix),
+            )
+            return None
         cover = target_archive.parent / f"{target_archive.stem}{suffix}"
-        if cover == target_archive or not is_free(cover):
+        if not is_free(cover):
             logger.debug(
                 "Not writing cover for %s: %s is taken",
                 target_archive.name,
