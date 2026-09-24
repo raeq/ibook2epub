@@ -201,10 +201,10 @@ def _unmergeable(document: dict[str, Any]) -> str | None:
     reader's own went with the old envelope. This file is the one place
     highlights deleted in Books are kept, so it is refused, as any other file
     that is not the document expected is, rather than rewritten less some of
-    what it held. The schema allows no other key -- at the top, on an entry
-    or on an entry's book -- so the reader's are not carried through either:
-    one on an entry or its book was dropped without a word while one at the
-    top was refused.
+    what it held. The schema allows no other key -- at the top, in the
+    generator, on an entry or on an entry's book -- so the reader's are not
+    carried through either: one on an entry, its book or the generator was
+    dropped without a word while one at the top was refused.
 
     :param document: The export read back, already known to be an object
         holding an ``annotations`` list.
@@ -214,6 +214,9 @@ def _unmergeable(document: dict[str, Any]) -> str | None:
     extra = sorted(set(document) - ENVELOPE_KEYS)
     if extra:
         return f"has a top-level key this tool does not write ({extra[0]!r})"
+    generator = _foreign_generator(document)
+    if generator is not None:
+        return generator
     seen: set[str] = set()
     for position, entry in enumerate(document["annotations"], start=1):
         key = entry.get("id") if isinstance(entry, dict) else None
@@ -225,6 +228,30 @@ def _unmergeable(document: dict[str, Any]) -> str | None:
         foreign = _foreign_key(entry)
         if foreign is not None:
             return f"its annotation {position} has {foreign}"
+    return None
+
+
+def _foreign_generator(document: dict[str, Any]) -> str | None:
+    """
+    Say what in an export's generator the next write would not carry.
+
+    The generator is rebuilt on every write, as the envelope is, so a key of
+    the reader's there went with it. One that is not an object at all is
+    replaced whole, and is refused on the same terms. One that is missing
+    holds nothing to lose.
+
+    :param document: The export read back.
+
+    :return: What is wrong, as the end of a sentence, or None when nothing is.
+    """
+    if "generator" not in document:
+        return None
+    generator = document["generator"]
+    if not isinstance(generator, dict):
+        return "its generator is not an object"
+    extra = sorted(set(generator) - GENERATOR_KEYS)
+    if extra:
+        return f"its generator has a key this tool does not write ({extra[0]!r})"
     return None
 
 
@@ -246,11 +273,12 @@ def _foreign_key(entry: dict[str, Any]) -> str | None:
     return None
 
 
-#: The keys the export's schema allows at each level: the envelope, an
-#: annotation and its book. Read from the schema, so a key added there is
-#: allowed here; it allows no others at any of them.
+#: The keys the export's schema allows at each level: the envelope, its
+#: generator, an annotation and its book. Read from the schema, so a key added
+#: there is allowed here; it allows no others at any of them.
 _SCHEMA = schema.load(SCHEMA_PATH)
 ENVELOPE_KEYS = frozenset(_SCHEMA["properties"])
+GENERATOR_KEYS = frozenset(_SCHEMA["properties"]["generator"]["properties"])
 ENTRY_KEYS = frozenset(_SCHEMA["$defs"]["annotation"]["properties"])
 BOOK_KEYS = frozenset(_SCHEMA["$defs"]["book"]["properties"])
 

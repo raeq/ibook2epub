@@ -13,9 +13,12 @@ the writer chose, so it says nothing about what comes first in the file.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 # pylint: disable=protected-access
 
+import unicodedata
 import warnings
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
+
+import pytest
 
 from epubconvert.collect import validate
 from epubconvert.export.archive import zip_package
@@ -215,3 +218,44 @@ class TestNamesAFilesystemCannotTellApartAreReported:
         zip_package(package, tmp_path / "Book.epub")
 
         assert validate.validate_archive(tmp_path / "Book.epub") == []
+
+
+class TestFoldingIsCanonicalCaselessMatching:
+    """
+    ``casefold()`` of NFC text need not be NFC. Upper-case H-circumflex with a
+    macron below folds to ``ĥ`` and a macron below, while the lower-case pair,
+    written ``ẖ`` and a circumflex, stays apart: two names a case-insensitive
+    filesystem cannot tell apart got two keys, so --verify passed both and the
+    writer could replace one book with another.
+    """
+
+    @pytest.mark.parametrize(
+        ("upper", "lower"),
+        [("\u0124\u0331", "\u1e96\u0302"), ("\u0130\u0327", "i\u0327\u0307")],
+    )
+    def test_names_differing_only_by_case_share_a_key(self, upper, lower):
+        assert fold_name(upper) == fold_name(lower)
+        assert filesystem_key(f"{upper}.epub") == filesystem_key(f"{lower}.epub")
+
+    def test_the_validator_reports_them(self, tmp_path: Path):
+        path = TestNamesAFilesystemCannotTellApartAreReported._with(
+            tmp_path / "Marks.epub", "\u0124\u0331.xhtml", "\u1e96\u0302.xhtml"
+        )
+
+        problems = validate.validate_archive(path)
+
+        assert len(problems) == 1
+        assert problems[0].startswith("member names differ only by case")
+
+    @pytest.mark.parametrize(
+        "name",
+        ["Dune.epub", "Café Society.epub", "Straße.epub", "한국어 책.epub", "İstanbul"],
+    )
+    def test_an_ordinary_name_keeps_the_key_it_had(self, name):
+        # What fold_name returned before, so a shelf's names still match.
+        before = unicodedata.normalize("NFC", name).casefold()
+
+        assert fold_name(name) == before
+
+    def test_full_folding_is_kept(self):
+        assert fold_name("Straße") == fold_name("STRASSE")

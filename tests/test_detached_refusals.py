@@ -52,6 +52,11 @@ REFUSED = {
     "a key of the reader's own on an entry's book": _document(
         [{"id": "X", "text": "x", "book": {"title": "Dune", "shelfNote": "lent"}}]
     ),
+    "a key of the reader's own in the generator": _document(
+        [],
+        generator={"name": "ibook2epub", "version": "1.0.0", "readerNote": "mine"},
+    ),
+    "a generator that is not an object": _document([], generator="my own script"),
 }
 
 
@@ -126,6 +131,36 @@ class TestTheReadersOwnKeyIsNamed:
         assert refused is not None
         assert named in refused
         assert "annotation 2" in refused
+
+
+class TestTheGeneratorIsCheckedLikeEveryOtherLevel:
+    """
+    The envelope, each entry and each entry's book refused a key the schema
+    does not allow, and the generator, rebuilt on every write, did not: a
+    reader's key there went without a word on the next run.
+    """
+
+    def test_the_readers_key_is_named(self):
+        generator = {"name": "ibook2epub", "version": "1.0.0", "readerNote": "x"}
+
+        refused = detached._unmergeable(_document([], generator=generator))
+
+        assert refused is not None
+        assert "generator" in refused
+        assert "'readerNote'" in refused
+
+    def test_every_key_the_schema_allows_is_accepted(self):
+        allowed = schema.load(SCHEMA_PATH)["properties"]["generator"]["properties"]
+        generator = dict.fromkeys(allowed, "v")
+
+        assert detached._unmergeable(_document([], generator=generator)) is None
+
+    def test_a_file_with_no_generator_is_still_merged_into(self):
+        # Nothing of the reader's is there to drop.
+        document = _document([])
+        del document["generator"]
+
+        assert detached._unmergeable(document) is None
 
 
 class TestAFileItCanKeyIsStillMergedInto:

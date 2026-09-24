@@ -18,11 +18,17 @@ import stat
 import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import IO, Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
-from ..collect.package import open_member, read_member, repeated_entries
+from ..collect.package import (
+    ValidationError,
+    open_member,
+    open_regular,
+    read_member,
+    repeated_entries,
+)
 from ..collect.validate import ArchiveInvalidError, ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
@@ -787,8 +793,9 @@ def replace_annotations(
     :return: True if the archive was rewritten, False if it already said this.
 
     :raises NoRoomError: If *room* said there is no room for the copy.
-    :raises ArchiveInvalidError: If the archive's directory lists a member
-        more than once, by name or by a shared local header.
+    :raises ArchiveInvalidError: If the archive is not a regular file, or its
+        directory lists a member more than once, by name or by a shared local
+        header.
     """
     # An empty set is not an instruction to delete. A package that arrived
     # carrying its own annotations lost them silently when this run happened
@@ -799,7 +806,7 @@ def replace_annotations(
     partial: Path | None = None
     target_archive, mode = _what_to_replace(target_archive)
     try:
-        with ZipFile(target_archive) as reading:
+        with _open_shelved(target_archive) as opened, ZipFile(opened) as reading:
             # Each listing of a member would be inflated and written again.
             repeated = repeated_entries(reading)
             if repeated is not None:
@@ -849,6 +856,28 @@ def replace_annotations(
             partial.unlink(missing_ok=True)
         raise
     return True
+
+
+def _open_shelved(path: Path) -> IO[bytes]:
+    """
+    Open an archive on the shelf for reading, if it is a regular file.
+
+    Judged on the descriptor, as every other reader of an archive is. The
+    refresh opened it by name, so a FIFO swapped in for the book was opened
+    for reading and waited on for ever.
+
+    :param path: The archive.
+
+    :return: A binary stream, positioned at the start.
+
+    :raises ArchiveInvalidError: If it is not a regular file, which a refresh
+        counts as a book it could not refresh.
+    :raises OSError: If it cannot be opened.
+    """
+    try:
+        return open_regular(path)
+    except ValidationError as exc:
+        raise ArchiveInvalidError(path.name, [str(exc)]) from exc
 
 
 def _rebuild(

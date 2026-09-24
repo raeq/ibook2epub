@@ -52,10 +52,24 @@ OPF_NS = "http://www.idpf.org/2007/opf"
 DC_NS = "http://purl.org/dc/elements/1.1/"
 
 #: Cap on the *stored* size of XML read from an archive. This bounds the read,
-#: not the parse: ElementTree expands internal entities, so a small document
-#: can still expand to something far larger, and this limit does not prevent
-#: that. It exists to reject implausible files early, not as a memory bound.
+#: not the parse: 16 MiB of ``<a/>`` is 4M elements. What the parse may build
+#: is bounded by :data:`MAX_XML_ELEMENTS` and :data:`MAX_XML_DEPTH`, and by
+#: refusing an internal DTD subset, which could expand it further still.
 MAX_XML_BYTES = 16 * 1024 * 1024
+
+#: The most elements a document from a book may hold. A package document
+#: holds about two per member -- an ``<item>`` and, for text, an ``<itemref>``
+#: -- so this allows some 100,000 members. Measured: a book of 20,000
+#: illustrated pages, each in the spine, declares 60,000 elements and parses
+#: in 0.16 s and 30 MB; a package document at this limit, in 0.5 s and 92 MB.
+#: 16 MiB of empty elements, which the byte cap allows, cost 0.4 GB and 4 s
+#: on every read of the book.
+MAX_XML_ELEMENTS = 200_000
+
+#: The deepest a document from a book may nest. A package document nests
+#: three deep, ``container.xml`` three, ``encryption.xml`` five or six; one
+#: nesting 2M deep, in 14 KB stored, cost 0.6 GB to read.
+MAX_XML_DEPTH = 1_000
 
 #: What reading a damaged member can raise. A bad CRC is a BadZipFile, but a
 #: damaged compressed stream raises out of its decompressor instead: zlib.error
@@ -306,14 +320,18 @@ def _element(members: _Members, name: str) -> ElementTree.Element:
     data = members.read(name)
     try:
         return parse_xml(data)
-    except EntityDeclarationError as exc:
+    except RefusedDocumentError as exc:
         raise ValidationError(f"{name} {exc}") from exc
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{name} is not valid XML: {exc}") from exc
 
 
-class EntityDeclarationError(ElementTree.ParseError):
-    """Raised for a document from a book that declares an XML entity."""
+class RefusedDocumentError(ElementTree.ParseError):
+    """Raised for a document from a book that is refused before it is parsed."""
+
+
+#: Why a document with an internal DTD subset is refused.
+INTERNAL_SUBSET = "declares a DTD internal subset, which is not allowed"
 
 
 def parse_xml(data: bytes) -> ElementTree.Element:
@@ -327,7 +345,7 @@ def parse_xml(data: bytes) -> ElementTree.Element:
     whole run. Every reader of a book's XML parses through here, so there is
     one exception to catch.
 
-    A document that declares an entity is refused here too, for the same
+    A document :func:`_refusal` refuses is refused here too, for the same
     reason: the rule was applied beside only two of the readers, and the
     encryption declaration, parsed by the third, went without it.
 
@@ -336,30 +354,44 @@ def parse_xml(data: bytes) -> ElementTree.Element:
     :return: The root element.
 
     :raises ElementTree.ParseError: If the document cannot be parsed, for
-        whatever reason; :class:`EntityDeclarationError`, one of them, if it
-        declares an entity.
+        whatever reason; :class:`RefusedDocumentError`, one of them, if it is
+        refused unparsed.
     """
-    if _declares_entities(data):
-        raise EntityDeclarationError("declares XML entities, which are not allowed")
+    refusal = _refusal(data)
+    if refusal is not None:
+        raise RefusedDocumentError(refusal)
     try:
         return ElementTree.fromstring(data)
     except (ValueError, LookupError) as exc:
         raise ElementTree.ParseError(f"unreadable encoding: {exc}") from exc
 
 
-def _declares_entities(data: bytes) -> bool:
+def _refusal(data: bytes) -> str | None:
     """
-    Report whether a document declares XML entities.
+    Say why a document must not be parsed into a tree, if it must not.
 
-    A package document is attacker-controlled, and an entity declaration lets a
-    small file expand into a large one. :data:`MAX_XML_BYTES` cannot see it: the
-    cap measures the file, and the expansion happens after it is read.
+    A package document is attacker-controlled, and an internal DTD subset lets
+    a small file build a large tree. An entity declaration expands a reference
+    into as much text as it likes; an ``ATTLIST`` default is copied onto every
+    element it names, so a 1.6 KB book declaring a 1 MB default for
+    ``<item>`` reached 2.9 GB, and --verify and --list died of MemoryError.
+    Only entity declarations were refused, so that one went straight past.
+    :data:`MAX_XML_BYTES` sees neither: the cap measures the file, and the
+    expansion happens after it is read.
 
-    expat has capped the amplification factor since 2.4, so a current Python
-    already refuses the classic attack. That protection is implicit, silent and
-    version-dependent, and this tool supports Python 3.10 and newer. The rule is
-    stated here so it belongs to the tool rather than to whichever expat the
-    interpreter was built against.
+    So the internal subset is refused whole, whatever it declares -- entities,
+    attribute defaults, elements, notations -- rather than one declaration at
+    a time. A package document, ``container.xml`` and ``encryption.xml`` have
+    no use for one: of 2,804 package documents in a real library, one carries
+    a DOCTYPE, bare, and none declares anything. A bare ``<!DOCTYPE html>``
+    or one naming only an external DTD is still read, since expat never loads
+    an external subset.
+
+    expat has capped entity amplification since 2.4, so a current Python
+    already refuses the classic attack. That protection is implicit, silent,
+    version-dependent and says nothing of attribute defaults, and this tool
+    supports Python 3.10 and newer. The rule is stated here so it belongs to
+    the tool rather than to whichever expat the interpreter was built against.
 
     Asked of the parser rather than worked out by reading the bytes. Two
     hand-written scans of the ``DOCTYPE`` declaration were defeated in turn --
@@ -367,43 +399,85 @@ def _declares_entities(data: bytes) -> bool:
     a decoy ``<!DOCTYPE`` -- because each had to re-derive where the declaration
     starts and ends. expat already knows, so it is asked.
 
-    The parse stops at the first declaration. Parsed to the end, it expanded
-    every reference it met before the answer was given, so the one check
-    meant to spare the tool an expansion performed it, and a billion-laughs
-    document was stopped only by expat's own limit where it has one.
+    The same pass counts the tree the parse would build, and refuses one of
+    more than :data:`MAX_XML_ELEMENTS` elements or nested deeper than
+    :data:`MAX_XML_DEPTH`, stopping as soon as either is passed.
+
+    The parse stops at the start of the subset, before anything in it is
+    declared. Parsed to the end, it expanded every reference it met before the
+    answer was given, so the one check meant to spare the tool an expansion
+    performed it.
 
     A malformed document is left alone here and refused by the parse that
     follows, which reports it better.
 
     :param data: The raw bytes of the document.
 
-    :return: True if the document declares any entity.
+    :return: Why the document is refused, or None if it may be parsed.
     """
     parser = expat.ParserCreate()
-    parser.EntityDeclHandler = _stop_at_declaration
+    parser.StartDoctypeDeclHandler = _doctype
+    budget = _Budget()
+    parser.StartElementHandler = budget.start
+    parser.EndElementHandler = budget.end
+    # A list is cheaper to build than a dict, and neither is looked at.
+    parser.ordered_attributes = True
     try:
         parser.Parse(data, True)
-    except _EntityDeclaredError:
-        return True
+    except _RefusedError as refused:
+        return str(refused)
     except (expat.ExpatError, ValueError, LookupError):
         # An encoding expat refuses is malformed for this purpose too, and
         # raised LookupError from here, ahead of the parse that reports it.
-        return False
-    return False
+        return None
+    return None
 
 
-class _EntityDeclaredError(Exception):
-    """Raised out of expat to stop a parse at an entity declaration."""
+class _RefusedError(Exception):
+    """Raised out of expat to stop a parse at what refuses the document."""
 
 
-def _stop_at_declaration(*_args: object) -> None:
+class _Budget:
+    """Counts the elements a document opens, and how deep they nest."""
+
+    def __init__(self) -> None:
+        self.elements = 0
+        self.depth = 0
+
+    def start(self, _name: str, _attributes: list[str]) -> None:
+        """
+        Count an element opened.
+
+        :raises _RefusedError: If it is one too many, or one too deep.
+        """
+        self.elements += 1
+        self.depth += 1
+        if self.elements > MAX_XML_ELEMENTS:
+            raise _RefusedError(
+                f"holds more than {MAX_XML_ELEMENTS} elements, which is not allowed"
+            )
+        if self.depth > MAX_XML_DEPTH:
+            raise _RefusedError(
+                f"nests elements more than {MAX_XML_DEPTH} deep, which is not allowed"
+            )
+
+    def end(self, _name: str) -> None:
+        """Count an element closed."""
+        self.depth -= 1
+
+
+def _doctype(
+    _name: str, _system: str | None, _public: str | None, has_internal_subset: int
+) -> None:
     """
-    Stop the parse: an entity has been declared, and nothing more is needed.
+    Stop the parse at the start of an internal subset.
 
-    :raises _EntityDeclaredError: Always. expat abandons the parse and ``Parse``
-        raises it, before any content, and so any reference, is reached.
+    :raises _RefusedError: If the declaration has one. expat abandons the
+        parse and ``Parse`` raises it, before anything in the subset is
+        declared, and so before any content is reached.
     """
-    raise _EntityDeclaredError
+    if has_internal_subset:
+        raise _RefusedError(INTERNAL_SUBSET)
 
 
 def _opf_path(members: _Members) -> str:

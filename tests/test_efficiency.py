@@ -480,7 +480,10 @@ class TestEncryptionIsReadInOnePass:
     book was even judged.
     """
 
-    def test_deep_nesting_costs_linear_time(self, tmp_path):
+    def test_deep_nesting_costs_linear_time(self, tmp_path, monkeypatch):
+        # Deeper than a book may nest, so the walk is what is measured: at
+        # the depth allowed, even the quadratic walk took milliseconds.
+        monkeypatch.setattr(package_reader, "MAX_XML_DEPTH", 20_000)
         package = tmp_path / "Nested.epub"
         (package / "META-INF").mkdir(parents=True)
         (package / "META-INF" / "encryption.xml").write_bytes(_nested_blocks(12000))
@@ -492,6 +495,16 @@ class TestEncryptionIsReadInOnePass:
         assert found == {FONTS}
         # Linear is a few milliseconds; quadratic was seconds here.
         assert elapsed < 1.0
+
+    def test_nesting_deeper_than_a_book_may_fails_closed(self, tmp_path):
+        package = tmp_path / "Nested.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "encryption.xml").write_bytes(_nested_blocks(12000))
+
+        protected, reason = source.has_drm(package)
+
+        assert protected is True
+        assert "deep" in (reason or "")
 
     def test_a_method_deeper_in_a_block_still_names_its_algorithm(self, tmp_path):
         # The walk changed, not the rule: a method anywhere inside a block

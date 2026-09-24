@@ -814,7 +814,7 @@ class TestEntityDeclarationsAreRefused:
             "<dc:title>&b;</dc:title></metadata><manifest/><spine/></package>"
         )
 
-        with pytest.raises(package_reader.ValidationError, match="entities"):
+        with pytest.raises(package_reader.ValidationError, match="internal subset"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_parameter_entity_is_refused(self, tmp_path):
@@ -824,7 +824,7 @@ class TestEntityDeclarationsAreRefused:
             "<manifest/><spine/></package>"
         )
 
-        with pytest.raises(package_reader.ValidationError, match="entities"):
+        with pytest.raises(package_reader.ValidationError, match="internal subset"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_quoted_angle_bracket_does_not_end_the_scan(self, tmp_path):
@@ -839,7 +839,7 @@ class TestEntityDeclarationsAreRefused:
             "<dc:title>&x;</dc:title></metadata><manifest/><spine/></package>"
         )
 
-        with pytest.raises(package_reader.ValidationError, match="entities"):
+        with pytest.raises(package_reader.ValidationError, match="internal subset"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_single_quoted_angle_bracket_is_handled_too(self, tmp_path):
@@ -850,7 +850,7 @@ class TestEntityDeclarationsAreRefused:
             "<manifest/><spine/></package>"
         )
 
-        with pytest.raises(package_reader.ValidationError, match="entities"):
+        with pytest.raises(package_reader.ValidationError, match="internal subset"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_a_doctype_without_entities_is_allowed(self, tmp_path):
@@ -894,7 +894,7 @@ class TestEntityDeclarationsAreRefused:
             encoding="utf-8",
         )
 
-        with pytest.raises(package_reader.ValidationError, match="entities"):
+        with pytest.raises(package_reader.ValidationError, match="internal subset"):
             package_reader.read_package_dir(package)
 
     def test_an_archive_is_guarded_the_same_way(self, tmp_path):
@@ -917,7 +917,7 @@ class TestEntityDeclarationsAreRefused:
 
         with (
             ZipFile(path) as archive_file,
-            pytest.raises(package_reader.ValidationError, match="entities"),
+            pytest.raises(package_reader.ValidationError, match="internal subset"),
         ):
             package_reader.read_package(archive_file)
 
@@ -935,7 +935,7 @@ class TestEntityDeclarationsAreRefused:
             "<dc:title>&x;</dc:title></metadata><manifest/><spine/></package>"
         )
 
-        with pytest.raises(package_reader.ValidationError, match="entities"):
+        with pytest.raises(package_reader.ValidationError, match="internal subset"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_an_external_entity_is_refused_as_a_declaration(self, tmp_path):
@@ -945,7 +945,7 @@ class TestEntityDeclarationsAreRefused:
             "<manifest/><spine/></package>"
         )
 
-        with pytest.raises(package_reader.ValidationError, match="entities"):
+        with pytest.raises(package_reader.ValidationError, match="internal subset"):
             package_reader.read_package_dir(self._package(tmp_path, opf))
 
     def test_the_check_stops_at_the_first_declaration(self, monkeypatch):
@@ -962,7 +962,7 @@ class TestEntityDeclarationsAreRefused:
         monkeypatch.setattr(expat, "ParserCreate", watched)
         document = b'<!DOCTYPE d [<!ENTITY a "x"><!ENTITY b "y">]><d>&a;&b;&a;</d>'
 
-        with pytest.raises(package_reader.EntityDeclarationError):
+        with pytest.raises(package_reader.RefusedDocumentError):
             package_reader.parse_xml(document)
 
         assert expanded == []
@@ -976,5 +976,5 @@ class TestEntityDeclarationsAreRefused:
         )
         document = f"<!DOCTYPE d [{entities}]><d>&i;</d>".encode("ascii")
 
-        with pytest.raises(package_reader.EntityDeclarationError):
+        with pytest.raises(package_reader.RefusedDocumentError):
             package_reader.parse_xml(document)
