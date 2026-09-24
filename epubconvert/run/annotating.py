@@ -725,6 +725,7 @@ def _refresh_each(
             tally.stopped = True
             return
         except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
+            _reraise_interrupt(exc)
             # BadZipFile is not an OSError, so one damaged archive used to
             # abort the whole refresh and every book after it went untouched;
             # nor is what a damaged compressed stream raises, which did the
@@ -733,6 +734,28 @@ def _refresh_each(
             # exit code says a book was left behind.
             tally.failed += 1
             logger.error("Could not refresh %s: %s", printable(target.name), exc)
+
+
+def _reraise_interrupt(exc: BaseException) -> None:
+    """
+    Raise the Ctrl-C behind an error, if one is there.
+
+    A Ctrl-C landing in zipfile's close of one member leaves that member's
+    writing handle open, and closing the archive then raises ValueError with
+    the KeyboardInterrupt as its context. Taken for a book that could not be
+    read, the refresh went on past the Ctrl-C and exited 1.
+
+    :param exc: The error a rebuild ended with.
+
+    :raises KeyboardInterrupt: If one is in its chain of causes.
+    """
+    seen: set[int] = set()
+    cause: BaseException | None = exc
+    while cause is not None and id(cause) not in seen:
+        if isinstance(cause, KeyboardInterrupt):
+            raise cause
+        seen.add(id(cause))
+        cause = cause.__cause__ or cause.__context__
 
 
 def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
