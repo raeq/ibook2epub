@@ -382,6 +382,23 @@ def sidecar_for(target: Path) -> Path:
     return target.with_name(truncate_bytes(stem, budget) + marker + SIDECAR_SUFFIX)
 
 
+def _present(target: Path) -> bool:
+    """
+    Report whether *target* exists, raising when that cannot be established.
+
+    :param target: The path to test.
+
+    :return: True if something is there, False if nothing is.
+
+    :raises OSError: For any error other than the ones meaning "absent".
+    """
+    try:
+        target.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
 def readable(target: Path) -> bool:
     """
     Whether this path is a note that can safely be read back.
@@ -611,10 +628,12 @@ def _write_one(  # pylint: disable=too-many-return-statements
     :return: One of :data:`OUTCOMES`.
     """
     try:
-        # Inside the handler: exists() answers False only for a few errors
-        # and raises the rest. A name past NAME_MAX raised ENAMETOOLONG from
-        # here, outside any handler, and took the whole vault with it.
-        present = target.exists()
+        # Inside the handler, and not exists(): a name past NAME_MAX raised
+        # ENAMETOOLONG from exists() outside any handler and took the whole
+        # vault with it, and from Python 3.14 exists() answers False to every
+        # error, which reads "could not check" as "absent". Only the errors
+        # that mean absent are taken as absent here.
+        present = _present(target)
         if present and not readable(target):
             # A FIFO blocks read_text until a writer appears, which is never;
             # an oversized file costs twice its size to read. Neither is a

@@ -704,11 +704,16 @@ class TestFailuresThatDoNotNeedAPermissionBit:
 
         assert notes._write_one(target, self._annotations()) == "unreadable"
 
+    @pytest.mark.parametrize("exists", ["raises", "answers"])
     def test_a_name_the_filesystem_refuses_costs_one_note_not_the_run(
-        self, tmp_path: Path
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exists: str
     ):
-        # exists() raises ENAMETOOLONG rather than answering False, and it was
-        # called outside any handler.
+        # exists() raised ENAMETOOLONG rather than answering False, and it was
+        # called outside any handler. Python 3.14 made it answer False to every
+        # error instead, which read "cannot check" as "absent": the same note
+        # then came out "failed" there and "unreadable" everywhere else.
+        if exists == "answers":
+            monkeypatch.setattr(Path, "exists", os.path.exists)
         target = tmp_path / ("A" * 300 + ".md")
 
         assert notes._write_one(target, self._annotations()) == "unreadable"
