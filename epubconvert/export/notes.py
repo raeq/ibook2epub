@@ -363,50 +363,52 @@ def split(text: str) -> Split | None:
     """
     Divide an existing note into its four regions.
 
-    Structural rather than semantic: line 1 is ``---``, scan to the next
-    ``---``, the next line is the start marker. Deliberately not YAML parsing --
-    answering this from the frontmatter would mean parsing YAML a reader has
-    edited, with nested maps, block scalars and plugin keys, and this project
-    has no YAML reader nor should it acquire one it must then keep correct.
+    Structural rather than semantic: the first start marker, and everything
+    above it is the head. Deliberately not YAML parsing -- answering this from
+    the frontmatter would mean parsing YAML a reader has edited, with nested
+    maps, block scalars and plugin keys, and this project has no YAML reader
+    nor should it acquire one it must then keep correct.
 
-    Or line 1 is the start marker, and the head is empty. The frontmatter is
-    the reader's, and one who deleted every property deleted the fences too;
-    requiring them called this tool's own note foreign, failed every run and
-    never updated it again. Absent stays absent, as any other edit to the
-    frontmatter stays.
+    The head is the reader's whatever it holds. The marker was looked for only
+    straight after the closing ``---``, or on line 1 once the reader deleted
+    the frontmatter, so a blank line or a ``Related: [[X]]`` above it called
+    this tool's own note foreign, failed every run and never updated it
+    again. The first marker is the real one: every line of the generated
+    region that could pass for one is escaped (:func:`_unforged`), and the
+    frontmatter above it quotes every value.
 
     :param text: The file's contents, already decoded.
 
     :return: The regions, or None when this file is not one of ours.
     """
     lines = normalise(text).split("\n")
-    if START_PATTERN.match(lines[0]):
-        return _regions("", lines[0], lines[1:])
-    if lines[0].rstrip() != "---":
+    start = _first_start(lines)
+    if start is None:
         return None
-    for index in range(1, len(lines)):
-        if lines[index].rstrip() != "---":
-            continue
-        if index + 1 >= len(lines):
-            return None
-        head = "\n".join(lines[: index + 1]) + "\n"
-        return _regions(head, lines[index + 1], lines[index + 2 :])
+    index, found = start
+    head = "\n".join(lines[:index]) + "\n" if index else ""
+    return _regions(head, found, lines[index + 1 :])
+
+
+def _first_start(lines: list[str]) -> tuple[int, re.Match[str]] | None:
+    """Find the first start marker, and the line it is on, if any line is one."""
+    for index, line in enumerate(lines):
+        found = START_PATTERN.match(line)
+        if found:
+            return index, found
     return None
 
 
-def _regions(head: str, marker: str, rest: list[str]) -> Split | None:
+def _regions(head: str, found: re.Match[str], rest: list[str]) -> Split | None:
     """
-    Divide what follows the frontmatter at the end marker.
+    Divide what follows the start marker at the end marker.
 
-    :param head: The frontmatter, fences included, or "" when there is none.
-    :param marker: The line that should be the start marker.
+    :param head: Everything above the start marker, or "" when nothing is.
+    :param found: The start marker.
     :param rest: Every line after it.
 
     :return: The regions, or None when this file is not one of ours.
     """
-    found = START_PATTERN.match(marker)
-    if not found:
-        return None
     for offset, line in enumerate(rest):
         if END_PATTERN.match(line.rstrip()):
             return Split(
@@ -533,8 +535,8 @@ def wrote_it(existing: str) -> bool:
 
     :param existing: The note as it stands.
 
-    :return: True when it carries this tool's start marker, below the
-        frontmatter or, when the reader has deleted that, on line 1.
+    :return: True when it carries this tool's start marker, wherever the
+        reader's head leaves it.
     """
     return _start_marker_of(existing) is not None
 
@@ -545,17 +547,10 @@ def _start_marker_of(existing: str) -> re.Match[str] | None:
 
     :param existing: The note as it stands.
 
-    :return: The marker, below the frontmatter or on line 1, or None.
+    :return: The first start marker, or None.
     """
-    lines = normalise(existing).split("\n")
-    if lines[0].rstrip() != "---":
-        return START_PATTERN.match(lines[0])
-    for index in range(1, len(lines)):
-        if lines[index].rstrip() == "---":
-            if index + 1 >= len(lines):
-                return None
-            return START_PATTERN.match(lines[index + 1])
-    return None
+    start = _first_start(normalise(existing).split("\n"))
+    return None if start is None else start[1]
 
 
 def book_tags(found: list[dict[str, Any]]) -> set[str]:

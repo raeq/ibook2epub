@@ -712,7 +712,7 @@ them there. So the file has four parts, and the tool owns exactly one of them:
 
 | | |
 |---|---|
-| the frontmatter | yours, and Obsidian's — add tags and aliases freely |
+| the frontmatter, and anything else above the marker line | yours, and Obsidian's — add tags, aliases and links freely |
 | the marker line | the tool's |
 | the highlights between the markers | the tool's |
 | everything below the end marker | yours |
