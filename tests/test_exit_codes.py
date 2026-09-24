@@ -20,6 +20,7 @@ import pytest
 
 from epubconvert.collect import annotations
 from epubconvert.collect import library as library_module
+from epubconvert.collect.coredata import ContainerPermissionError
 from epubconvert.export import naming
 from epubconvert.run import annotating, convert, run
 from epubconvert.utils import exits
@@ -343,6 +344,40 @@ class TestTheDocumentedTableMatchesTheCode:
         }
 
         assert named == {exits.NO_PERMISSION}
+
+    @pytest.mark.parametrize("flags", [["-ae"], ["-ad", "highlights.json"]])
+    def test_the_readme_says_which_runs_a_refusal_does_not_stop(
+        self, tmp_path, monkeypatch, capsys, flags
+    ):
+        # "Without it you get exit code 8" was said of every annotation flag,
+        # but a run that converts books logs the refusal and goes on: the books
+        # are the point. Only -ao and -ar, where the highlights are the whole
+        # run, exit 8, so a script watching -ae for 8 never saw it.
+        def refuse(**_kwargs):
+            raise ContainerPermissionError("Operation not permitted")
+
+        monkeypatch.setattr("epubconvert.run.annotating.collect_annotations", refuse)
+        source = tmp_path / "lib"
+        make_package(source, "Alpha.epub")
+        out = tmp_path / "out"
+        flags = [str(tmp_path / f) if f.endswith(".json") else f for f in flags]
+
+        code = run.main(["-s", str(source), "-o", str(out), "-q", *flags])
+
+        assert code == exits.SUCCESS
+        assert (out / "Alpha.epub").is_file()
+        logged = "Could not read annotations"
+        assert logged in capsys.readouterr().err
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(
+            encoding="utf-8"
+        )
+        paragraph = " ".join(
+            next(p for p in readme.split("\n\n") if "needs Full Disk Access" in p)
+            .replace("\n", " ")
+            .split()
+        )
+        for route in ("`-ao`", "`-ar`", "`-ae`", "`-ad`", logged):
+            assert route in paragraph
 
     def test_a_valid_archive_still_verifies_clean(self, output_dir, tmp_path):
         source = tmp_path / "lib"

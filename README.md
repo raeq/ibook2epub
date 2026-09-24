@@ -651,8 +651,11 @@ standard error, because a run summary in the middle of the JSON would make it
 unparsable.
 
 **On macOS this needs Full Disk Access.** The databases live inside Apple's
-container. Without it you get exit code 8 and a message saying so, not a
-traceback.
+container. Without it, `-ao` and `-ar`, where the highlights are the whole run,
+stop with exit code 8 and a message saying so, not a traceback. `-ae` and `-ad`
+log the same message, `Could not read annotations`, and convert the books
+anyway, since the books are the point; the exit code then describes the
+conversion, so a script that needs the highlights should watch for that line.
 
 #### Straight into an Obsidian vault
 
