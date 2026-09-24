@@ -185,11 +185,30 @@ def source_identifier(source: Path) -> str | None:
     """
     Read the usable identifier of a book in the library.
 
+    Remembered while the book is unchanged, as :func:`identifier_on_shelf`
+    remembers an archive's: a run and ``--list`` each place the library
+    three times -- to settle the copies, for the plan and for the orphan
+    check -- and a book renamed by case had its package document read at
+    each. A package directory is keyed on its own ``stat``, which changes as
+    entries are added or removed; within one run nothing rewrites it.
+
     :param source: A package directory, or a file copied through.
 
     :return: Its identifier, or None when it has none or cannot be read, as
         for a PDF.
     """
+    try:
+        status = source.stat()
+    except OSError:
+        return None
+    return _source_identifier_of(
+        source, (status.st_ino, status.st_mtime_ns, status.st_size)
+    )
+
+
+@lru_cache(maxsize=REMEMBERED)
+def _source_identifier_of(source: Path, _stamp: tuple[int, int, int]) -> str | None:
+    """Read a book's identifier; *_stamp* only keys what is remembered."""
     try:
         if source.is_dir():
             return usable_identifier(read_package_dir(source))
