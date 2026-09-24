@@ -332,3 +332,87 @@ class TestLockDiagnostics:
 
         with convert.output_lock(output_dir):
             pass  # acquired without complaint
+
+
+class TestAReportIgnoresNoTypedFlag:
+    """
+    ``--list`` and ``--verify`` refused only annotation flags beside them, so
+    a conversion flag either report never consults was dropped without a word:
+    ``--verify --match X`` verified, and exited 7 for, books outside X.
+    Judged against the parser's defaults, as the convert-nothing modes are.
+    """
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            ["--match", "hobbit"],
+            ["-f"],
+            ["--covers"],
+            ["--refresh"],
+            ["--skip-incomplete"],
+            ["-m", "1"],
+            ["--workers", "3"],
+            ["--min-free", "1"],
+            ["--no-copy-through"],
+            ["--no-shuffle"],
+            # It names nothing: it opens whatever *.epub the shelf holds.
+            ["-p"],
+            ["--portable-names", "romanize"],
+            ["--name-by", "author-title"],
+            ["--on-collision", "suffix"],
+        ],
+    )
+    def test_verify_refuses_what_it_never_consults(self, other):
+        # It checks every archive in the output directory. --match names
+        # books in the library to convert, not archives on the shelf, whose
+        # names differ under any metadata naming policy.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args(["--verify", *other])
+
+        assert refused.value.code == 2
+
+    @pytest.mark.parametrize("check", [["--epubcheck"], ["--validate"]])
+    def test_verify_keeps_the_checks_it_runs(self, check):
+        assert cli.parse_args(["--verify", *check]).verify
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            ["--covers"],
+            ["--validate"],
+            ["--epubcheck"],
+            ["-m", "1"],
+            ["--min-free", "1"],
+            ["--no-shuffle"],
+        ],
+    )
+    def test_list_refuses_what_it_never_consults(self, other):
+        # "--list --covers --validate -m 1 --min-free 1 --no-shuffle" listed
+        # every book exactly as a bare --list did, and exited 0.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args(["--list", *other])
+
+        assert refused.value.code == 2
+
+    @pytest.mark.parametrize(
+        "shaping",
+        [
+            ["--match", "hobbit"],
+            ["-f"],
+            ["--refresh"],
+            ["--skip-incomplete"],
+            ["--no-copy-through"],
+            ["--workers", "3"],
+        ],
+    )
+    def test_list_keeps_what_changes_the_listing(self, shaping):
+        # --match narrows it; -f, --refresh and --skip-incomplete change the
+        # status the planner gives a book; --no-copy-through changes what is
+        # claimed and so what is an orphan; --workers sizes the pool that
+        # names the files copied through.
+        assert cli.parse_args(["--list", *shaping]).list_only
+
+    def test_a_flag_typed_as_its_default_changes_nothing_and_passes(self):
+        default = str(defaults.DEFAULT_MAX_EXPORT_FILES)
+
+        assert cli.parse_args(["--verify", "-m", default]).verify

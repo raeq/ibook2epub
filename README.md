@@ -651,8 +651,11 @@ standard error, because a run summary in the middle of the JSON would make it
 unparsable.
 
 **On macOS this needs Full Disk Access.** The databases live inside Apple's
-container. Without it you get exit code 8 and a message saying so, not a
-traceback.
+container. Without it, `-ao` and `-ar`, where the highlights are the whole run,
+stop with exit code 8 and a message saying so, not a traceback. `-ae` and `-ad`
+log the same message, `Could not read annotations`, and convert the books
+anyway, since the books are the point; the exit code then describes the
+conversion, so a script that needs the highlights should watch for that line.
 
 #### Straight into an Obsidian vault
 
@@ -706,6 +709,10 @@ paragraphs underneath — the next run still adds your new highlights and leaves
 all of it alone. Edit *inside* the highlights and the tool stops touching that
 note entirely, putting the new ones in a `.md.new` beside it so you never have
 to choose between keeping your edits and getting your highlights.
+
+A file at a note's path that the tool did not write, or one it cannot read,
+is never touched either. That book's highlights then reach no file at all, so
+the run names the file and exits `1`; move it aside and rerun.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
@@ -1010,7 +1017,9 @@ code that leads is the one that agrees with it; the other reason is on stderr.
 Name collisions do **not** change the exit code. If you run this from a script
 or a cron job and need to know that books were skipped, check the summary line
 or watch for `Name collision, skipping:` in the log — a run that skips books
-for that reason still exits `0`.
+for that reason still exits `0`. A vault run (`--annotations-format markdown`)
+has no note name for a book that lost a collision either, and names the ones
+whose highlights it therefore left out: watch for `lost a name collision`.
 
 ## Development
 

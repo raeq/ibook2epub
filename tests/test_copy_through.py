@@ -329,15 +329,14 @@ class TestRenamedCopiesStayConsistentWithTheShelf:
             str(library),
             "-o",
             str(output_dir),
-            "-m",
-            "0",
             "--name-by",
             "author-title",
             "-q",
         ]
-        run.main(flags)
+        run.main([*flags, "-m", "0"])
         capsys.readouterr()
 
+        # Without -m, which --list refuses: it lists every book regardless.
         run.main(flags + ["--list"])
 
         assert "orphan" not in capsys.readouterr().out

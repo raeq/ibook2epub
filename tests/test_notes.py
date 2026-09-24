@@ -50,6 +50,18 @@ def _annotation(**overrides: Any) -> dict[str, Any]:
     return item
 
 
+def _yaml_printable(char: str) -> bool:
+    """YAML 1.2's printable set (5.1): what a stream may carry unescaped."""
+    code = ord(char)
+    return (
+        char in "\t\n\r\x85"
+        or 0x20 <= code <= 0x7E
+        or 0xA0 <= code <= 0xD7FF
+        or 0xE000 <= code <= 0xFFFD
+        or code >= 0x10000
+    )
+
+
 class TestFrontmatter:
     def test_a_title_holding_a_colon_stays_one_property(self):
         # 298 titles in a surveyed library contain ": ", which starts a mapping.
@@ -79,6 +91,20 @@ class TestFrontmatter:
 
         assert line.startswith('title: "')
         assert line.endswith('"')
+
+    @pytest.mark.parametrize(
+        "title",
+        ["Don\x92t", "bell\x07", "del\x7f", "nul\x00", "esc\x1b[2K", "odd\ufffe"],
+    )
+    def test_a_control_character_is_escaped_not_written_raw(self, title: str):
+        # U+0092 is what CP1252 mojibake leaves of an apostrophe. Written raw
+        # into a double-quoted scalar it made the frontmatter invalid YAML,
+        # and Obsidian dropped every property of the note without an error.
+        rendered = notes.frontmatter({"title": title})
+
+        assert all(_yaml_printable(char) for char in rendered)
+        yaml = pytest.importorskip("yaml")
+        assert yaml.safe_load(rendered.strip().strip("-"))["title"] == title
 
     def test_tool_owned_literals_are_bare(self):
         rendered = notes.frontmatter({"title": "T"})
@@ -350,6 +376,69 @@ class TestEscaping:
         # "[[" is no longer a link. Only a line that opens a block is touched.
         assert notes._escape(line) == line
 
+    @pytest.mark.parametrize(
+        "line",
+        [
+            pytest.param("**bold** start", id="strong emphasis"),
+            pytest.param("*emphasis* first", id="emphasis"),
+            pytest.param("#idea", id="obsidian tag"),
+            pytest.param("#1 fan", id="hash then digit"),
+            pytest.param("####### seven", id="seven hashes"),
+            pytest.param("2.5 million", id="decimal number"),
+            pytest.param("1234567890. ten digits", id="ten-digit number"),
+            pytest.param("-5 degrees", id="negative number"),
+            pytest.param("+1 agreed", id="plus one"),
+            pytest.param("--> an arrow", id="arrow"),
+            pytest.param("-- an aside", id="dash aside"),
+        ],
+    )
+    def test_a_line_led_by_an_openers_character_but_opening_nothing_is_left_alone(
+        self, line
+    ):
+        # The openers were matched by their first character, so "**bold**"
+        # became "\\**bold**", which renders as "*" and an emphasised "bold*";
+        # "#idea" lost its Obsidian tag; "2.5 million" showed a backslash.
+        assert notes._escape(line) == line
+
+    @pytest.mark.parametrize(
+        ("line", "escaped"),
+        [
+            pytest.param("#", "\\#", id="empty heading"),
+            pytest.param("###### six", "\\###### six", id="sixth-level heading"),
+            pytest.param("#\tx", "\\#\tx", id="heading after a tab"),
+            pytest.param("-", "\\-", id="empty list item"),
+            pytest.param("*\tx", "\\*\tx", id="list item after a tab"),
+            pytest.param("--", "\\--", id="setext underline"),
+            pytest.param("---  ", "\\---  ", id="dash thematic break"),
+            pytest.param("-- -", "\\-- -", id="spaced dash thematic break"),
+            pytest.param("***", "\\***", id="star thematic break"),
+            pytest.param("** *", "\\** *", id="spaced star thematic break"),
+            pytest.param("-- | --", "\\-- | --", id="delimiter row"),
+            pytest.param(":-- | --:", "\\:-- | --:", id="aligned delimiter row"),
+            pytest.param("  :-: | :-:", "  \\:-: | :-:", id="indented delimiter row"),
+            pytest.param(":- |", "\\:- |", id="one-cell delimiter row"),
+            pytest.param("1.", "1\\.", id="empty ordered item"),
+            pytest.param("123456789) x", "123456789\\) x", id="nine-digit number"),
+        ],
+    )
+    def test_each_openers_exact_form_is_escaped(self, line, escaped):
+        assert notes._escape(line) == escaped
+
+    @pytest.mark.parametrize("first", ["# not a heading", "**bold** start", "#idea"])
+    def test_a_notes_first_line_is_not_escaped_because_no_line_starts_with_it(
+        self, first
+    ):
+        # It follows "**Note:** " on the same line, so it can open nothing,
+        # and a backslash there only showed.
+        body = notes.body([_annotation(note=first)])
+
+        assert f"**Note:** {first}\n" in body
+
+    def test_a_notes_first_line_still_cannot_forge_a_marker(self):
+        body = notes.body([_annotation(note=notes.END_MARKER)])
+
+        assert f"**Note:** \\{notes.END_MARKER}" in body
+
     def test_a_note_that_opens_a_fence_leaves_the_next_highlight_quoted(self):
         body = notes.body(
             [
@@ -393,6 +482,23 @@ class TestEscaping:
         body = notes.body([_annotation(chapter="Ch\nOne")])
 
         assert "## Ch One" in body
+
+
+class TestATableDelimiterRow:
+    """
+    GFM opens a table on a header line followed by a delimiter row, and a
+    note's first line follows "**Note:** " -- so the label is a header cell.
+    """
+
+    def test_one_led_by_a_colon_does_not_make_the_note_a_table(self):
+        # ":-- | --:" was not escaped, so the label ended up in a table header.
+        body = notes.body([_annotation(note="a | b\n:-- | --:")])
+
+        assert "\n\\:-- | --:\n" in body
+
+    @pytest.mark.parametrize("line", [":-) smile", ": a colon", "::", ":-"])
+    def test_a_colon_that_leads_no_delimiter_row_is_left_alone(self, line):
+        assert notes._escape(line) == line
 
 
 # ------------------------------------------------------------------ ownership

@@ -130,18 +130,36 @@ def test_escaping_an_escaped_line_changes_nothing(line):
 
 @given(
     st.sampled_from(
-        ["# ", "> ", "- ", "+ ", "* ", "1. ", "12) ", "  3. "]
+        ["# ", "###### ", "#\t", "> ", ">", "- ", "+ ", "*\t", "1. ", "12) ", "  3. "]
         + ["```", "~~~", "<!--", "<div", "| ", "[x]: "]
     ),
     st.text(),
 )
-def test_the_backslash_goes_on_the_openers_punctuation(opener, rest):
-    # CommonMark escapes only ASCII punctuation, so a backslash in front of a
-    # list number's digits escapes nothing and shows.
+def test_every_opener_is_escaped_whatever_follows_it(opener, rest):
     escaped = notes._escape(opener + rest)
 
-    backslash = escaped.index("\\")
-    assert escaped[backslash + 1] in "#>+-*.)`~<|["
+    assert escaped != opener + rest
+
+
+#: Lines built from the characters that open blocks, so that the pattern is
+#: exercised far more often than arbitrary text would exercise it.
+OPENER_TEXT = st.text(alphabet="#>+-*:|=_`~<[]!/\\ \t019.)x")
+
+
+@given(OPENER_TEXT)
+def test_the_backslash_goes_on_the_openers_punctuation(line):
+    # CommonMark escapes only ASCII punctuation, so a backslash in front of a
+    # list number's digits escapes nothing and shows. An indented code block
+    # is neutralised by its indentation, with no backslash at all.
+    escaped = notes._escape(line)
+    if escaped == line or escaped.startswith(notes.INDENT):
+        return
+
+    # Exactly one character was inserted: the first place the two differ.
+    at = next(i for i, (a, b) in enumerate(zip(escaped, line, strict=False)) if a != b)
+    assert escaped[at] == "\\"
+    assert escaped[:at] + escaped[at + 1 :] == line
+    assert escaped[at + 1] in "#>+-*:|=_`~<[.)"
 
 
 @given(
@@ -160,6 +178,25 @@ def test_indentation_that_opens_code_is_kept_as_columns_of_text(lead, rest):
         assert escaped == notes.INDENT * columns + rest
     else:
         assert escaped.startswith(lead)
+
+
+# ------------------------------------------------------------- notes._quoted
+
+
+@given(ANY_TEXT)
+def test_a_quoted_scalar_carries_only_what_yaml_allows_unescaped(value):
+    # YAML 1.2 (5.1): one character outside this set invalidates the whole
+    # frontmatter, and Obsidian then drops every property of the note.
+    quoted = notes._quoted(value)
+
+    assert all(
+        c in "\t\n\r\x85"
+        or 0x20 <= ord(c) <= 0x7E
+        or 0xA0 <= ord(c) <= 0xD7FF
+        or 0xE000 <= ord(c) <= 0xFFFD
+        or ord(c) >= 0x10000
+        for c in quoted
+    )
 
 
 # ------------------------------------------------------------------------ ISBN

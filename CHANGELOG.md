@@ -9,6 +9,31 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A note no longer escapes a line that only starts with a block opener's
+  character: `**bold**`, `#tag`, `2.5 million`, `-5 degrees` and `+1` are
+  written as typed. A table delimiter row led by a colon (`:-- | --:`) is
+  escaped, so a note can no longer turn into a table.
+
+- Control characters in a title or author -- U+0092 left by mojibake, say --
+  are escaped in a note's frontmatter, where they made Obsidian drop every
+  property of the note.
+
+- `-ao DIR --annotations-format markdown` names each book whose highlights
+  were left out because it lost a name collision, and suggests
+  `--on-collision suffix`; they were dropped without a word.
+
+- A notes run exits 1 when a file it cannot read, or did not write, stands
+  where a book's note should go, so that book's highlights were saved
+  nowhere; the file is still left alone.
+
+- `--verify` refuses the conversion and naming flags it never consults --
+  `--match`, `--force`, `--portable-names`, `--name-by`, `--on-collision` --
+  and `--list` refuses `--covers`, `--validate`,
+  `--epubcheck`, `-m`, `--min-free` and `--no-shuffle`.
+
+- The README no longer says every run exits 8 without Full Disk Access:
+  `-ao` and `-ar` do; `-ae` and `-ad` log the refusal and convert anyway.
+
 - `--annotations-refresh` writes a book's highlights only into the archive
   that is that book's own. It wrote them into whatever file had the book's
   name -- which can hold another edition, likely the last copy of one deleted

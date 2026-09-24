@@ -10,6 +10,7 @@ concurrency -- :mod:`epubconvert.run.convert` supplies those.
 from __future__ import annotations
 
 import errno
+import itertools
 import json
 import os
 import shutil
@@ -666,7 +667,7 @@ def index_by_package(
     index = index_by_book(found)
     seen: dict[str, Path] = {}
     ambiguous: set[str] = set()
-    for book in (*packages, *copyable):
+    for book in itertools.chain(packages, copyable):
         if seen.setdefault(book.name, book) != book:
             ambiguous.add(book.name)
     for name in sorted(ambiguous & index.keys()):

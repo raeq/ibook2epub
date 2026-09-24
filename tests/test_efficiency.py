@@ -323,7 +323,10 @@ class TestEachShelfArchiveIsReadOnce:
             original(self, file, *args, **kwargs)
 
         monkeypatch.setattr(ZipFile, "__init__", counting)
-        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q", *extra])
+        # -m 0 only for a conversion: --list shows every book whatever -m
+        # says, and refuses it as a flag that changes nothing.
+        cap = [] if "--list" in extra else ["-m", "0"]
+        run.main(["-s", str(library), "-o", str(output_dir), *cap, "-q", *extra])
         return opened
 
     @pytest.mark.parametrize("listing", [[], ["--list"]])

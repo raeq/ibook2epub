@@ -87,17 +87,30 @@ DIGEST_LENGTH = 16
 #: ``<!--`` in a note swallowed every highlight after it, ``===`` turned the
 #: line above into a heading, and a link reference definition vanished.
 #:
-#: Each opener is matched as CommonMark (4.1-4.9) and GFM tables define it, not
-#: by its first character, because every backslash shows in Obsidian's source
-#: view and an escaped ``[[`` is no longer a link: ``~~struck~~``,
-#: ``_emphasis_`` and ``<3`` open nothing and are left alone. A link label may
-#: continue onto the next line, so an unfinished one counts.
+#: Each opener is matched as CommonMark (4.1-4.9, 5.1-5.2) and GFM tables
+#: define it, not by its first character, because every backslash shows in
+#: Obsidian's source view and an escaped ``[[`` is no longer a link:
+#: ``~~struck~~``, ``_emphasis_`` and ``<3`` open nothing and are left alone.
+#: ``#``, ``*``, ``-``, ``+`` and list numbers were still matched by their
+#: first character, so ``**bold** start`` became ``\**bold**``, which renders
+#: a literal star and an emphasised ``bold*``; ``#idea`` lost its Obsidian
+#: tag; ``2.5 million``, ``-5 degrees`` and ``+1 agreed`` showed a backslash.
+#: A heading's hashes, a bullet and a list number open a block only when white
+#: space or the end of the line follows them. ``*`` and ``-`` also open a
+#: thematic break, and ``-`` a setext underline; each of those is spelled
+#: out, as ``_`` and ``=`` already were. A table's delimiter row may lead with
+#: ``-`` or with an alignment colon, and ``:-- | --:`` under a note's first
+#: line once went unescaped and put its ``**Note:**`` label in a table header;
+#: the row is matched by its whole shape, cells and pipes. A link label
+#: may continue onto the next line, so an unfinished one counts. ``>`` opens a
+#: quote whatever follows it.
 #:
 #: Indentation is up to three spaces and nothing else. A fourth column, or a
 #: tab, opens an indented code block (``code``); a line led by any other white
 #: space opens nothing, and escaping behind one showed the backslash. An
-#: ordered list is numbered in ASCII digits (CommonMark 5.2); ``\d`` also
-#: matches digits in other scripts, which open nothing.
+#: ordered list is numbered in one to nine ASCII digits (CommonMark 5.2);
+#: ``\d`` also matches digits in other scripts, which open nothing, and a
+#: tenth digit makes the line text.
 BLOCK_OPENERS = re.compile(
     r"""
     ^(?:
@@ -105,14 +118,22 @@ BLOCK_OPENERS = re.compile(
       | (?P<indent>\ {0,3})
         (?:
             (?P<mark>
-                [#>+*|-]                    # heading, quote, list, rule, table
+                \#(?=\#{0,5}(?:[ \t]|$))      # ATX heading
+              | >                            # block quote
+              | [-+*](?=[ \t]|$)             # bullet list item
+              | \*(?=(?:[ \t]*\*){2}[ \t*]*$)  # thematic break
+              | -(?=(?:[ \t]*-){2}[ \t-]*$)    # thematic break
+              | -(?=-*[ \t]*$)               # setext underline
+              | (?=:?-+:?[ \t]*\|(?:[ \t]*:?-+:?[ \t]*\|)*(?:[ \t]*:?-+:?)?[ \t]*$)
+                [-:]                         # table delimiter row, no pipe first
+              | \|                           # table row
               | `(?=``) | ~(?=~~)            # code fence
               | <(?=[A-Za-z/!?])            # HTML block, either marker included
               | =(?==*[ \t]*$)              # setext underline
               | _(?=(?:[ \t]*_){2}[ \t_]*$)  # thematic break
               | \[(?=(?:[^\[\]\\]|\\.)*(?:\]:|\\?$))  # link reference definition
             )
-          | (?P<number>[0-9]+)(?P<delimiter>[.)])  # ordered list
+          | (?P<number>[0-9]{1,9})(?P<delimiter>[.)])(?=[ \t]|$)  # ordered list
         )
     )
     """,
@@ -143,15 +164,30 @@ def _escape(line: str) -> str:
 
     :return: The line, escaped.
     """
-    # A forged end marker would hand the rest of the generated body to the
-    # reader's region on the next run. Highlights are already safe because
-    # every line carries "> ", but nothing else was.
-    if END_PATTERN.match(line) or START_PATTERN.match(line):
-        return "\\" + line
+    unforged = _unforged(line)
+    if unforged != line:
+        return unforged
     # CommonMark escapes only ASCII punctuation, so the backslash goes on the
     # opener's punctuation: in front of a list number's digits it escapes
     # nothing and shows, as "\1. first". "1\. first" is the literal text.
     return BLOCK_OPENERS.sub(_escape_opener, line, count=1)
+
+
+def _unforged(line: str) -> str:
+    """
+    Neutralise a line that would pass for one of this tool's markers.
+
+    A forged end marker would hand the rest of the generated body to the
+    reader's region on the next run. Highlights are already safe because every
+    line carries "> ", but nothing else was.
+
+    :param line: One line of book- or reader-derived text.
+
+    :return: The line, behind a backslash if it forges a marker.
+    """
+    if END_PATTERN.match(line) or START_PATTERN.match(line):
+        return "\\" + line
+    return line
 
 
 def _escape_opener(match: re.Match[str]) -> str:
@@ -164,16 +200,26 @@ def _escape_opener(match: re.Match[str]) -> str:
     return f"{indent}{number}\\{delimiter}"
 
 
+def _raw_lines(value: object) -> list[str]:
+    """
+    Split a value into lines, newlines normalised and nothing escaped.
+
+    :param value: Whatever the book or the reader supplied.
+
+    :return: The lines as given.
+    """
+    return str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+
 def _lines(value: object) -> list[str]:
     """
     Split a value into escaped lines, newlines normalised.
 
     :param value: Whatever the book or the reader supplied.
 
-    :return: The lines, each safe to emit.
+    :return: The lines, each safe to emit at the start of a line.
     """
-    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
-    return [_escape(line) for line in text.split("\n")]
+    return [_escape(line) for line in _raw_lines(value)]
 
 
 def _quoted(value: object) -> str:
@@ -185,12 +231,31 @@ def _quoted(value: object) -> str:
     ``": "``, which starts a mapping and makes Obsidian show the note as having
     no properties at all -- silently, which is the worst way for it to fail.
 
+    Characters YAML will not carry unescaped are escaped too. U+0092, which is
+    what CP1252 mojibake leaves of an apostrophe, was written raw, and a
+    single one made the whole frontmatter invalid: Obsidian dropped every
+    property of the note, silently again.
+
     :param value: The value, which came from the book.
 
     :return: The quoted scalar.
     """
     escaped = collapse(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    return f'"{UNPRINTABLE.sub(_yaml_escape, escaped)}"'
+
+
+#: What YAML 1.2 (5.1) will not carry unescaped in a stream: C0 but for the
+#: white space ``collapse`` has already turned into spaces, DEL, C1 but for
+#: NEL, the surrogates a filename can hand back, and the two non-characters.
+UNPRINTABLE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ud800-\udfff\ufffe\uffff]"
+)
+
+
+def _yaml_escape(match: re.Match[str]) -> str:
+    """Render one character as a double-quoted YAML escape: ``\\x92``."""
+    code = ord(match.group())
+    return f"\\x{code:02X}" if code <= 0xFF else f"\\u{code:04X}"
 
 
 def frontmatter(book: dict[str, Any]) -> str:
@@ -259,9 +324,13 @@ def body(found: list[dict[str, Any]]) -> str:
         lines.extend(f"> {line}" for line in _lines(item.get("text", "")))
         if item.get("note"):
             lines.append("")
-            note = _lines(item["note"])
-            lines.append(f"**Note:** {note[0]}")
-            lines.extend(note[1:])
+            first, *rest = _raw_lines(item["note"])
+            # The first line follows "**Note:** ", so it never starts a line
+            # and can open no block: escaping it as an opener only showed a
+            # backslash. The marker rule is about the text, not where it
+            # sits, so that one still applies.
+            lines.append(f"**Note:** {_unforged(first)}")
+            lines.extend(_escape(line) for line in rest)
     return "\n".join(lines) + "\n"
 
 
@@ -534,11 +603,16 @@ def write_vault(
 
     index = index_by_package(found, [item.package for item in named], copyable=copyable)
     tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
+    collided: list[str] = []
     for item in named:
-        if not item.filename:
-            continue
         mine = for_book(item.package.name, index)
         if not mine:
+            continue
+        if not item.filename:
+            # Lost a name collision, so it has no stem to share. Under -ao no
+            # planner runs to report the collision, and these highlights were
+            # dropped without a word.
+            collided.append(item.package.name)
             continue
         target = directory / (Path(item.filename).stem + ".md")
         tally[_write_one(target, mine)].append(target.name)
@@ -546,7 +620,20 @@ def write_vault(
     logger.info(
         "Wrote %d note(s) to %s.", len(tally["written"]), printable(str(directory))
     )
-    if found and not any(tally[outcome] for outcome in OUTCOMES):
+    if collided:
+        # Not a failure: a collision leaves the exit code alone everywhere
+        # else in this tool, the README's exit-code section says so, and the
+        # remedy is a flag rather than a retry. A scheduled run that treated
+        # it as one would fail every night for as long as the library held
+        # two copies of a book.
+        logger.warning(
+            "%d book(s) lost a name collision, so their highlights were not "
+            "written: %s. Rerun with --on-collision suffix to give each its "
+            "own note.",
+            len(collided),
+            _naming(collided),
+        )
+    if found and not collided and not any(tally[outcome] for outcome in OUTCOMES):
         # Highlights were read and not one reached a note. Every book they
         # belong to is absent from the library this run walked, so nothing
         # was matched -- which said "Wrote 0 note(s)" and exited 0. The same
@@ -568,7 +655,8 @@ def write_vault(
     for outcome, sentence in REPORTS.items():
         if tally[outcome]:
             logger.warning(sentence, len(tally[outcome]), _naming(tally[outcome]))
-    return exits.FAILED if tally["failed"] or tally["blocked"] else exits.SUCCESS
+    unsaved = any(tally[outcome] for outcome in UNSAVED)
+    return exits.FAILED if unsaved else exits.SUCCESS
 
 
 #: Everything :func:`_write_one` can report, so the tally cannot be typo'd into
@@ -583,6 +671,16 @@ OUTCOMES = (
     "failed",
 )
 
+#: The outcomes that leave a book's highlights in no file at all, each of
+#: which fails the run. Only ``failed`` and ``blocked`` did, so the same
+#: obstacle exited 1 at a sidecar's path and 0 at the note's own: an
+#: unreadable note, or a file somebody else wrote there, left a cron run that
+#: wrote no notes reporting success. ``foreign`` is here by decision, not by
+#: default: the file is the reader's and is never touched, but the book is
+#: exactly as unsaved as when the same file sits at the sidecar's path, and
+#: moving it aside is a fix only the reader can make.
+UNSAVED = ("foreign", "unreadable", "blocked", "failed")
+
 #: What the reader is told about each outcome worth mentioning. Every sentence
 #: has to be true of every file it counts: "not written by ibook2epub" was
 #: being said about notes this tool wrote but could not read.
@@ -591,9 +689,10 @@ REPORTS = {
     "are in a file beside each one: %s",
     "blocked": "%d note(s) you have edited were left alone, and their new "
     "highlights could not be written beside them either: %s",
-    "unreadable": "%d file(s) could not be read and were left alone; see the "
-    "errors above: %s",
-    "foreign": "%d file(s) were not written by ibook2epub and were left alone: %s",
+    "unreadable": "%d file(s) could not be read and were left alone, so their "
+    "books' highlights were not written; see the errors above: %s",
+    "foreign": "%d file(s) were not written by ibook2epub and were left alone, "
+    "so their books' highlights were not written; move them aside and rerun: %s",
     "failed": "%d note(s) could not be written: %s",
 }
 
