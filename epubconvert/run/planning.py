@@ -37,7 +37,7 @@ from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
 from .claims import Claims, lost_to
-from .holders import foreign, holds_another_book
+from .holders import foreign, holds_another_book, identifier_on_shelf
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
@@ -359,7 +359,12 @@ def _assign_one(
 
     taken = _claim(claims, base, group, setup=setup)
     if taken is None:
-        return Assignment(package, "", group, lost_to(claims.holder(group), metadata))
+        # Carries its identifier though it has no name, so an archive of it
+        # already on the shelf is still recognised as a live book's.
+        reason = lost_to(claims.holder(group), metadata)
+        return Assignment(
+            package, "", group, reason, identifier=usable_identifier(metadata)
+        )
 
     filename, key = taken
     return Assignment(
@@ -465,6 +470,14 @@ def find_orphans(
     archive's identifier, as planning does (:mod:`epubconvert.run.holders`),
     and a book that moved on to its marked name claims that file (:func:`_place`).
 
+    Yet a file under a name the plan gave a book, holding another book of the
+    library, is that other book's. In skip mode the Ace edition, exported
+    alone and then outsorted by an added 1965 edition, loses the name and is a
+    collision; its archive, the only copy, was listed here as claimed by
+    nothing -- the list a person reviews before deleting. An archive under a
+    name no book wants, such as one left by adopting a renaming policy, stays
+    an orphan: its book is written under the new name.
+
     Nothing is deleted, here or anywhere. The never-deletes stance is
     deliberate; the gap was that nothing would say either.
 
@@ -487,11 +500,13 @@ def find_orphans(
         if clash is not None:
             claimed.add(filesystem_key(clash.identity))
 
+    live = {item.identifier for item in assigned if item.identifier}
     return sorted(
         found
         for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
         if found.is_file()
-        and filesystem_key(policy.identity(found.name)) not in claimed
+        and (key := filesystem_key(policy.identity(found.name))) not in claimed
+        and not (live and key in shelf.spoken and identifier_on_shelf(found) in live)
     )
 
 

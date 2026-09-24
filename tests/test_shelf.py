@@ -401,3 +401,63 @@ class TestAFileHoldingAnotherBookIsNotClaimed:
         [decision] = planning.plan_exports(packages, output_dir, PassthroughNaming())
         assert decision.status == planning.COLLISION
         assert [path.name for path in orphans] == ["Book.epub"]
+
+
+class TestAnArchiveOfABookInTheLibraryIsNotAnOrphan:
+    """
+    A file holding a book the library still has is that book's, whatever it is named.
+
+    Skip mode: the Ace edition was exported alone under the plain name, then an
+    earlier edition sorting first was added and took that name. The plan calls
+    both a collision, which is right; the orphan check called the Ace
+    edition's archive -- its only copy -- something no book claims, which is
+    the list a person reviews before deleting.
+    """
+
+    PLAIN = "Frank Herbert - Dune.epub"
+
+    def test_an_edition_that_lost_its_name_still_claims_its_archive(
+        self, tmp_path, output_dir
+    ):
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library,
+            "Dune (Ace).epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier="urn:uuid:2",
+        )
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+            + ["--name-by", "author-title"]
+        )
+        make_metadata_package(
+            library,
+            "Dune (1965).epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier="urn:uuid:1",
+        )
+        packages = archive.collect_package_dirs(library)
+
+        orphans = planning.find_orphans(output_dir, MetadataNaming(), packages)
+
+        assert (output_dir / self.PLAIN).is_file()
+        assert orphans == []
+
+    def test_a_book_that_lost_the_naming_contest_keeps_its_identifier(self, tmp_path):
+        library = tmp_path / "lib"
+        for number, folder in enumerate(("Dune (1965)", "Dune (Ace)"), 1):
+            make_metadata_package(
+                library,
+                f"{folder}.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=f"urn:uuid:{number}",
+            )
+
+        _, lost = planning.assign_names(
+            archive.collect_package_dirs(library), MetadataNaming(), planning.SKIP
+        )
+
+        assert (lost.filename, lost.identifier) == ("", "urn:uuid:2")
