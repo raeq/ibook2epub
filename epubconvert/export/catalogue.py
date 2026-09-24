@@ -84,7 +84,7 @@ def build_document(found: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Wrap the catalogue in the envelope the schema describes.
 
-    :param found: What :func:`collect` returned.
+    :param found: What :func:`~epubconvert.collect.library.collect` returned.
 
     :return: The document to serialise.
     """

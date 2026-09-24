@@ -184,7 +184,7 @@ class TestRuleNothingIsSilentlySkipped:
 class TestRuleTheUmaskIsReadWithoutMutatingIt:
     """Reading the umask must be safe from every worker at once.
 
-    Sites: ``archive._file_mode``. The pool reaches 64 threads.
+    Sites: ``archive.file_mode``. The pool reaches 64 threads.
     """
 
     def test_concurrent_reads_agree_and_do_not_disturb_the_process(self):

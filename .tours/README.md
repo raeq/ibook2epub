@@ -12,7 +12,7 @@ commentary attached.
 | 1. The Round Trip | One book from `python -m epubconvert` to an archive on disk. Start here. |
 | 2. Why a Rerun Is Safe | The no-state-file invariant, and every rule that keeps it true. |
 | 3. Trust Nothing You Read | DRM detection, path containment, and what a book's own manifest is allowed to make the tool do. |
-| 4. Names, Identity and Collisions | Filename sanitisation, the three naming policies, collision suffixes. |
+| 4. Names, Identity and Collisions | Filename sanitisation, the four naming policies, collision suffixes. |
 | 5. Threads, Ctrl-C and the Log | The thread pool, interrupt handling, and logging setup. |
 | 6. The Test Suite and the Toolchain | Where each behaviour is tested, and what CI enforces. |
 

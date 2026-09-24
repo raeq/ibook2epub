@@ -266,7 +266,7 @@ async def export_packages(
 
     Convenience wrapper for callers holding packages rather than a plan.
     :func:`epubconvert.run.main` does not use it: it plans once itself, under
-    and calls :func:`export_planned`.
+    the output lock, and calls :func:`export_planned`.
 
     Whether a book has already been exported is decided by its *identity*
     under the naming policy, not by an exact filename match. Identities of
@@ -653,7 +653,7 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
     except OSError as exc:
         # A read-only output directory got past main's mkdir(exist_ok=True) and
         # died here with a raw traceback. main already turns this into a clean
-        # exit 3.
+        # exit 5.
         raise OutputLockedError(f"cannot lock {output_dir}: {exc}") from exc
     try:
         try:

@@ -35,10 +35,10 @@ import stat
 from pathlib import Path
 from typing import BinaryIO
 
-#: Prefixes that name a resource outside the archive rather than a member of
-#: it. The epub specification allows a remote manifest item, and resolving one
-#: as an archive path would report a perfectly good book as missing a file.
-#: A URL scheme and its colon (RFC 3986, section 3.1).
+#: A URL scheme and its colon (RFC 3986, section 3.1). An href that starts
+#: with one names a resource outside the archive rather than a member of it.
+#: The epub specification allows a remote manifest item, and resolving one as
+#: an archive path would report a perfectly good book as missing a file.
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 
 

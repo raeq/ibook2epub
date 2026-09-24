@@ -77,7 +77,7 @@ STORED_SUFFIXES = frozenset(
 #: The permission bits recorded *inside* the zip for each member. Fixed rather
 #: than taken from the umask, because it is archive metadata and re-exports
 #: must stay byte-identical. What the exported file itself gets is a separate
-#: question, answered by :func:`_file_mode` from the user's umask.
+#: question, answered by :func:`file_mode` from the user's umask.
 ARCHIVE_MODE = 0o644
 
 # Filesystem junk, never book content, so excluded wherever it appears.
