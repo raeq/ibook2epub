@@ -610,6 +610,28 @@ def _check_convert_nothing_flags(
             )
 
 
+def _check_reporting_flags(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """
+    Refuse a write beside ``--list`` or ``--verify``, which only read.
+
+    :param parser: The parser, for reporting the refusal.
+    :param args: The parsed arguments.
+    """
+    report = "--list" if args.list_only else "--verify" if args.verify else None
+    if report is None:
+        return
+    if args.annotations_refresh:
+        # run._run_read_only dispatches -ar before either report, so
+        # "--verify -ae -ar" rewrote every archive on the shelf and verified
+        # none of them.
+        parser.error(
+            f"{report} only reads, so it cannot be combined with "
+            "--annotations-refresh, which rewrites the shelf"
+        )
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """
     Parse and validate command line arguments.
@@ -642,6 +664,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.validate = True
 
     _check_annotation_flags(parser, args)
+    _check_reporting_flags(parser, args)
     _check_library_flags(parser, args)
     _check_convert_nothing_flags(parser, args)
 

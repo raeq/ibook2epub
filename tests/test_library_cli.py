@@ -654,3 +654,20 @@ class TestTheFlagsRefuseWhatTheyCannotDo:
 
     def test_csv_remains_the_default(self):
         assert cli.parse_args([]).library_format == "csv"
+
+
+class TestAReportingModeWritesNothing:
+    """
+    ``--list`` and ``--verify`` only read. An annotation flag beside one of
+    them asks for a write the run will never make, so it is refused rather
+    than dropped.
+    """
+
+    @pytest.mark.parametrize("report", ["--list", "--verify"])
+    def test_a_refresh_does_not_replace_the_report(self, report):
+        # -ar was dispatched before either report, so "--verify -ae -ar"
+        # rewrote every archive on the shelf and verified none of them.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args([report, "-ae", "-ar"])
+
+        assert refused.value.code == 2
