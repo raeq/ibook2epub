@@ -349,6 +349,16 @@ What the configurations that fail show:
   both against the CLI. Skip mode is unchanged: the `FolderNamedReports`
   limit.
 
+  Under `--skip-incomplete` the renamed book, evicted by iCloud, is left
+  unopened and keeps nothing, and the newcomer, whose identifier and the
+  file's had been read and differ, was reported exported from the renamed
+  book's archive; with `--refresh`, a newcomer declaring no identifier wrote
+  over it, the evicted book's only one. Now a book whose plain file declares
+  a usable identifier it does not have, its own read, is refused that file:
+  with no digest to move on to it claims its name numbered, and the renamed
+  book, which nothing read, is trusted with the file.
+  `tests/test_case_namesakes.py` replays it against the CLI.
+
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.
 

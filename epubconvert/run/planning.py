@@ -26,6 +26,7 @@ from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
     MAX_SUFFIX,
     Claims,
+    Kept,
     Wanting,
     claim_order,
     kept_numbers,
@@ -293,7 +294,7 @@ def _assign_all(
     claims = Claims()
 
     bases = [_bases(name, metadata, setup, crowded) for _, name, metadata in wanted]
-    kept = _kept_on_shelf(wanted, bases, crowded, setup, shelf)
+    kept, refused = _kept_on_shelf(wanted, bases, crowded, setup, shelf)
     named: dict[int, Assignment] = {}
     for index in [
         *kept,
@@ -305,6 +306,7 @@ def _assign_all(
             claims=claims,
             crowded=crowded,
             kept=kept.get(index),
+            refused=index in refused,
         )
     return [named[index] for index in range(len(wanted))]
 
@@ -336,7 +338,7 @@ def _kept_on_shelf(
     crowded: Counter[str],
     setup: _Naming,
     shelf: Collection[str],
-) -> dict[int, str]:
+) -> Kept:
     """
     Find the books that keep a numbered or marked file of theirs on the shelf.
 
@@ -348,10 +350,11 @@ def _kept_on_shelf(
     :param setup: The naming configuration.
     :param shelf: The names of the files on the shelf.
 
-    :return: The file each such book keeps, by its index in *wanted*.
+    :return: The file each such book keeps, and the books refused their
+        plain name, by index in *wanted*.
     """
     if setup.on_collision != SUFFIX:
-        return {}
+        return Kept({}, frozenset())
     policy = setup.policy
     # A policy that reads no package document leaves the identifier to be
     # read here, and only for a name with numbered files on the shelf.
@@ -419,6 +422,7 @@ def _assign_one(
     claims: Claims,
     crowded: Counter[str],
     kept: str | None = None,
+    refused: bool = False,
 ) -> Assignment:
     """
     Settle one package's output name against the names already taken.
@@ -431,16 +435,28 @@ def _assign_one(
     :param crowded: How many packages wanted each identity.
     :param kept: The numbered file on the shelf it keeps, if any
         (:func:`~epubconvert.run.claims.kept_numbers`).
+    :param refused: The file under its plain name is another book's
+        (:attr:`~epubconvert.run.claims.Kept.refused`): with no digest of
+        its identifier to move on to, it claims from its first number.
 
     :return: The assignment, with an empty filename if the book lost.
     """
     base, stable = _bases(name, metadata, setup, crowded)
     group = setup.policy.identity(base)
 
+    # Refused, with a digest to go by, placing moves the book on to its
+    # marked name (placing.place), which holds still; without one, nothing
+    # placing reads would tell, so its plain name is not claimed at all.
     taken = (
         (kept, setup.policy.identity(kept))
         if kept and claims.keep(group, setup.policy.identity(kept), kept)
-        else _claim(claims, base, group, setup=setup)
+        else _claim(
+            claims,
+            base,
+            group,
+            setup=setup,
+            first=2 if refused and stable == base else 1,
+        )
     )
     if taken is None:
         # Carries its identifier though it has no name, so an archive of it
@@ -528,7 +544,7 @@ def _named_from_folder(metadata: Package | None, policy: NamingPolicy) -> bool:
 
 
 def _claim(
-    claims: Claims, base: str, group: str, *, setup: _Naming
+    claims: Claims, base: str, group: str, *, setup: _Naming, first: int = 1
 ) -> tuple[str, str] | None:
     """
     Take the first free candidate name for a book, or report that none is.
@@ -537,12 +553,13 @@ def _claim(
     :param base: The name to start from.
     :param group: The identity group this book competes in.
     :param setup: The naming configuration.
+    :param first: The first position this book may take.
 
     :return: The claimed filename and its identity, or None if the group is
         exhausted.
     """
     limit = MAX_SUFFIX if setup.on_collision == SUFFIX else 1
-    for position in range(claims.resume(group), limit + 1):
+    for position in range(max(claims.resume(group), first), limit + 1):
         candidate = suffixed(base, position, setup.budget)
         key = setup.policy.identity(candidate)
         if claims.take(group, position, key, candidate):

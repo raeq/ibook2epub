@@ -16,6 +16,7 @@ in skip mode both were collisions, on every run.
 # pylint: disable=too-few-public-methods
 
 import json
+import os
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -27,6 +28,7 @@ from epubconvert.run import holders, planning, run
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import identifier_of, listing, zipped_book
+from tests.test_copy_through import _evict
 
 
 def files(output_dir: Path) -> dict[str, str]:
@@ -388,3 +390,99 @@ class TestAShelfFileWhoseExtensionIsUppercase:
 
         assert ("Old.EPUB", "orphan") in listing(library, output_dir, capsys)
         assert ("Old.PDF", "orphan") in listing(library, output_dir, capsys)
+
+
+class TestANamesakeBesideAnEvictedBookRenamedByCase:
+    """
+    ``b/Cafe.epub`` is exported, renamed by case to ``b/cAFE.epub`` and
+    evicted by iCloud, and ``a/Cafe.epub`` is added under the old spelling.
+    Under ``--skip-incomplete`` the renamed book is left unopened, so it kept
+    nothing, and the newcomer claimed ``Cafe.epub`` by its exact name: it was
+    reported exported from the other book's archive though its identifier
+    and the archive's had both been read and differ, and with ``--refresh``
+    a newcomer declaring no identifier wrote over that archive, the evicted
+    book's only one. The archive declares an identifier the newcomer does
+    not have, so the newcomer is written under a number, and the renamed
+    book, which nothing read, is trusted with the name's file.
+    """
+
+    @staticmethod
+    def _beside(
+        tmp_path: Path, output_dir: Path, monkeypatch, identifier: str
+    ) -> tuple[Path, list[str]]:
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "b", "Cafe.epub", title="Cafe", identifier="urn:b"
+        )
+        argv = ["-s", str(library), "-o", str(output_dir), "--on-collision"]
+        argv += ["suffix", "--skip-incomplete"]
+        run.main([*argv, "-m", "0", "-q"])
+        (library / "b" / "Cafe.epub").rename(library / "b" / "moving")
+        (library / "b" / "moving").rename(library / "b" / "cAFE.epub")
+        newcomer = make_metadata_package(
+            library / "a", "Cafe.epub", title="Cafe", identifier=identifier
+        )
+        # Newer than the archive, so --refresh would write it.
+        later = (output_dir / "Cafe.epub").stat().st_mtime + 100
+        for path in [newcomer, *newcomer.rglob("*")]:
+            os.utime(path, (later, later))
+        renamed = library / "b" / "cAFE.epub"
+        _evict(monkeypatch, *(path for path in renamed.rglob("*") if path.is_file()))
+        return library, argv
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            ("urn:a", ()),
+            ("urn:a", ("--refresh",)),
+            ("none", ()),
+            ("none", ("--refresh",)),
+        ],
+        ids=["identified", "identified-refresh", "none", "none-refresh"],
+    )
+    def test_the_newcomer_is_written_under_a_number(
+        self, tmp_path, output_dir, monkeypatch, capsys, case
+    ):
+        identifier, extra = case
+        _, argv = self._beside(tmp_path, output_dir, monkeypatch, identifier)
+        capsys.readouterr()
+
+        run.main([*argv, *extra, "--list", "--json"])
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, *extra, "-m", "0", "-d"])
+        dry = capsys.readouterr()
+        run.main([*argv, *extra, "-m", "0"])
+        ran = capsys.readouterr()
+
+        assert sorted(
+            (
+                row["status"],
+                Path(row["source"]).parent.name,
+                row["target"] and Path(row["target"]).name,
+            )
+            for row in rows
+        ) == [("exported", "b", "Cafe.epub"), ("pending", "a", "Cafe (2).epub")]
+        assert "Dry run: would export 1 epub file(s)" in dry.out
+        assert "skipped 1 already present" in dry.out
+        assert "Exported 1 epub file(s)" in ran.out
+        assert "orphan" not in dry.out + ran.out
+        assert files(output_dir) == {"Cafe.epub": "urn:b", "Cafe (2).epub": identifier}
+
+    @pytest.mark.parametrize("identifier", ["urn:a", "none"])
+    def test_each_keeps_its_file_once_downloaded(
+        self, tmp_path, output_dir, monkeypatch, capsys, identifier
+    ):
+        library, argv = self._beside(tmp_path, output_dir, monkeypatch, identifier)
+        run.main([*argv, "-m", "0", "-q"])
+        monkeypatch.undo()
+        downloaded = [item for item in argv if item != "--skip-incomplete"]
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, *downloaded[4:])
+        run.main([*downloaded, "-m", "0"])
+        ran = capsys.readouterr()
+
+        assert sorted(listed) == [("Cafe.epub", "exported"), ("cAFE.epub", "exported")]
+        assert "Exported 0 epub file(s)" in ran.out
+        assert "orphan" not in ran.out
+        assert files(output_dir) == {"Cafe.epub": "urn:b", "Cafe (2).epub": identifier}
