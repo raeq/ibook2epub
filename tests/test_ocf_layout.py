@@ -20,6 +20,7 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 from epubconvert.collect import validate
 from epubconvert.export.archive import zip_package
 from epubconvert.export.naming import filesystem_key
+from epubconvert.utils.spec import fold_name
 from tests.conftest import make_metadata_package
 from tests.test_validate import MEMBERS, write_epub
 
@@ -204,10 +205,10 @@ class TestNamesAFilesystemCannotTellApartAreReported:
         assert "\x1b" not in problems[0]
 
     def test_the_folding_is_the_one_naming_uses(self):
-        # collect/ may not import export/, so the rule is stated twice; this
+        # One rule, in utils/spec, for the writer and the validator alike.
         # keeps the two statements one rule.
         for name in ("Straße", "café", "İstanbul", "DUNE"):
-            assert validate.folded(name) == filesystem_key(name)
+            assert fold_name(name) == filesystem_key(name)
 
     def test_a_book_this_tool_writes_passes(self, tmp_path: Path):
         package = make_metadata_package(tmp_path / "src", "Book.epub", title="Book")

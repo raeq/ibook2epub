@@ -29,7 +29,7 @@ from zipfile import ZIP_STORED, BadZipFile, ZipFile
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.opf import Package
-from ..utils.spec import MIMETYPE_CONTENT, MIMETYPE_NAME
+from ..utils.spec import MIMETYPE_CONTENT, MIMETYPE_NAME, fold_name
 from .package import (
     SHARED_HEADER,
     UNREADABLE_MEMBER,
@@ -203,21 +203,6 @@ def _check_unique(names: list[str]) -> list[str]:
     return problems + _check_folded(counted)
 
 
-def folded(name: str) -> str:
-    """
-    Fold a member name the way a case-insensitive filesystem compares it.
-
-    The rule :func:`epubconvert.export.naming.filesystem_key` states for the
-    files this tool writes: NFC, then Unicode's full case folding. Restated
-    here because this layer may not import that one.
-
-    :param name: A member name.
-
-    :return: A key equal for any two names such a filesystem cannot tell apart.
-    """
-    return unicodedata.normalize("NFC", name).casefold()
-
-
 def _check_folded(counted: Counter[str]) -> list[str]:
     """
     Report distinct member names that differ only by case or normalization.
@@ -233,7 +218,7 @@ def _check_folded(counted: Counter[str]) -> list[str]:
     """
     groups: dict[str, list[str]] = {}
     for name in counted:
-        groups.setdefault(folded(name), []).append(name)
+        groups.setdefault(fold_name(name), []).append(name)
     colliding = [sorted(group) for group in groups.values() if len(group) > 1]
     problems = [
         "member names differ only by case or Unicode normalization: "
