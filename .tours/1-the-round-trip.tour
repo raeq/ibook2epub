@@ -122,7 +122,7 @@
       "file": "epubconvert/export/archive.py",
       "line": 370,
       "pattern": "def zip_package\\(",
-      "description": "The core of the tool, and it is short.\n\nBuild to a temporary file with `mkstemp` in the destination directory, write `mimetype` first and stored, deflate everything else, validate if asked, then `replace()` into place. Any exception at all unlinks the temporary on the way out (the `except BaseException` at the end).\n\nRead the comment above `mkstemp` for why the temporary name is *not* derived from the target."
+      "description": "The core of the tool, and it is short.\n\nBuild to a temporary file with `mkstemp` in the destination directory, write `mimetype` first and stored, deflate everything else except media that is already compressed, check it is a book and validate if asked, then `replace()` into place. Any exception at all unlinks the temporary on the way out (the `except BaseException` at the end).\n\nRead the comment above `mkstemp` for why the temporary name is *not* derived from the target."
     },
     {
       "title": "What makes it an epub and not a zip",

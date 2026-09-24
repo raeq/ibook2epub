@@ -23,7 +23,7 @@
       "file": "epubconvert/collect/source.py",
       "line": 41,
       "pattern": "#: The element whose ``Algorithm`` attribute decides",
-      "description": "`DigestMethod` and `CanonicalizationMethod` carry an `Algorithm` attribute too. Read those and a perfectly readable book is reported as DRM-protected.\n\nMatching is by **local name** (`tag.rpartition(\"}\")`), because packages differ in how they bind the xmlenc namespace.\n\nThe same paragraph explains why the file is parsed rather than pattern-matched: an attribute value may be single-quoted, which a text scan misses — and missing it reports a protected book as readable."
+      "description": "`DigestMethod` and `CanonicalizationMethod` carry an `Algorithm` attribute too. Read those and a perfectly readable book is reported as DRM-protected.\n\nMatching is by **local name** (`tag.rpartition(\"}\")`), because packages differ in how they bind the xmlenc namespace.\n\nThe `encryption_algorithms` docstring explains why the file is parsed rather than pattern-matched: an attribute value may be single-quoted, which a text scan misses — and missing it reports a protected book as readable."
     },
     {
       "title": "Failing closed",
@@ -65,7 +65,7 @@
       "file": "epubconvert/utils/contained.py",
       "line": 67,
       "pattern": "def escapes\\(path: str\\) -> bool:",
-      "description": "Absolute, or `..`-prefixed after normalization. No archive member can match either, so inside a zip these are merely futile.\n\nThe docstring names the reason they are rejected rather than ignored: **the source side**. The cover extractor and the package reader join these onto the `*.epub/` directory on disk, where they reach real files that are no part of the book."
+      "description": "Absolute, or `..`-prefixed after normalization. No archive member can match either, so inside a zip these are merely futile.\n\nThe module docstring names the reason they are rejected rather than ignored: **the source side**. Every name from the book is joined onto the `*.epub/` directory on disk, where they reach real files that are no part of the book."
     },
     {
       "title": "Three checks, because no one of them covers the others",

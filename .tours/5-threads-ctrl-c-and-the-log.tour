@@ -16,7 +16,7 @@
       "file": "README.md",
       "line": 117,
       "pattern": "Each book is compressed in its own worker thread",
-      "description": "`zlib` releases the GIL while compressing, so a thread pool gives genuine parallelism here rather than interleaving.\n\nThe measured surprise is in the next paragraph. On a cloud-backed library, compression is **not** the bottleneck: 50 books took 80 seconds at 8% CPU, almost all of it waiting on iCloud. That is why `--workers` above the CPU count often helps — the extra threads spend their time blocked rather than competing."
+      "description": "`zlib` releases the GIL while compressing, so a thread pool gives genuine parallelism here rather than interleaving.\n\nThe measured surprise is in the next paragraph. On a cloud-backed library, compression is **not** the bottleneck: 50 books took 80 seconds at 8% CPU, almost all of it waiting on iCloud. That is why the pool defaults to four times the CPU count, capped at 64 — the extra threads spend their time blocked rather than competing."
     },
     {
       "title": "One lock, two shared objects",
@@ -44,7 +44,7 @@
       "file": "epubconvert/run/convert.py",
       "line": 360,
       "pattern": "    progress = _Progress\\(len\\(pending\\), default_workers\\(max_workers\\)\\)",
-      "description": "One `_export_one` per pending book, all gathered. `max_workers=None` lets `ThreadPoolExecutor` pick from the CPU count; `--workers` overrides it.\n\n`thread_name_prefix=\"zip\"` is a small kindness in a stack trace."
+      "description": "One `_export_one` per pending book, all gathered. `default_workers` sizes the pool at four times the CPU count, capped at 64, instead of `ThreadPoolExecutor`'s CPU-bound default; `--workers` overrides it.\n\n`thread_name_prefix=\"zip\"` is a small kindness in a stack trace."
     },
     {
       "title": "Shutting down mid-run",
@@ -79,7 +79,7 @@
       "file": "epubconvert/run/convert.py",
       "line": 937,
       "pattern": "def _has_room\\(output_dir: Path, min_free_mb: int\\) -> bool:",
-      "description": "Once before the pool starts, and again in the workers before they write (`_zip_and_record`), sampled every N books, where N is the pool width capped at 32 (`_Progress.should_check_room`). A long run over a large library can cross the floor halfway through, and the per-book check is what stops it filling the volume.\n\nThat second call reports a **failed** book rather than an aborted run, which is the honest reading: that book was attempted."
+      "description": "Once before the pool starts, and again in the workers before they write (`_zip_and_record`), sampled every N books, where N is the pool width capped at 32 (`_Progress.should_check_room`). A long run over a large library can cross the floor halfway through, and the sampled check is what stops it filling the volume.\n\nThat second call reports a **failed** book rather than an aborted run, which is the honest reading: that book was attempted."
     },
     {
       "title": "Importing must not create files",

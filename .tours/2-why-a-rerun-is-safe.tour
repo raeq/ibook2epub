@@ -30,7 +30,7 @@
       "file": "epubconvert/run/planning.py",
       "line": 658,
       "pattern": "settled = _decide_against_existing\\(package, found, settings\\)",
-      "description": "The gate. Found under the same identity and not forced, so the book is done — unless `--refresh` says the source has moved on.\n\nThe comment above it matters for speed: this is settled **before** the package is inspected. An already-exported book needs no source walk, and without this order `--skip-incomplete` would pay for one on every book of the library on every rerun."
+      "description": "The gate. Found under the same identity and not forced, so the book is done — unless `--refresh` says the source has moved on.\n\nThe docstring of `_decide_against_existing` gives the speed reason: this is settled **before** the package is inspected. An already-exported book needs no source walk, and without this order `--skip-incomplete` would pay for one on every book of the library on every rerun."
     },
     {
       "title": "Refresh writes over the old file",
@@ -72,7 +72,7 @@
       "file": "epubconvert/run/convert.py",
       "line": 763,
       "pattern": "^def sweep_partials\\(",
-      "description": "`SIGKILL` or a power cut gives the `except` clause no chance to run. The leftovers are invisible to everything afterwards, because every glob in this tool looks for `*.epub` — and they accumulate on the very volume `--min-free` exists to protect.\n\nSo each run sweeps `*.part` on the way in. Only safe while holding the output lock: a concurrent run's temporary looks exactly like an abandoned one."
+      "description": "`SIGKILL` or a power cut gives the `except` clause no chance to run. The leftovers are invisible to everything afterwards, because every glob in this tool looks for `*.epub` — and they accumulate on the very volume `--min-free` exists to protect.\n\nSo each run sweeps its own `.ibook2epub-*.part` temporaries on the way in — never a bare `*.part`, which also matches a browser's download in `~/Books`. Only while holding the output lock, and even then only a temporary untouched for `STALE_PARTIAL_SECONDS`: the lock does not exclude a run that could not lock at all, and `formal/OutputProtocol.tla` shows what went wrong without the age guard."
     },
     {
       "title": "One writer at a time",
@@ -100,14 +100,14 @@
       "file": "epubconvert/run/convert.py",
       "line": 604,
       "pattern": "def count_pending_decisions\\(decisions: Sequence\\[Decision\\]\\) -> int:",
-      "description": "\"N remaining; rerun to continue\" is only useful if N can actually reach zero.\n\nSo the number counts `pending` decisions from the same plan the run acted on. Books that can never be exported — DRM-protected, undownloaded, or holding a name another book claimed — are not pending, and get their own lines in the summary instead."
+      "description": "\"N remaining; rerun to continue\" is only useful if N can actually reach zero.\n\nSo the number counts `pending` decisions from the same plan the run acted on. Books that can never be exported — DRM-protected, undownloaded, or holding a name another book claimed — are not pending, and get their own clauses in the summary instead."
     },
     {
       "title": "Reading the record back",
       "file": "epubconvert/export/inspect_output.py",
       "line": 132,
       "pattern": "def verify_output\\(",
-      "description": "The output directory is the record of completed work, and nothing in a normal run ever re-reads it. A damaged export would stay invisible.\n\n`--verify` reads it back: every archive checked, damaged ones named, and the closing advice is to re-export them with `--force`."
+      "description": "The output directory is the record of completed work, and nothing in a normal run ever re-reads it. A damaged export would stay invisible.\n\n`--verify` reads it back: every archive checked, damaged ones named, and the closing advice names each damaged book to re-export with `--match … --force`, since `--force` alone would re-export the whole library."
     },
     {
       "title": "Same bytes, every time",
