@@ -520,8 +520,13 @@ def _opf_path(members: _Members) -> str:
     """
     Resolve the package document path from ``META-INF/container.xml``.
 
-    A container may list several rootfiles; one without a ``full-path`` is not
-    the one we want and is not a reason to give up.
+    A container may list several rootfiles, and OCF names the package document
+    as the first whose media-type is :data:`PACKAGE_MEDIA_TYPE`. Taking the
+    first rootfile of any kind parsed a PDF rendition listed ahead of it as the
+    package document, and called a sound book damaged. A container that
+    declares no media-type still names its package document, so without a
+    match the first rootfile is taken, as it always was. One without a
+    ``full-path`` is not the one we want and is not a reason to give up.
 
     :param members: The book being read.
 
@@ -531,14 +536,26 @@ def _opf_path(members: _Members) -> str:
         names one outside the book.
     """
     root = _element(members, CONTAINER_PATH)
+    first: str | None = None
     for rootfile in root.iter(f"{{{CONTAINER_NS}}}rootfile"):
         full_path = rootfile.get("full-path")
-        if full_path:
-            # Checked for both shapes. The directory reader joins the result
-            # onto a real directory, so a rootfile of "/etc/passwd" or
-            # "../../.." would be opened rather than merely missed.
+        if not full_path:
+            continue
+        # Media types are compared without regard to case (RFC 6838).
+        media_type = (rootfile.get("media-type") or "").strip().lower()
+        if media_type == PACKAGE_MEDIA_TYPE:
             return _checked_opf_path(full_path)
+        first = first or full_path
+    if first:
+        # Checked for both shapes, whichever rootfile it is. The directory
+        # reader joins the result onto a real directory, so a rootfile of
+        # "/etc/passwd" or "../../.." would be opened rather than merely missed.
+        return _checked_opf_path(first)
     raise ValidationError(f"{CONTAINER_PATH} names no rootfile")
+
+
+#: The media-type by which a container names its package document.
+PACKAGE_MEDIA_TYPE = "application/oebps-package+xml"
 
 
 def find_opf_path(archive: ZipFile) -> str:
