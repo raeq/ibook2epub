@@ -641,6 +641,9 @@ ibook2epub -ao                            # to stdout, for piping
 almost nothing: the archive is built once, not built and then rebuilt. A book
 that was already on the shelf is not rewritten by a run that had nothing else
 to do with it, so bringing an older shelf up to date is what `-ar` is for.
+Each book it refreshes is rebuilt beside the original, so `-ar` stops at the
+`--min-free` floor as a conversion does, and exits `1` if the floor stopped it
+or a book could not be refreshed.
 
 `-ad` and `-ao` write to standard output when given no filename, so
 `ibook2epub -ao \| jq '.annotations[].text'` works. Everything else then goes to

@@ -712,7 +712,6 @@ class TestARefreshConvertsNothing:
             ["--match", "hobbit"],
             ["-m", "0"],
             ["--workers", "3"],
-            ["--min-free", "0"],
             ["--no-copy-through"],
             ["--no-shuffle"],
             ["--force"],
@@ -734,6 +733,8 @@ class TestARefreshConvertsNothing:
             ["-p"],
             ["-d"],
             ["-ad", "h.json"],
+            # It rebuilds archives on the shelf's volume, so the floor applies.
+            ["--min-free", "0"],
         ],
     )
     def test_what_shapes_the_refresh_is_still_accepted(self, shaping):

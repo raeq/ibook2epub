@@ -20,6 +20,7 @@ from ..collect.annotations import for_book as annotations_for_book
 from ..collect.coredata import ContainerUnavailableError
 from ..collect.validate import UNREADABLE_MEMBER, ArchiveInvalidError
 from ..export.archive import (
+    NoRoomError,
     collect_copyable,
     collect_package_dirs,
     index_by_package,
@@ -268,16 +269,23 @@ def apply_annotations(
     # library shares its name with a package either way.
     copyable = collect_copyable(args.source_dir)
 
+    code = exits.SUCCESS
     if args.annotations_embedded:
         code = _embed_in_shelf(args, found, converted, assignments, copyable)
-        if code != exits.SUCCESS:
+        # A book the refresh could not rebuild is that book's failure, and the
+        # detached file is somewhere else, so it is still written. Anything
+        # else -- no shelf, the lock held -- stops here as it always did.
+        if code not in (exits.SUCCESS, exits.FAILED):
             return code
 
     if args.annotations_detached:
-        return write_export(
+        written = write_export(
             args, found, args.annotations_detached, assignments, copyable=copyable
         )
-    return exits.SUCCESS
+        # A failed book outranks the destination's own error: the books on
+        # the shelf are what the run is for, and the error is logged anyway.
+        return code if code != exits.SUCCESS else written
+    return code
 
 
 def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
@@ -329,8 +337,6 @@ def _embed_in_shelf(
         quiet=converted,
     )
 
-    changed = 0
-    progress = progress_for(len(assignments), 1)
     # The same lock the export takes. These writes go into the output
     # directory and leave partials there, and a concurrent run's sweep cannot
     # tell one of those from an abandoned one. Refused on this route, the
@@ -338,40 +344,89 @@ def _embed_in_shelf(
     # traceback and exit 1.
     try:
         with output_lock(args.output_dir):
-            for item in assignments:
-                marker = progress.tick()
-                target = args.output_dir / item.filename if item.filename else None
-                if target is None or not target.is_file():
-                    continue
-                mine = annotations_for_book(item.package.name, index)
-                if not mine:
-                    continue
-                try:
-                    if replace_annotations(target, mine):
-                        changed += 1
-                        logger.info(
-                            "%s Refreshed %d annotation(s) in %s",
-                            marker,
-                            len(mine),
-                            printable(target.name),
-                        )
-                except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
-                    # BadZipFile is not an OSError, so one damaged archive used to
-                    # abort the whole refresh and every book after it went
-                    # untouched; nor is what a damaged compressed stream raises,
-                    # which did the same until #21. A damaged archive is an
-                    # expected state: --verify exists to find them.
-                    logger.error(
-                        "Could not refresh %s: %s", printable(target.name), exc
-                    )
+            changed, failed, stopped = _refresh_each(args, assignments, index)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
-    if converted:
-        logger.info("Refreshed annotations in %d book(s).", changed)
-    else:
-        logger.info("Refreshed annotations in %d book(s); converted nothing.", changed)
+
+    # Every book it could not refresh is a failure, and so is a refresh the
+    # floor stopped, as for a conversion. Both were logged and the run exited
+    # 0, so a scheduled refresh that hit ENOSPC on every book reported success.
+    parts = [f"Refreshed annotations in {changed} book(s)"]
+    if failed:
+        parts.append(f"could not refresh {failed}")
+    if stopped:
+        parts.append("stopped at the --min-free floor before the rest")
+    if not converted:
+        parts.append("converted nothing")
+    summary = "; ".join(parts) + "."
+    if failed or stopped:
+        logger.error("%s", summary)
+        return exits.FAILED
+    logger.info("%s", summary)
     return exits.SUCCESS
+
+
+def _refresh_each(
+    args: argparse.Namespace,
+    assignments: Sequence[Assignment],
+    index: dict[str, list[dict[str, Any]]],
+) -> tuple[int, int, bool]:
+    """
+    Rebuild every archive on the shelf whose annotations changed.
+
+    Each rebuild writes a whole copy of the book beside the original, so it
+    answers to ``--min-free`` as a conversion does, through the conversions'
+    own sticky sampler. It never did: a refresh went on rebuilding onto a
+    volume already below the floor, which is the SD card or Kindle the floor
+    exists for.
+
+    :param args: Parsed command line arguments.
+    :param assignments: The names every package was given.
+    :param index: The annotations, by book.
+
+    :return: How many archives were rewritten, how many could not be, and
+        whether the floor stopped the refresh before the rest.
+    """
+    changed = failed = 0
+    # An interval of one: rebuilds run one at a time, so every one is
+    # measured, one statvfs per book that is actually rewritten.
+    progress = progress_for(len(assignments), 1)
+
+    def room() -> bool:
+        return progress.has_room(args.output_dir, args.min_free)
+
+    for item in assignments:
+        marker = progress.tick()
+        target = args.output_dir / item.filename if item.filename else None
+        if target is None or not target.is_file():
+            continue
+        mine = annotations_for_book(item.package.name, index)
+        if not mine:
+            continue
+        try:
+            if replace_annotations(target, mine, room=room):
+                changed += 1
+                logger.info(
+                    "%s Refreshed %d annotation(s) in %s",
+                    marker,
+                    len(mine),
+                    printable(target.name),
+                )
+        except NoRoomError:
+            # Sticky, like the conversions' floor: the volume does not get
+            # emptier by asking again, so every book after this one stops too.
+            return changed, failed, True
+        except UNREADABLE_MEMBER + (ArchiveInvalidError,) as exc:
+            # BadZipFile is not an OSError, so one damaged archive used to
+            # abort the whole refresh and every book after it went untouched;
+            # nor is what a damaged compressed stream raises, which did the
+            # same until #21. A damaged archive is an expected state: --verify
+            # exists to find them. Counted as well as logged, so the run's
+            # exit code says a book was left behind.
+            failed += 1
+            logger.error("Could not refresh %s: %s", printable(target.name), exc)
+    return changed, failed, False
 
 
 def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:

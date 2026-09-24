@@ -15,7 +15,7 @@ import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
@@ -707,8 +707,20 @@ def _same_annotations(
     return bool(stored == list(annotations))
 
 
+class NoRoomError(Exception):
+    """
+    Raised when a rebuild was due and the volume is below the floor.
+
+    Not an ``OSError``: a refresh treats those as one damaged book and goes on
+    to the next, and a full volume is the same answer for every book after it.
+    """
+
+
 def replace_annotations(
-    target_archive: Path, annotations: Sequence[dict[str, object]]
+    target_archive: Path,
+    annotations: Sequence[dict[str, object]],
+    *,
+    room: Callable[[], bool] | None = None,
 ) -> bool:
     """
     Swap the embedded annotation set of an archive already on the shelf.
@@ -724,8 +736,14 @@ def replace_annotations(
 
     :param target_archive: The archive to refresh.
     :param annotations: The annotations this book should now carry.
+    :param room: Asked once a rebuild is known to be due, just before the
+        copy is started beside the original. Asking earlier refused a refresh
+        that had nothing to write, and a shelf already up to date on a full
+        volume reported a failure.
 
     :return: True if the archive was rewritten, False if it already said this.
+
+    :raises NoRoomError: If *room* said there is no room for the copy.
     """
     # An empty set is not an instruction to delete. A package that arrived
     # carrying its own annotations lost them silently when this run happened
@@ -746,6 +764,8 @@ def replace_annotations(
             # 6.4 MB book, to decide against rewriting it.
             if _same_annotations(held, annotations):
                 return False
+            if room is not None and not room():
+                raise NoRoomError(target_archive.name)
 
             members = [
                 info for info in reading.infolist() if info.filename != EMBEDDED_PATH

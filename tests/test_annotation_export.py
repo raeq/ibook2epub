@@ -491,7 +491,9 @@ class TestRefreshingAnnotationsWithoutConverting:
 
         code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
 
-        assert code == 0
+        # Left alone, and a failure the exit code reports: it exited 0, so a
+        # scheduled refresh never learned a book on the shelf was broken.
+        assert code == 1
         assert target.read_bytes() == damaged
 
 
