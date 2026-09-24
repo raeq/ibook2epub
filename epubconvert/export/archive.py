@@ -779,7 +779,8 @@ def replace_annotations(
     :return: True if the archive was rewritten, False if it already said this.
 
     :raises NoRoomError: If *room* said there is no room for the copy.
-    :raises ArchiveInvalidError: If the archive lists a member more than once.
+    :raises ArchiveInvalidError: If the archive's directory lists a member
+        more than once, by name or by a shared local header.
     """
     # An empty set is not an instruction to delete. A package that arrived
     # carrying its own annotations lost them silently when this run happened
