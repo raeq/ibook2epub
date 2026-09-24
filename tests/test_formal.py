@@ -58,6 +58,10 @@ EXPECTED = {
     "RerunPlanner.Unidentifiable": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
+    # Without planning._place: suffix mode strands a book it exists to keep.
+    "RerunPlanner.ChangingSuffixStuck": (
+        "Invariant SuffixKeepsEveryIdentifiableBook is violated."
+    ),
     # Named from the folder: checked before a write, never for a report.
     "RerunPlanner.FolderNamedWrites": HOLDS,
     "RerunPlanner.FolderNamedReports": (

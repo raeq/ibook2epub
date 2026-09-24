@@ -7,6 +7,7 @@
 
 import json
 import os
+import shutil
 import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
@@ -16,7 +17,11 @@ from zipfile import ZipFile
 from epubconvert.collect import source
 from epubconvert.collect.validate import read_package
 from epubconvert.export.archive import collect_package_dirs
-from epubconvert.export.naming import PassthroughNaming
+from epubconvert.export.naming import (
+    MetadataNaming,
+    PassthroughNaming,
+    disambiguator,
+)
 from epubconvert.run import convert, planning, run
 from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_metadata_package, make_package, remove_tree
@@ -609,3 +614,97 @@ class TestAReasonCannotSteerTheTerminal:
         assert "Café" in out
         assert "\x9b" not in out
         assert [item["name"] for item in json.loads(out)] == [name, name]
+
+
+class TestSuffixModeMovesOffAnotherBooksName:
+    """
+    Under ``--on-collision suffix`` a book is not stranded by another's archive.
+
+    A book alone in its run takes its plain name. When the archive under that
+    name holds a different book -- one deleted from the library, or left out
+    of a ``--match`` -- the holder check made it a collision on every run,
+    for ever, though suffix mode exists to keep both. It moves on to its
+    marked name instead, which carries a digest of its own identifier.
+    formal/RerunPlanner.tla found it as SuffixKeepsEveryIdentifiableBook.
+    """
+
+    FLAGS = ("--name-by", "author-title", "--on-collision", "suffix")
+    PLAIN = "Frank Herbert - Dune.epub"
+
+    @staticmethod
+    def _edition(library: Path, folder: str, number: int) -> None:
+        make_metadata_package(
+            library,
+            f"{folder}.epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier=f"urn:uuid:{number}",
+        )
+
+    def _run(self, library: Path, output_dir: Path, *extra: str) -> int:
+        return run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+            + [*self.FLAGS, *extra]
+        )
+
+    def _replaced(self, tmp_path: Path, output_dir: Path) -> Path:
+        library = tmp_path / "lib"
+        self._edition(library, "Dune (1965)", 1)
+        self._run(library, output_dir)
+        remove_tree(library / "Dune (1965).epub")
+        self._edition(library, "Dune (Ace)", 2)
+        return library
+
+    @staticmethod
+    def _identifier(path: Path) -> str | None:
+        with ZipFile(path) as archive:
+            return read_package(archive).identifier
+
+    def test_the_book_is_written_under_its_marked_name(self, tmp_path, output_dir):
+        library = self._replaced(tmp_path, output_dir)
+        marked = f"Frank Herbert - Dune [{disambiguator('urn:uuid:2')}].epub"
+
+        self._run(library, output_dir)
+
+        assert self._identifier(output_dir / marked) == "urn:uuid:2"
+        assert self._identifier(output_dir / self.PLAIN) == "urn:uuid:1"
+
+    def test_the_next_run_finds_it_exported(self, tmp_path, output_dir, capsys):
+        library = self._replaced(tmp_path, output_dir)
+        self._run(library, output_dir)
+        written = {p.name: p.stat().st_mtime_ns for p in output_dir.glob("*.epub")}
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "--list", "--json"]
+            + list(self.FLAGS)
+        )
+        listed = {item["name"]: item for item in json.loads(capsys.readouterr().out)}
+        self._run(library, output_dir)
+
+        assert listed["Dune (Ace).epub"]["status"] == planning.EXPORTED
+        assert listed[self.PLAIN]["status"] == planning.ORPHAN
+        assert written == {
+            p.name: p.stat().st_mtime_ns for p in output_dir.glob("*.epub")
+        }
+
+    def test_a_marked_name_held_by_another_book_moves_on_again(
+        self, tmp_path, output_dir
+    ):
+        library = self._replaced(tmp_path, output_dir)
+        stem = f"Frank Herbert - Dune [{disambiguator('urn:uuid:2')}]"
+        shutil.copy(output_dir / self.PLAIN, output_dir / f"{stem}.epub")
+
+        self._run(library, output_dir)
+
+        assert self._identifier(output_dir / f"{stem}.epub") == "urn:uuid:1"
+        assert self._identifier(output_dir / f"{stem} (2).epub") == "urn:uuid:2"
+
+    def test_skip_mode_still_reports_a_collision(self, tmp_path, output_dir):
+        library = self._replaced(tmp_path, output_dir)
+
+        [decision] = planning.plan_exports(
+            collect_package_dirs(library), output_dir, MetadataNaming()
+        )
+
+        assert decision.status == planning.COLLISION

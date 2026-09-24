@@ -81,12 +81,16 @@ What the configurations that fail show:
 This models how the planner names books (`assign_names`) and how a run reads
 the shelf back (`plan_exports`). There is no state file, so a book whose
 name is on the shelf looks exported. The model checks what that inference
-gets right over a sequence of runs while the library changes. It checks two
-properties:
+gets right over a sequence of runs while the library changes. It checks
+three properties:
 
 - **ExportedMeansTheBooksOwnFile:** a book the planner reports as exported is
   the book held in the file it points at.
 - **NeverWritesOverAnotherBook:** no run replaces another book's archive.
+- **SuffixKeepsEveryIdentifiableBook:** under `--on-collision suffix`, no
+  run leaves a book with a usable identifier unexported because another
+  book's archive holds its name. Checked in the suffix configurations only;
+  skip mode reports that as a collision by design.
 
 Names are strings, so a title that looks like a suffix (`Dune (2)`) collides
 exactly as it does on disk. The model has 3 editions sharing one title, as
@@ -96,14 +100,17 @@ the identifier of the archive already on the shelf and reports a collision
 when it and the book's own identifier are both usable and differ.
 `ReadsSources` says whether naming read each book's package document, as
 `--name-by author-title` does; without it the book's identifier is read
-only when the book is about to be written over an archive.
+only when the book is about to be written over an archive. `MoveOn`
+switches on `_place`: under suffix mode, a book whose name holds another
+book moves on to the first free position of its marked name.
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
 | `Stable` | whole library, `--refresh` | fixed | none | on | both hold |
-| `StableSuffix` | the same, suffix mode, look-alike title | fixed | two | on | both hold |
+| `StableSuffix` | the same, suffix mode, look-alike title | fixed | two | on | all three hold |
 | `Changing` | `--match`, `--refresh` | books added and removed | all | on | both hold |
-| `ChangingSuffix` | the same, suffix mode | books added and removed | all | on | both hold |
+| `ChangingSuffix` | the same, suffix mode | books added and removed | all | on | all three hold |
+| `ChangingSuffixStuck` | the same, without `MoveOn` | books added and removed | all | on | **SuffixKeepsEveryIdentifiableBook violated** |
 | `MatchUnverified` | `--match` | fixed | all | off | **ExportedMeansTheBooksOwnFile violated** |
 | `ChangesUnverified` | whole library | books added and removed | all | off | **ExportedMeansTheBooksOwnFile violated** |
 | `RefreshUnverified` | whole library, `--refresh` | books added and removed | all | off | **NeverWritesOverAnotherBook violated** |
@@ -134,7 +141,16 @@ What the configurations that fail show:
   `none`), nothing tells them apart, and the name decides as it did before.
   Two books that share a genuine identifier, such as a converter's template
   UUID, cannot be told apart either.
-
+- **`ChangingSuffixStuck`** is what the check cost suffix mode before
+  `_place`. With the 1965 edition's archive under the plain name, a run
+  that names the Ace edition alone -- `--match Ace`, or any run after the
+  1965 edition is deleted -- gives it that name, finds it held by another
+  book, and reports a collision, on every run for ever: the mode that exists
+  to keep both kept one. Now the Ace edition moves on to its marked name,
+  `Frank Herbert - Dune [<digest>].epub`, which the next run finds again
+  because the digest is of its own identifier.
+  `tests/test_planning.py::TestSuffixModeMovesOffAnotherBooksName` replays
+  it against the CLI.
 - **`FolderNamedReports`** is the other limit. The default policy,
   `strip` and `romanize` name a book from its package folder and read no
   package document, so a planner that trusted the name there wrote over
@@ -143,8 +159,10 @@ What the configurations that fail show:
   `b/Dune.epub` both exist; `strip` folds case and replaces characters
   other filesystems reject, and `romanize` folds accents and
   transliterates, so `Café.epub` and `Cafe.epub` want one name. Before
-  `--refresh` or `--force` writes over an archive, `_decide` now reads that
-  one book's identifier and runs the check (`FolderNamedWrites`). A book
+  `--refresh` or `--force` writes over an archive, `_decide_before_writing`
+  now reads that one book's identifier and runs the check
+  (`FolderNamedWrites`). Such a book does not move on under suffix mode:
+  the next run, which reads nothing, would not find it there. A book
   reported `exported` is still not checked: that would read every source
   and every archive on every rerun, which is the cost these policies exist
   to avoid. So when the book holding a folder name leaves the library, or a

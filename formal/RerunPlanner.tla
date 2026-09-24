@@ -22,6 +22,9 @@
  *       A policy that names from the folder reads no package document, so
  *       _decide reads the source's identifier only for a book about to be
  *       written over an archive, and a book reported exported is not checked
+ *   _place                      under suffix, a book whose name holds another
+ *       book moves on to the first position of its marked name that no other
+ *       book of the run is named and no other book's archive holds
  * and epubconvert/run/run.py (_shared_names): a run narrowed by --match names
  * only the books it selected.
  *
@@ -40,8 +43,10 @@ CONSTANTS
     AllowRefresh,  \* runs may pass --refresh
     AllowChanges,  \* books may be added to and removed from the library
     VerifyHolder,  \* _decide_against_holder: the check that fixes the defects
-    ReadsSources   \* naming reads each package document (--name-by author-title);
+    ReadsSources,  \* naming reads each package document (--name-by author-title);
                    \* otherwise the check runs only before a write
+    MoveOn         \* _place: under suffix, a book whose name holds another book
+                   \* moves on to its marked name
 
 Books == 1..N
 
@@ -50,9 +55,11 @@ VARIABLES
     shelf,         \* name -> the book whose archive has that name, or 0
     misreported,   \* history: a run called a book exported by a file of another
     clobbered,     \* history: a run wrote over another book's archive
+    stranded,      \* history: a suffix run left an identifiable book unexported
+                   \* because another book's archive held its name
     last           \* the last run: what it selected and decided, for traces
 
-vars == <<lib, shelf, misreported, clobbered, last>>
+vars == <<lib, shelf, misreported, clobbered, stranded, last>>
 
 -----------------------------------------------------------------------------
 (* Naming: assign_names *)
@@ -108,6 +115,7 @@ Init ==
     /\ shelf = [n \in Names |-> 0]
     /\ misreported = FALSE
     /\ clobbered = FALSE
+    /\ stranded = FALSE
     /\ last = <<>>
 
 AddBook(b) ==
@@ -115,32 +123,59 @@ AddBook(b) ==
     /\ b \notin lib
     /\ lib' = lib \cup {b}
     /\ last' = <<"added", b>>
-    /\ UNCHANGED <<shelf, misreported, clobbered>>
+    /\ UNCHANGED <<shelf, misreported, clobbered, stranded>>
 
 RemoveBook(b) ==
     /\ AllowChanges
     /\ b \in lib
     /\ lib' = lib \ {b}
     /\ last' = <<"removed", b>>
-    /\ UNCHANGED <<shelf, misreported, clobbered>>
+    /\ UNCHANGED <<shelf, misreported, clobbered, stranded>>
 
 (* One run over the selection S. Every decision is made before anything is
    written (plan_exports, then the export). `newer` is the books whose source
    is newer than their archive, for --refresh. `done` is the writes that
-   finish: -m caps a run, and a run can be stopped. *)
+   finish: -m caps a run, and a run can be stopped.
+
+   `first` and `name` are bound with \E x \in {e} rather than LET because
+   TLC re-evaluates a LET definition at every reference: naming, once per
+   lookup of a name. ChangingSuffix took 2m08s that way and takes 1s. *)
 Run(S, refresh, newer, done) ==
-    LET name     == Assign(S)
-        present  == {b \in S : name[b] # "" /\ shelf[name[b]] # 0}
+    \E first \in {Assign(S)} :
+    LET
         \* Whose archive is compared: every book on the shelf when naming read
         \* the sources, otherwise only a book --refresh would write.
-        checked  == IF ReadsSources THEN present
-                    ELSE IF refresh THEN present \cap newer ELSE {}
-        \* The archive's identifier and the book's are both usable and differ.
-        foreign  == {b \in checked :
-                       /\ VerifyHolder
-                       /\ b \in Usable
-                       /\ shelf[name[b]] \in Usable
-                       /\ shelf[name[b]] # b}
+        Checked(b) == ReadsSources \/ (refresh /\ b \in newer)
+        \* The archive named n holds another book: its identifier and b's are
+        \* both usable and differ.
+        Foreign(b, n) == /\ VerifyHolder
+                         /\ Checked(b)
+                         /\ b \in Usable
+                         /\ shelf[n] \in Usable
+                         /\ shelf[n] # b
+        \* Under suffix, a book whose name holds another book moves on, when
+        \* naming read the identifier its marked name is a digest of.
+        moves    == {b \in S : /\ MoveOn
+                               /\ OnCollision = "suffix"
+                               /\ ReadsSources
+                               /\ first[b] # ""
+                               /\ Foreign(b, first[b])}
+        taken    == {first[c] : c \in S}
+        \* _place: the first position of b's marked name that no book of this
+        \* run is named and no other book's archive holds. first[b] is one of
+        \* the names taken, and holds another book besides.
+        moved    == [b \in moves |->
+                       LET open == {k \in 1..Limit :
+                                      LET n == Suffixed(Marked(Wanted[b], b), k)
+                                      IN n \notin taken /\ ~Foreign(b, n)}
+                       IN IF open = {} THEN ""
+                          ELSE Suffixed(Marked(Wanted[b], b),
+                                        CHOOSE k \in open : \A j \in open : k <= j)]
+        named    == [b \in S |-> IF b \in moves THEN moved[b] ELSE first[b]]
+    IN \E name \in {named} :
+    LET present  == {b \in S : name[b] # "" /\ shelf[name[b]] # 0}
+        foreign  == {b \in present : Foreign(b, name[b])}
+        collided == {b \in S : name[b] = ""} \cup foreign
         ours     == present \ foreign
         rewrite  == IF refresh THEN ours \cap newer ELSE {}
         exported == ours \ rewrite
@@ -150,13 +185,15 @@ Run(S, refresh, newer, done) ==
                            \E b \in exported : shelf[name[b]] # b)
        /\ clobbered' = (clobbered \/
                          \E b \in written : shelf[name[b]] \notin {0, b})
+       /\ stranded' = (stranded \/
+                        (OnCollision = "suffix" /\ collided \cap Usable # {}))
        /\ shelf' = [n \in Names |->
                       IF \E b \in written : name[b] = n
                         THEN CHOOSE b \in written : name[b] = n
                         ELSE shelf[n]]
        /\ last' = <<"ran", IF S = lib THEN "all" ELSE "--match", S,
                     IF refresh THEN "--refresh" ELSE "",
-                    [b \in S |-> IF name[b] = "" \/ b \in foreign THEN "collision"
+                    [b \in S |-> IF b \in collided THEN "collision"
                                 ELSE IF b \in exported THEN <<"exported", name[b]>>
                                 ELSE IF b \in written THEN <<"wrote", name[b]>>
                                 ELSE <<"pending", name[b]>>]>>
@@ -180,7 +217,7 @@ Spec == Init /\ [][Next]_vars
 \* What makes two states the same, for TLC's VIEW: everything but `last`,
 \* which is there for reading counterexamples and would otherwise multiply
 \* the states checked by every way of reaching each one.
-View == <<lib, shelf, misreported, clobbered>>
+View == <<lib, shelf, misreported, clobbered, stranded>>
 
 -----------------------------------------------------------------------------
 (* Properties *)
@@ -194,11 +231,16 @@ ExportedMeansTheBooksOwnFile == ~misreported
 \* book from the shelf (find_orphans: "Nothing is deleted, here or anywhere").
 NeverWritesOverAnotherBook == ~clobbered
 
+\* Suffix mode exists to keep both books. One with a usable identifier is
+\* never left unexported because another book's archive holds its name.
+SuffixKeepsEveryIdentifiableBook == ~stranded
+
 TypeOK ==
     /\ lib \subseteq Books
     /\ shelf \in [Names -> 0..N]
     /\ misreported \in BOOLEAN
     /\ clobbered \in BOOLEAN
+    /\ stranded \in BOOLEAN
 
 -----------------------------------------------------------------------------
 (* Libraries used by the configurations *)

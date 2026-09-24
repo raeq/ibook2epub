@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NamedTuple
 from zipfile import BadZipFile, ZipFile
 
 from ..collect.source import inspect_package
@@ -36,6 +36,7 @@ from ..utils.display import printable, printable_json
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
+from .claims import Claims, lost_to
 from .holders import foreign, holds_another_book
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
@@ -174,50 +175,6 @@ def marked(filename: str, marker: str, max_bytes: int) -> str:
     return f"{stem_text}{marker}{extension}"
 
 
-class _Claims:
-    """
-    Which output names are spoken for, and where each search left off.
-
-    Two sets rather than one. ``identity`` answers whether two books are the
-    same book; ``filesystem_key`` answers whether two names are the same
-    *file*, which on a case-insensitive volume is a looser question and the one
-    that decides whether a write destroys another write.
-
-    The resume positions exist because a colliding group that exhausted
-    ``MAX_SUFFIX`` made every later member retry all 99 candidates, recomputing
-    identity each time, before losing.
-    """
-
-    def __init__(self) -> None:
-        self.identities: set[str] = set()
-        self.paths: set[str] = set()
-        self.positions: dict[str, int] = {}
-        self.holders: dict[str, str] = {}
-
-    def resume(self, group: str) -> int:
-        """Return the first position worth trying for this group."""
-        return self.positions.get(group, 1)
-
-    def take(self, group: str, position: int, key: str, candidate: str) -> bool:
-        """Claim a candidate if both its identity and its path are free."""
-        path_key = filesystem_key(candidate)
-        if key in self.identities or path_key in self.paths:
-            return False
-        self.identities.add(key)
-        self.paths.add(path_key)
-        self.positions[group] = position + 1
-        self.holders.setdefault(group, candidate)
-        return True
-
-    def holder(self, group: str) -> str | None:
-        """Return the name that took this group, if anything did."""
-        return self.holders.get(group)
-
-    def exhaust(self, group: str, limit: int) -> None:
-        """Record that this group has no positions left to try."""
-        self.positions[group] = limit + 1
-
-
 def _metadata_of(package: Path, wanted: bool) -> Package | None:
     """
     Read a package document, but only for a policy that asked for it.
@@ -330,7 +287,7 @@ def assign_names(
     setup = _Naming(policy, on_collision, getattr(policy, "max_bytes", 0))
     wanted = _wanted_names(packages, policy)
     crowded = Counter(policy.identity(name) for _, name, _ in wanted)
-    claims = _Claims()
+    claims = Claims()
 
     return [
         _assign_one(
@@ -379,7 +336,7 @@ def _assign_one(
     metadata: Package | None,
     *,
     setup: _Naming,
-    claims: _Claims,
+    claims: Claims,
     crowded: Counter[str],
 ) -> Assignment:
     """
@@ -395,13 +352,14 @@ def _assign_one(
     :return: The assignment, with an empty filename if the book lost.
     """
     base = name
+    stable = _stable_base(name, metadata, setup.budget)
     if setup.on_collision == SUFFIX and crowded[setup.policy.identity(name)] > 1:
-        base = _stable_base(name, metadata, setup.budget)
+        base = stable
     group = setup.policy.identity(base)
 
     taken = _claim(claims, base, group, setup=setup)
     if taken is None:
-        return Assignment(package, "", group, _lost_to(claims.holder(group), metadata))
+        return Assignment(package, "", group, lost_to(claims.holder(group), metadata))
 
     filename, key = taken
     return Assignment(
@@ -412,6 +370,8 @@ def _assign_one(
         _named_without_author(metadata),
         _named_from_folder(metadata, setup.policy),
         usable_identifier(metadata),
+        # Where it goes if its name holds another book; see _place.
+        stable if setup.on_collision == SUFFIX and stable != name else None,
     )
 
 
@@ -455,7 +415,7 @@ def _named_from_folder(metadata: Package | None, policy: NamingPolicy) -> bool:
 
 
 def _claim(
-    claims: _Claims, base: str, group: str, *, setup: _Naming
+    claims: Claims, base: str, group: str, *, setup: _Naming
 ) -> tuple[str, str] | None:
     """
     Take the first free candidate name for a book, or report that none is.
@@ -476,29 +436,6 @@ def _claim(
             return candidate, key
     claims.exhaust(group, limit)
     return None
-
-
-def _lost_to(holder: str | None, metadata: Package | None) -> str:
-    """
-    Explain which book holds the name, and say what this one is.
-
-    Naming the winner turns "another book already claims this name" into
-    something a person can act on, and the loser's identifier is what tells
-    them whether the two are the same book stored twice or genuinely different
-    editions. In a surveyed library both cases are common.
-
-    :param holder: The filename that took the name, if one did.
-    :param metadata: The losing package's document, if it was read.
-
-    :return: The reason to record on the decision.
-    """
-    reason = (
-        f"{holder} already holds this name"
-        if holder
-        else "another book already claims this name"
-    )
-    identifier = usable_identifier(metadata)
-    return f"{reason}; this book is {identifier}" if identifier else reason
 
 
 def find_orphans(
@@ -525,7 +462,8 @@ def find_orphans(
     one holding another book is the plan's collision, and counting it as
     claimed hid the archive of a book deleted from the library, which can be
     its last copy. Under ``--name-by author-title`` that reads each claimed
-    archive's identifier, as planning does (:mod:`epubconvert.run.holders`).
+    archive's identifier, as planning does (:mod:`epubconvert.run.holders`),
+    and a book that moved on to its marked name claims that file (:func:`_place`).
 
     Nothing is deleted, here or anywhere. The never-deletes stance is
     deliberate; the gap was that nothing would say either.
@@ -542,14 +480,12 @@ def find_orphans(
     """
     if assigned is None:
         assigned = assign_names(packages, policy, on_collision)
-    existing = _read_shelf(output_dir, policy)
+    shelf = _read_shelf(output_dir, policy, assigned)
     claimed = {filesystem_key(policy.identity(name)) for name in claimed_extra}
     for item in assigned:
-        clash = existing.get(filesystem_key(item.identity))
-        if item.filename and clash is not None:
-            reason = foreign(clash.path, clash.identity, item.identity, item.identifier)
-            if reason is None:
-                claimed.add(filesystem_key(item.identity))
+        clash = _place(item, shelf).clash
+        if clash is not None:
+            claimed.add(filesystem_key(clash.identity))
 
     return sorted(
         found
@@ -573,26 +509,103 @@ def orphan_decisions(orphans: Sequence[Path]) -> list[Decision]:
     ]
 
 
-def _read_shelf(output_dir: Path, policy: NamingPolicy) -> dict[str, _Existing]:
+@dataclass
+class _Shelf:
+    """The archives already on the shelf, and the names a plan has spoken for."""
+
+    policy: NamingPolicy
+    #: Each archive, keyed as the filesystem sees its name.
+    existing: dict[str, _Existing]
+    #: Keys of every name the plan assigned, and of each name a book moved on
+    #: to, so no two books of one plan are placed at one file.
+    spoken: set[str]
+
+
+class _Place(NamedTuple):
+    """Where a book is recognised or written, or why it has nowhere."""
+
+    #: The name, or ``""`` when the book has none.
+    filename: str
+    #: The book's own archive under that name, if one is there.
+    clash: _Existing | None
+    #: Why the book has no name, when it has none.
+    reason: str | None
+
+
+def _read_shelf(
+    output_dir: Path, policy: NamingPolicy, assigned: Sequence[Assignment]
+) -> _Shelf:
     """
-    Read the archives already on the shelf, keyed as the filesystem sees them.
+    Read the archives already on the shelf, for a plan to place books against.
 
     :param output_dir: Directory holding exported files.
     :param policy: Naming policy supplying identities.
+    :param assigned: The plan's names.
 
-    :return: Each archive by the key of its name.
+    :return: The shelf, with every assigned name spoken for.
     """
     # Missing directories glob to nothing, which is what a dry run wants.
     # Keyed through the same fold the name assignment uses. Folding one and
     # not the other meant a book already exported under a different case was
     # never recognised, and was re-exported on every run for ever.
-    return {
+    existing = {
         filesystem_key(policy.identity(found.name)): _Existing(
             path=found, identity=policy.identity(found.name)
         )
         for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
         if found.is_file()
     }
+    spoken = {filesystem_key(item.identity) for item in assigned if item.filename}
+    return _Shelf(policy, existing, spoken)
+
+
+def _place(assignment: Assignment, shelf: _Shelf) -> _Place:
+    """
+    Settle the file a book is recognised by or written to.
+
+    Its assigned name, unless the archive there is another book's
+    (:mod:`epubconvert.run.holders`). Under ``--on-collision suffix`` it then
+    moves on to the first position of its marked name that no book of this
+    plan is named and no other book's archive holds. It used to be a collision
+    on every run for ever -- a book alone in a run, or left alone by a deleted
+    edition, takes the plain name the other edition's archive has -- though
+    suffix mode exists to keep both. formal/RerunPlanner.tla found it. The
+    marker is a digest of the book's own identifier, so the next run finds it
+    in the same place, and the other archive is still never written over.
+
+    :param assignment: The book's assigned name, identity and identifier.
+    :param shelf: The shelf and the plan's names, updated in place.
+
+    :return: Where the book goes, or why it has nowhere.
+    """
+    if not assignment.filename:
+        return _Place("", None, assignment.reason)
+    clash = shelf.existing.get(filesystem_key(assignment.identity))
+    reason = _foreign_to(clash, assignment.identity, assignment.identifier)
+    if reason is None:
+        return _Place(assignment.filename, clash, None)
+    if assignment.marked:
+        budget = getattr(shelf.policy, "max_bytes", 0)
+        for position in range(1, MAX_SUFFIX + 1):
+            candidate = suffixed(assignment.marked, position, budget)
+            identity = shelf.policy.identity(candidate)
+            key = filesystem_key(identity)
+            clash = shelf.existing.get(key)
+            if key not in shelf.spoken and (
+                _foreign_to(clash, identity, assignment.identifier) is None
+            ):
+                shelf.spoken.add(key)
+                return _Place(candidate, clash, None)
+    return _Place("", None, reason)
+
+
+def _foreign_to(
+    clash: _Existing | None, identity: str, identifier: str | None
+) -> str | None:
+    """Say why *clash* is not this book's archive; None if free or its own."""
+    if clash is None:
+        return None
+    return foreign(clash.path, clash.identity, identity, identifier)
 
 
 def plan_exports(
@@ -622,10 +635,10 @@ def plan_exports(
     # one per element -- two workers writing the same target.
     packages = list(dict.fromkeys(packages))
 
-    existing = _read_shelf(output_dir, policy)
     if assigned is None:
         assigned = assign_names(packages, policy, settings.on_collision)
     assignments = assigned
+    shelf = _read_shelf(output_dir, policy, assignments)
     # Neither is a failure, and both change what the shelf looks like. A run
     # that says nothing leaves the only way to notice as looking afterwards
     # and wondering.
@@ -644,7 +657,7 @@ def plan_exports(
     unread = not getattr(policy, "needs_metadata", False)
 
     return [
-        _decide(package, named[package], existing, output_dir, settings, unread=unread)
+        _decide(package, named[package], shelf, output_dir, settings, unread=unread)
         for package in packages
     ]
 
@@ -652,7 +665,7 @@ def plan_exports(
 def _decide(
     package: Path,
     assignment: Assignment,
-    existing: dict[str, _Existing],
+    shelf: _Shelf,
     output_dir: Path,
     settings: PlanOptions,
     *,
@@ -663,7 +676,7 @@ def _decide(
 
     :param package: The package directory.
     :param assignment: Its assigned name, identity and collision reason.
-    :param existing: Identities already present in the output directory.
+    :param shelf: The archives already present, and the plan's names.
     :param output_dir: Directory the epub files are written into.
     :param settings: Planning behaviour.
     :param unread: Naming read no package document, so the assignment
@@ -671,13 +684,11 @@ def _decide(
 
     :return: The decision for this package.
     """
-    if not assignment.filename:
-        return Decision(package, COLLISION, reason=assignment.reason)
-
-    clash = existing.get(filesystem_key(assignment.identity))
-    taken = _decide_against_clash(package, clash, assignment)
-    if taken is not None:
-        return taken
+    # Neither "write it", which would replace another book's archive, nor
+    # "exported", which would silently drop this one.
+    filename, clash, reason = _place(assignment, shelf)
+    if not filename:
+        return Decision(package, COLLISION, reason=reason)
     found = clash.path if clash is not None else None
     # --force still has to pass inspection. Settling it here, before the walk
     # below, let a DRM-protected or half-downloaded source overwrite a good
@@ -703,7 +714,7 @@ def _decide(
             package, PENDING, found, reason="forced" if forced else "source is newer"
         )
 
-    return Decision(package, PENDING, output_dir / assignment.filename)
+    return Decision(package, PENDING, output_dir / filename)
 
 
 def _decide_before_writing(
@@ -733,30 +744,6 @@ def _decide_before_writing(
         if other is not None:
             return other
     return _decide_against_source(package, settings)
-
-
-def _decide_against_clash(
-    package: Path, clash: _Existing | None, assignment: Assignment
-) -> Decision | None:
-    """
-    Decide whether the archive holding this filename is another book's.
-
-    Neither available answer is "write it" -- that would replace another
-    book's archive -- nor "exported", which would silently drop this one.
-
-    :param package: The package directory.
-    :param clash: The archive occupying this filename, if any.
-    :param assignment: This package's assigned name, identity and identifier.
-
-    :return: A collision decision, or None when the name is free or the file
-        may be this book's own.
-    """
-    if clash is None:
-        return None
-    reason = foreign(
-        clash.path, clash.identity, assignment.identity, assignment.identifier
-    )
-    return None if reason is None else Decision(package, COLLISION, reason=reason)
 
 
 def _decide_against_holder(

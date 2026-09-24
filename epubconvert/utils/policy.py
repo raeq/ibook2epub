@@ -44,6 +44,10 @@ class Assignment:
     #: The book's usable dc:identifier, when naming read its package document.
     #: What tells this book from another that wants the same name.
     identifier: str | None = None
+    #: Under ``--on-collision suffix``, the name marked with a digest of
+    #: *identifier* that the book moves on to when the archive under its own
+    #: name holds another book. None when there is no identifier to digest.
+    marked: str | None = None
 
 
 @runtime_checkable
