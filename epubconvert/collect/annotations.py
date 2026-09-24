@@ -296,10 +296,13 @@ def collect(
         # One row at a time, because this was a comprehension and one
         # unusable row therefore cost every good one. Apple's columns are
         # untyped: a date that is a string, a style that is a colour name and
-        # text that is a BLOB have all been seen.
+        # text that is a BLOB have all been seen. ArithmeticError is the
+        # backstop for a number too large to convert: a style of 9e999 is a
+        # real infinity in SQLite, int() of it raised OverflowError past this
+        # guard, and one row cost the whole export.
         try:
             found.append(_annotation_of(row, library, parsed, policy))
-        except (TypeError, ValueError, OSError) as exc:
+        except (TypeError, ValueError, ArithmeticError, OSError) as exc:
             logger.warning(
                 "Skipped an unreadable annotation (%s): %s",
                 row["ZANNOTATIONUUID"] or "no id",
@@ -397,8 +400,9 @@ def _annotation_of(
     if row["ZANNOTATIONSTYLE"] is not None:
         # Carried opaquely or not at all. The number means a colour whose
         # mapping Apple has changed between releases, so it is worth nothing
-        # next to losing the highlight it belongs to.
-        with contextlib.suppress(TypeError, ValueError):
+        # next to losing the highlight it belongs to. OverflowError is what
+        # int() raises for an infinity, which SQLite stores for 9e999.
+        with contextlib.suppress(TypeError, ValueError, OverflowError):
             annotation["style"] = int(row["ZANNOTATIONSTYLE"])
     modified = moment(row["ZANNOTATIONMODIFICATIONDATE"])
     if modified:
