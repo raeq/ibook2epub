@@ -387,8 +387,19 @@ def _embed_in_shelf(
     try:
         with output_lock(args.output_dir):
             # Read under the lock, and as before a write: a policy that names
-            # from the folder reads the book's own identifier to compare.
-            places = placed(assignments, args.output_dir, policy, writing=True)
+            # from the folder reads the book's own identifier to compare --
+            # only for the books with highlights, the ones rewritten.
+            places = placed(
+                assignments,
+                args.output_dir,
+                policy,
+                writing=True,
+                only={
+                    item.package
+                    for item in assignments
+                    if annotations_for_book(item.package.name, index)
+                },
+            )
             changed, failed, stopped = _refresh_each(args, assignments, index, places)
     except OutputLockedError as exc:
         logger.critical("%s", exc)

@@ -11,7 +11,7 @@ marked name.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
@@ -170,6 +170,7 @@ def placed(
     policy: NamingPolicy,
     *,
     writing: bool = False,
+    only: Collection[Path] | None = None,
 ) -> dict[Path, Path | None]:
     """
     Find the archive on the shelf that is each book's own.
@@ -190,6 +191,11 @@ def placed(
         as the plan trusts it for a book it reports exported; before a write
         the book's own identifier is read and compared, as it is before
         ``--refresh`` or ``--force`` writes.
+    :param only: The books the caller will write, when not all of them are:
+        only these pay for the comparison *writing* asks for. Every book is
+        still placed, because where one moves on depends on the books before
+        it; ``-ae -ar`` compared all 2,000 books of a shelf to rewrite the one
+        with a highlight, 8.7x slower than before the comparison.
 
     :return: Each package, and its own archive or None when it has none.
     """
@@ -201,6 +207,7 @@ def placed(
         if (
             clash is not None
             and unread
+            and (only is None or item.package in only)
             and holds_another_book(clash.path, _identifier_of(item.package))
         ):
             clash = None
