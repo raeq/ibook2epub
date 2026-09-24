@@ -5,6 +5,8 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison
 
+import errno
+import io
 import logging
 import os
 from pathlib import Path
@@ -230,6 +232,33 @@ class TestLoggerConfiguration:
         app_logger.configure(verbosity=1)  # Close the file handler.
 
         assert "Could not read Caf" in log_path.read_text(encoding="utf-8")
+
+    def test_a_log_file_that_stops_taking_writes_is_said_once(
+        self, library, tmp_path, monkeypatch, capsys
+    ):
+        # A full volume under --log-file printed a "--- Logging error ---"
+        # traceback for every line of the run, which still exited 0.
+        class Full(io.StringIO):
+            def write(self, _text: str) -> int:
+                raise OSError(errno.ENOSPC, "No space left on device")
+
+            def flush(self) -> None:
+                self.write("")
+
+        monkeypatch.setattr(logging.FileHandler, "_open", lambda _self: Full())
+        log_path = tmp_path / "run.log"
+
+        code = run.main(
+            ["-s", str(library), "-o", str(tmp_path / "out"), "-m", "0"]
+            + ["--log-file", str(log_path)]
+        )
+        err = capsys.readouterr().err
+        app_logger.configure(verbosity=1)  # Close the file handler.
+
+        assert code == exits.SUCCESS
+        assert "Logging error" not in err and "Traceback" not in err
+        assert err.count(f"Could not write to the log file {log_path}") == 1
+        assert "No space left on device" in err
 
 
 class TestMain:
