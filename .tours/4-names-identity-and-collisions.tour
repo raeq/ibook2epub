@@ -60,7 +60,7 @@
     },
     {
       "title": "Collision candidates",
-      "file": "epubconvert/run/planning.py",
+      "file": "epubconvert/run/claims.py",
       "pattern": "def suffixed\\(filename: str, position: int, max_bytes: int\\) -> str:",
       "description": "Position 1 is the name itself; 2 upward append ` (2)`, ` (3)` and so on, up to `MAX_SUFFIX`.\n\nThe suffix is applied **within** the policy's byte budget. Appending to a name already at the limit would push it over, and the export would fail at the closing rename with a filesystem error rather than a name collision — a confusing way to learn that two books share a title.\n\nA policy declaring no budget is left alone, for the reason given with the protocol."
     },

@@ -399,13 +399,14 @@ class _DirectoryMembers:  # pylint: disable=too-few-public-methods
         # change across a package.
         try:
             self.resolved_root = root.resolve()
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             # Python 3.10 to 3.12 raise RuntimeError, not OSError, for a
-            # symlink loop. Every reader of a package catches ValidationError,
-            # so this one package took the whole library export, annotation
-            # export or naming pass down with it. Translated here, at the one
-            # place a package directory is opened, so no caller can miss it.
-            raise ValidationError(f"{printable(root.name)} is a symlink loop") from exc
+            # symlink loop, and a NUL in the path -- Apple's untyped ZPATH can
+            # hold one -- raises ValueError. Every reader of a package catches
+            # ValidationError, so either took the whole library export,
+            # annotation export or naming pass down with this one package.
+            # Translated here, at the one place a package directory is opened.
+            raise ValidationError(f"{printable(root.name)} cannot be resolved") from exc
 
     def read(self, name: str) -> bytes:
         """
@@ -806,12 +807,12 @@ def validate_archive(path: Path) -> list[str]:
 
             broken = archive.testzip()
             if broken is not None:
-                problems.append(f"corrupt member: {broken}")
+                problems.append(f"corrupt member: {printable(broken)}")
 
             try:
                 package = read_package(archive)
             except ValidationError as exc:
-                problems.append(str(exc))
+                problems.append(printable(str(exc)))  # names the book's members
                 return problems
 
             problems.extend(_check_manifest(members, package))
@@ -905,15 +906,15 @@ def _check_manifest(members: set[str], package: Package) -> list[str]:
     :param members: The archive's member names, built once by the caller.
     :param package: The parsed package document.
 
-    :return: A list of problems.
+    :return: Problems, the book's ids and hrefs escaped: ``%1B`` decodes to ESC.
     """
     problems: list[str] = []
 
     if not package.manifest:
-        problems.append(f"{package.opf_path} declares no manifest items")
+        problems.append(f"{printable(package.opf_path)} declares no manifest items")
 
     missing = sorted(
-        f"{item_id} -> {href}"
+        printable(f"{item_id} -> {href}")
         for item_id, href in package.manifest.items()
         if href not in members
     )
@@ -922,14 +923,14 @@ def _check_manifest(members: set[str], package: Package) -> list[str]:
     if len(missing) > 5:
         problems.append(f"...and {len(missing) - 5} more missing manifest item(s)")
 
-    dangling = sorted(set(package.spine) - set(package.manifest))
+    dangling = sorted(map(printable, set(package.spine) - set(package.manifest)))
     for idref in dangling[:5]:
         problems.append(f"spine references unknown manifest id: {idref}")
     if len(dangling) > 5:
         problems.append(f"...and {len(dangling) - 5} more dangling spine id(s)")
 
     if not package.spine:
-        problems.append(f"{package.opf_path} declares no spine")
+        problems.append(f"{printable(package.opf_path)} declares no spine")
 
     return problems
 

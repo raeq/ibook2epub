@@ -18,8 +18,8 @@
     },
     {
       "title": "Reading the record",
-      "file": "epubconvert/run/planning.py",
-      "pattern": "filesystem_key\\(policy\\.identity\\(found\\.name\\)\\): _Existing\\(",
+      "file": "epubconvert/run/placing.py",
+      "pattern": "filesystem_key\\(policy\\.identity\\(found\\.name\\)\\): Existing\\(",
       "description": "The record, read in one line: glob `*.epub` in the output directory, run each filename back through `policy.identity`.\n\nA missing directory globs to nothing, which is exactly what a dry run against a not-yet-created output directory wants."
     },
     {

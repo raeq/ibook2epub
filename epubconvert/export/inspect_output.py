@@ -261,7 +261,7 @@ def verify_output(
                 "[%d/%d] %s is damaged: %s",
                 position,
                 len(archives),
-                archive.name,
+                printable(archive.name),
                 "; ".join(problems[:3]),
             )
         else:

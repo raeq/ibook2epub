@@ -152,12 +152,20 @@ def open_contained(path: Path) -> BinaryIO:
     :return: A binary file object.
 
     :raises OSError: If the final component is a symlink (``ELOOP``), is not a
-        regular file, or the open fails for any ordinary reason.
+        regular file, has more than one name, or the open fails for any
+        ordinary reason.
     """
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
             raise OSError(errno.EINVAL, "not a regular file", str(path))
+        # A hardlink is refused at check time, and has to be here too: one
+        # swapped in after the check was read, carrying a file from elsewhere
+        # on the volume into the book, the window O_NOFOLLOW closes for a
+        # symlink.
+        if info.st_nlink > 1:
+            raise OSError(errno.EMLINK, "hardlinked member", str(path))
         os.set_blocking(descriptor, True)
     except OSError:
         os.close(descriptor)

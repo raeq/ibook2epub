@@ -15,13 +15,16 @@ really be written.
 import asyncio
 import os
 import time
+from collections import Counter
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+
+import pytest
 
 from epubconvert.collect import source, validate
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
-from epubconvert.run import convert, planning, run
+from epubconvert.run import claims, convert, holders, planning, run
 from tests.conftest import make_metadata_package, make_package
 
 #: Font obfuscation, which is not protection, and a key-transport algorithm,
@@ -150,7 +153,7 @@ class TestCollisionSearchDoesNotRescan:
 
         planning.assign_names(packages, Counting(), planning.SUFFIX)
 
-        assert calls["n"] < len(packages) * planning.MAX_SUFFIX
+        assert calls["n"] < len(packages) * claims.MAX_SUFFIX
 
 
 class TestVerifyChecksEveryArchive:
@@ -296,6 +299,82 @@ class TestThePackageDocumentIsReadOnce:
         )
 
         assert "orphan" not in capsys.readouterr().out
+
+
+class TestEachShelfArchiveIsReadOnce:
+    """
+    The orphan check and the plan each placed every book against the shelf,
+    and each read the identifier of every archive under a book's name: on a
+    200-book shelf under ``--name-by author-title``, 400 opens for a no-op
+    rerun. Files copied through land between the two, so what one read is
+    reused only while the archive is unchanged.
+    """
+
+    @staticmethod
+    def _opens(
+        monkeypatch, library: Path, output_dir: Path, *extra: str
+    ) -> Counter[Path]:
+        opened: Counter[Path] = Counter()
+        original = ZipFile.__init__
+
+        def counting(self, file, *args, **kwargs):
+            if Path(str(file)).parent == output_dir:
+                opened[Path(str(file))] += 1
+            original(self, file, *args, **kwargs)
+
+        monkeypatch.setattr(ZipFile, "__init__", counting)
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q", *extra])
+        return opened
+
+    @pytest.mark.parametrize("listing", [[], ["--list"]])
+    def test_a_rerun_reads_each_archive_once(
+        self, tmp_path, output_dir, monkeypatch, listing
+    ):
+        library = tmp_path / "lib"
+        for index in range(4):
+            make_metadata_package(
+                library,
+                f"Book {index}.epub",
+                title=f"Book {index}",
+                identifier=f"urn:uuid:{index}",
+            )
+        flags = ("--name-by", "author-title")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q", *flags])
+
+        opened = self._opens(monkeypatch, library, output_dir, *flags, *listing)
+
+        assert len(opened) == 4
+        assert set(opened.values()) == {1}
+
+    def test_an_archive_replaced_between_asks_is_read_again(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        for index in range(2):
+            make_metadata_package(
+                library,
+                f"Book {index}.epub",
+                title=f"Book {index}",
+                identifier=f"urn:uuid:{index}",
+            )
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+            + ["--name-by", "author-title"]
+        )
+        first, second = sorted(output_dir.glob("*.epub"))
+        assert holders.identifier_on_shelf(first) == "urn:uuid:0"
+
+        second.replace(first)
+
+        assert holders.identifier_on_shelf(first) == "urn:uuid:1"
+
+    def test_the_default_policy_reads_no_archive(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        for index in range(4):
+            make_metadata_package(library, f"Book {index}.epub", title=f"Book {index}")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        assert self._opens(monkeypatch, library, output_dir) == Counter()
 
 
 def _nested_blocks(levels: int, algorithm: str = FONTS) -> bytes:

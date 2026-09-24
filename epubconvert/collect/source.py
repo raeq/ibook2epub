@@ -105,9 +105,17 @@ def encryption_algorithms(package: Path) -> set[str]:
         if path.stat().st_size > MAX_ENCRYPTION_BYTES:
             raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is implausibly large")
         with open_contained(path) as handle:
-            data = handle.read()
+            # Bounded, because the size above was measured before the open
+            # and a file can grow in between: unbounded, one that did was read
+            # whole however large it had become. validate's reader closed the
+            # same gap.
+            data = handle.read(MAX_ENCRYPTION_BYTES + 1)
     except OSError as exc:
         raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
+    if len(data) > MAX_ENCRYPTION_BYTES:
+        raise UnreadableEncryptionError(
+            f"{ENCRYPTION_PATH} is implausibly large (grew while read)"
+        )
 
     try:
         # Through parse_xml, which turns a refused encoding into a ParseError:

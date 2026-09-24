@@ -101,7 +101,7 @@ when it and the book's own identifier are both usable and differ.
 `ReadsSources` says whether naming read each book's package document, as
 `--name-by author-title` does; without it the book's identifier is read
 only when the book is about to be written over an archive. `MoveOn`
-switches on `_place`: under suffix mode, a book whose name holds another
+switches on `placing.place`: under suffix mode, a book whose name holds another
 book moves on to the first free position of its marked name.
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
@@ -146,7 +146,7 @@ What the configurations that fail show:
   Two books that share a genuine identifier, such as a converter's template
   UUID, cannot be told apart either.
 - **`ChangingSuffixStuck`** is what the check cost suffix mode before
-  `_place`. With the 1965 edition's archive under the plain name, a run
+  `placing.place`. With the 1965 edition's archive under the plain name, a run
   that names the Ace edition alone -- any run after the 1965 edition is
   deleted -- gives it that name, finds it held by another
   book, and reports a collision, on every run for ever: the mode that exists

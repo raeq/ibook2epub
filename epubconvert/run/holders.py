@@ -20,11 +20,16 @@ Reading one archive's identifier measured 0.15 ms for a 4-member book and
 1.38 ms for a 504-member one, on Linux 6.18 with the archives in the page
 cache: between 0.4 s and 3.9 s over a 2,800-book shelf, against no reads at
 all. Under a policy that already reads each source's package document it runs
-for every book whose name is on the shelf. Under the policies that name from
-the folder it runs only for a book about to be written over an archive
-(:func:`epubconvert.run.planning.plan_exports`), which then pays for one source
-read too; reporting a book exported still trusts the name there, because
-checking that would read every source and every archive on every rerun.
+once per run for every archive under a name the plan gave a book, whole
+library included under ``--match``: the orphan check
+(:func:`epubconvert.run.planning.find_orphans`) and the plan
+(:func:`epubconvert.run.planning.plan_exports`) each ask, and the second is
+answered from what the first read. Asked apart, they read the shelf twice: 400
+opens for a no-op rerun over 200 books. Under the policies that name from the
+folder it runs only for a book about to be written over an archive, which then
+pays for one source read too; reporting a book exported still trusts the name
+there, because checking that would read every source and every archive on
+every rerun.
 
 Kept apart from the planner, which decides what to do about the answer.
 """
@@ -32,6 +37,7 @@ Kept apart from the planner, which decides what to do about the answer.
 from __future__ import annotations
 
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
@@ -57,14 +63,37 @@ def same_identity(first: str, second: str) -> bool:
     return unicodedata.normalize("NFC", first) == unicodedata.normalize("NFC", second)
 
 
+#: Archives whose identifier is remembered. A shelf surveyed at 2,800 books
+#: fits many times over; an entry is a path and a short string.
+REMEMBERED = 1 << 15
+
+
 def identifier_on_shelf(archive_path: Path) -> str | None:
     """
     Read the usable identifier of an archive already on the shelf.
+
+    Remembered for as long as the file is unchanged. Keyed on what ``stat``
+    says rather than the path alone, because the run writes between asking
+    twice: files copied through land after the orphan check and before the
+    plan, and every write renames a new file into place, which changes the
+    inode even when the size and a coarse timestamp do not.
 
     :param archive_path: The exported archive.
 
     :return: Its identifier, or None when it has none or cannot be read.
     """
+    try:
+        status = archive_path.stat()
+    except OSError:
+        return None
+    return _identifier_of(
+        archive_path, (status.st_ino, status.st_mtime_ns, status.st_size)
+    )
+
+
+@lru_cache(maxsize=REMEMBERED)
+def _identifier_of(archive_path: Path, _stamp: tuple[int, int, int]) -> str | None:
+    """Read an archive's identifier; *_stamp* only keys what is remembered."""
     try:
         with ZipFile(archive_path) as archive:
             return usable_identifier(read_package(archive))

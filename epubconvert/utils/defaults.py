@@ -38,7 +38,7 @@ def discover_source() -> Path:
 
     :return: The best source directory found.
     """
-    existing = [candidate for candidate in SOURCE_CANDIDATES if candidate.is_dir()]
+    existing = [candidate for candidate in SOURCE_CANDIDATES if _is_dir(candidate)]
 
     for candidate in existing:
         try:
@@ -50,3 +50,24 @@ def discover_source() -> Path:
             logger.debug("Could not inspect %s: %s", candidate, exc)
 
     return existing[0] if existing else DEFAULT_SOURCE
+
+
+def _is_dir(candidate: Path) -> bool:
+    """
+    Report whether a candidate is a directory, taking "cannot tell" as no.
+
+    The second home is inside another app's container, which macOS answers
+    with EPERM when the terminal lacks Full Disk Access. ``is_dir`` swallows
+    only the errors meaning absent, so discovery raised out of argument
+    parsing, as a traceback, even when the library was in the first home. The
+    run reports a refused library itself, with the remedy, when it reads it.
+
+    :param candidate: A possible library location.
+
+    :return: True if it is a directory this process can see.
+    """
+    try:
+        return candidate.is_dir()
+    except OSError as exc:
+        logger.debug("Could not examine %s: %s", candidate, exc)
+        return False

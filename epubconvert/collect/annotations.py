@@ -35,7 +35,6 @@ thing that cannot come with them.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import re
 import sqlite3
@@ -47,6 +46,7 @@ from .. import __version__
 from ..utils import schema
 from ..utils.app_logger import logger
 from ..utils.contained import escapes
+from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.policy import NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -296,13 +296,18 @@ def collect(
         # One row at a time, because this was a comprehension and one
         # unusable row therefore cost every good one. Apple's columns are
         # untyped: a date that is a string, a style that is a colour name and
-        # text that is a BLOB have all been seen.
+        # text that is a BLOB have all been seen. ArithmeticError is the
+        # backstop for a number too large to convert: a style of 9e999 is a
+        # real infinity in SQLite, int() of it raised OverflowError past this
+        # guard, and one row cost the whole export.
         try:
             found.append(_annotation_of(row, library, parsed, policy))
-        except (TypeError, ValueError, OSError) as exc:
+        except (TypeError, ValueError, ArithmeticError, OSError) as exc:
+            # Escaped, as library.py escapes the asset id of a row it skips:
+            # the UUID is whatever Apple's column held, ESC and CR included.
             logger.warning(
                 "Skipped an unreadable annotation (%s): %s",
-                row["ZANNOTATIONUUID"] or "no id",
+                printable(str(row["ZANNOTATIONUUID"] or "no id")),
                 exc,
             )
     # By book, then by when it was made. Reading order would be better and is
@@ -387,19 +392,11 @@ def _annotation_of(
     if is_text(row["ZFUTUREPROOFING5"]):
         annotation["chapter"] = row["ZFUTUREPROOFING5"]
 
-    cfi = row["ZANNOTATIONLOCATION"]
-    if cfi and isinstance(cfi, str):
-        annotation["cfi"] = cfi
-        href = _href_of(cfi, book)
-        if href:
-            annotation["href"] = href
+    annotation.update(_cfi_fields(row["ZANNOTATIONLOCATION"], book))
 
-    if row["ZANNOTATIONSTYLE"] is not None:
-        # Carried opaquely or not at all. The number means a colour whose
-        # mapping Apple has changed between releases, so it is worth nothing
-        # next to losing the highlight it belongs to.
-        with contextlib.suppress(TypeError, ValueError):
-            annotation["style"] = int(row["ZANNOTATIONSTYLE"])
+    style = _style_of(row["ZANNOTATIONSTYLE"])
+    if style is not None:
+        annotation["style"] = style
     modified = moment(row["ZANNOTATIONMODIFICATIONDATE"])
     if modified:
         annotation["modified"] = modified
@@ -410,16 +407,87 @@ def _required_text(value: object, what: str) -> str:
     """
     Take a column an annotation cannot be made without, if it holds text.
 
+    Empty text is refused as well. The schema holds ``id`` and ``text`` to a
+    minimum length of one, and an empty id is also no key: :func:`merge`
+    cannot match an entry on it, so such a row was exported in breach of the
+    schema and then treated as new on every rerun.
+
     :param value: What the untyped column held.
     :param what: What to call it in the message.
 
     :return: The text.
 
     :raises TypeError: If it holds anything else, a BLOB above all.
+    :raises ValueError: If it holds empty text.
     """
     if not isinstance(value, str):
         raise TypeError(f"{what} is {type(value).__name__}, not text")
+    if not value:
+        raise ValueError(f"{what} is empty")
     return value
+
+
+def _bare_cfi(location: object) -> str | None:
+    """
+    Take the CFI out of what Apple recorded as the location.
+
+    Apple stores it bare or after the book's own address and a ``#``, as
+    :data:`CFI_FORM` allows, but the schema promises a ``cfi`` that starts
+    ``epubcfi(``: the address form was published verbatim in breach of it.
+    The address is stripped rather than the CFI dropped, because the CFI is
+    the locator that survives repeated text, and the address is Apple's name
+    for its copy of a book the ``book`` object already describes. A location
+    that is no CFI at all is left out, as the schema would have it.
+
+    :param location: What the untyped column held.
+
+    :return: The CFI, starting ``epubcfi(``, or None if there is none.
+    """
+    if not isinstance(location, str):
+        return None
+    form = CFI_FORM.fullmatch(location)
+    if form is None:
+        return None
+    return f"epubcfi({form.group(1)})"
+
+
+def _cfi_fields(location: object, book: Package | None) -> dict[str, str]:
+    """
+    Record the CFI, and the document it points into when the book says.
+
+    :param location: What the untyped location column held.
+    :param book: The parsed package document, if it could be read.
+
+    :return: ``cfi`` and ``href``, each only when there is one.
+    """
+    cfi = _bare_cfi(location)
+    if cfi is None:
+        return {}
+    href = _href_of(cfi, book)
+    return {"cfi": cfi, "href": href} if href else {"cfi": cfi}
+
+
+def _style_of(value: object) -> int | None:
+    """
+    Read Apple's highlight style, carried opaquely or not at all.
+
+    The number means a colour whose mapping Apple has changed between
+    releases, so it is worth nothing next to losing the highlight it belongs
+    to. OverflowError is what ``int()`` raises for an infinity, which SQLite
+    stores for 9e999, and it ended the whole export. A negative style is left
+    out too: the schema's minimum is 0, and no style Apple assigns is below it.
+
+    :param value: What the untyped column held.
+
+    :return: The style, or None.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, str, bytes)):
+        return None
+    try:
+        style = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return style if style >= 0 else None
 
 
 def build_document(

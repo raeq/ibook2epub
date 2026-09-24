@@ -23,7 +23,7 @@ from epubconvert.export.archive import (
     zip_package,
 )
 from epubconvert.export.naming import PortableNaming, StripNaming
-from epubconvert.run import cli, planning, run
+from epubconvert.run import claims, cli, run
 from epubconvert.utils import exits
 from tests.conftest import (
     abandoned_partial,
@@ -259,7 +259,7 @@ class TestSuffixesRespectTheExtension:
         # Regression (1.9): Path().suffix treats ".epub" as extension-less, so
         # the marker landed after it -- ".epub (2)", which no *.epub glob
         # matches. _split_extension exists for exactly this.
-        assert planning.suffixed(".epub", 2, 0).endswith(".epub")
+        assert claims.suffixed(".epub", 2, 0).endswith(".epub")
 
 
 class TestVerifySurvivesAnUnreadableArchive:

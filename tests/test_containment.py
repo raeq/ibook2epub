@@ -15,6 +15,7 @@ guard both let a book read outside itself.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
@@ -173,6 +174,22 @@ class TestOpeningRefusesToFollow:
         package = tmp_path / "Book.epub"
         package.mkdir()
         (package / "member.xhtml").symlink_to(outside)
+
+        with (
+            pytest.raises(OSError),
+            contained.open_contained(package / "member.xhtml"),
+        ):
+            pass
+
+    def test_opening_a_hardlink_is_refused(self, tmp_path):
+        # The same window, for the other kind of link: resolve() refuses a
+        # hardlinked member, but one swapped in after the check was read,
+        # carrying a file from elsewhere on the volume into the book.
+        outside = tmp_path / "secret.txt"
+        outside.write_text("SECRET", encoding="utf-8")
+        package = tmp_path / "Book.epub"
+        package.mkdir()
+        os.link(outside, package / "member.xhtml")
 
         with (
             pytest.raises(OSError),

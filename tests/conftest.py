@@ -37,6 +37,10 @@ module, so this map saves a search:
 ``test_library_cli.py``      ``--library-export`` as a command, and the flags
                              a run that converts nothing refuses
 ``test_schema.py``           ``schema``: the runtime check both exports share
+``test_collected_rows.py``   what one hostile database row costs, and that
+                             what survives obeys the shipped schema
+``test_escaped_names.py``    a book's names in --verify and --validate, and
+                             a skipped row's id, reach the terminal escaped
 ===========================  ==================================================
 
 ``spec`` is exercised through the modules that use it rather than directly.

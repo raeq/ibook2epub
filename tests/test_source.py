@@ -5,6 +5,7 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import io
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,21 @@ class TestDrmDetection:
         )
 
         assert source.inspect_package(package).drm
+
+    def test_an_encryption_file_that_grows_while_read_fails_closed(
+        self, tmp_path, monkeypatch
+    ):
+        # The size is measured before the open, and the read after it was
+        # unbounded, so a file that grew in between was read whole however
+        # large it had become -- the gap validate's reader already closed.
+        package = make_package(tmp_path, "Growing.epub")
+        add_meta(package, "META-INF/encryption.xml", "<x/>")
+        grown = FONT_ENCRYPTION.encode() + b" " * 1000
+        monkeypatch.setattr(source, "MAX_ENCRYPTION_BYTES", 64)
+        monkeypatch.setattr(source, "open_contained", lambda _path: io.BytesIO(grown))
+
+        with pytest.raises(source.UnreadableEncryptionError, match="grew while read"):
+            source.encryption_algorithms(package)
 
     def test_a_package_with_no_encryption_file_is_readable(self, tmp_path):
         package = make_package(tmp_path, "Open.epub")
