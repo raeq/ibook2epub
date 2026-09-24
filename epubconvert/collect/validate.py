@@ -45,6 +45,10 @@ from .package import (
 
 EPUBCHECK = "epubcheck"
 
+#: A lone surrogate: what ``os.walk`` hands back for a byte of a file name it
+#: could not decode, and the one thing in a str that UTF-8 cannot spell.
+SURROGATE = re.compile(r"[\ud800-\udfff]")
+
 #: How much a CRC check inflates before the ratio below is asked about.
 #: Reading in chunks bounds the memory a check costs, not the time: a 4 MB
 #: book declaring 4 GiB was inflated in full, 5 s of --verify apiece. Under
@@ -70,6 +74,25 @@ class ArchiveInvalidError(Exception):
         shown = "; ".join(problems[:3])
         extra = f" (+{len(problems) - 3} more)" if len(problems) > 3 else ""
         super().__init__(f"{shown}{extra}")
+
+
+def storable(name: str, arcname: str) -> None:
+    """
+    Refuse a member name a zip cannot hold, naming it.
+
+    A member's name is stored as UTF-8, and a file name ``os.walk`` could not
+    decode comes back holding lone surrogates, which UTF-8 cannot spell.
+    zipfile raised a bare UnicodeEncodeError for it, and the book was reported
+    failed with a codec's complaint and no word of which file.
+
+    :param name: The archive's name, for the error message.
+    :param arcname: The member's path inside the archive.
+
+    :raises ArchiveInvalidError: If *arcname* is not text UTF-8 can hold.
+    """
+    if SURROGATE.search(arcname):
+        problem = f"member name is not UTF-8: {printable(arcname)}"
+        raise ArchiveInvalidError(name, [problem])
 
 
 @dataclass(frozen=True)

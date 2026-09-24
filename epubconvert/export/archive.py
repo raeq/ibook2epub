@@ -29,7 +29,7 @@ from ..collect.package import (
     read_member,
     repeated_entries,
 )
-from ..collect.validate import ArchiveInvalidError, ValidationOptions
+from ..collect.validate import ArchiveInvalidError, ValidationOptions, storable
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
 from ..utils.display import printable
@@ -528,6 +528,7 @@ def zip_package(
                     # shelf, so a fresh export and a refresh agree.
                     logger.trace("Replaced by this run's annotations: %s", arcname)
                     continue
+                storable(target_archive.name, arcname)
                 _store(archive, path, arcname)
                 stored.add(arcname)
                 file_count += 1
