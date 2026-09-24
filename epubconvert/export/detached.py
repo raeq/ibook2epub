@@ -190,7 +190,9 @@ def _read_back(target: Path) -> str | None:
         raise ValueError("not a regular file")
     if target.stat().st_size > MAX_EXPORT_BYTES:
         raise ValueError(f"larger than {MAX_EXPORT_BYTES} bytes")
-    return target.read_text(encoding="utf-8")
+    # -sig: an editor that saved the export with a byte-order mark made it
+    # unreadable JSON, refused on every later run.
+    return target.read_text(encoding="utf-8-sig")
 
 
 def _emit(text: str) -> None:

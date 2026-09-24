@@ -39,7 +39,7 @@ from epubconvert import __version__
 from epubconvert.collect import annotations, coredata
 from epubconvert.collect.library import describe_book
 from epubconvert.collect.validate import canonical_identifier
-from epubconvert.export import archive
+from epubconvert.export import archive, detached
 from epubconvert.run import cli
 from epubconvert.run.run import main
 from epubconvert.utils.opf import Package
@@ -446,6 +446,22 @@ class TestMergingSurvivesAHostileFile:
 
         assert tally["kept"] == 1
         assert merged[0]["id"] == "GONE"
+
+    def test_an_export_saved_with_a_byte_order_mark_is_merged_into(self, tmp_path):
+        # An editor that writes a UTF-8 BOM made the export unreadable to the
+        # next run, which refused it with exit 5 on every run after.
+        target = tmp_path / "highlights.json"
+        first = [_annotation(id="1", text="first")]
+        assert detached._write_detached(first, str(target)) == 0
+        target.write_bytes(b"\xef\xbb\xbf" + target.read_bytes())
+
+        code = detached._write_detached(
+            [*first, _annotation(id="2", text="second")], str(target)
+        )
+
+        assert code == 0
+        written = json.loads(target.read_text(encoding="utf-8"))
+        assert sorted(item["id"] for item in written["annotations"]) == ["1", "2"]
 
 
 class TestPickingOutOneBook:
