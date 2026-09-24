@@ -9,6 +9,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--verify`'s repair advice now selects the damaged book. A title containing
+  `?`, `[` or `*` is escaped, and a pattern that would also match another book
+  is anchored. A damaged file not named after any package (copied through, or
+  suffixed) is to be moved aside; the next run puts it back. The advice
+  escapes control characters.
+
+- A Ctrl-C while the detached highlights or a vault are written, or while the
+  output lock is taken and the shelf swept, still prints the run's summary,
+  says the highlights were not written, and exits 130.
+
+- `-ae -ar -d` exits 5 for an output directory that does not exist, as the
+  real refresh does.
+
+- `--covers` escapes the book's name and the reason when it logs that no
+  cover was written.
+
+- `--list` and `--verify` refuse `--dry-run` and `--annotations-none`, which
+  neither consults.
+
 - A note no longer escapes a line that only starts with a block opener's
   character: `**bold**`, `#tag`, `2.5 million`, `-5 degrees` and `+1` are
   written as typed. A table delimiter row led by a colon (`:-- | --:`) is
