@@ -27,9 +27,6 @@ CONTAINER = Path(
 #: Core Data counts seconds from 2001-01-01, not from the Unix epoch.
 APPLE_EPOCH_OFFSET = 978307200
 
-#: The one way an instant is written by every export, matching the schemas.
-INSTANT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
-
 #: The remedy for a refusal, worded once so every path that meets one gives
 #: the same advice.
 FULL_DISK_ACCESS = (
@@ -260,9 +257,25 @@ def moment(seconds: object) -> str | None:
         when = datetime.fromtimestamp(seconds + APPLE_EPOCH_OFFSET, tz=timezone.utc)
     except (OverflowError, OSError, ValueError):
         return None
-    return when.strftime(INSTANT_FORMAT)
+    return _instant(when)
 
 
 def now() -> str:
     """Return this instant as UTC, to the second, ending in ``Z``."""
-    return datetime.now(tz=timezone.utc).strftime(INSTANT_FORMAT)
+    return _instant(datetime.now(tz=timezone.utc))
+
+
+def _instant(when: datetime) -> str:
+    """
+    Write a UTC instant the one way every export writes one.
+
+    Not ``strftime``: its ``%Y`` does not pad on glibc, so a garbage timestamp
+    landing in the year 500 was written ``500-09-02T00:00:00Z`` -- not RFC
+    3339, and a violation of the pattern both shipped schemas hold every date
+    to. ``isoformat`` always writes four digits.
+
+    :param when: The instant, in UTC.
+
+    :return: The instant to the second, ending in ``Z``.
+    """
+    return f"{when.replace(tzinfo=None).isoformat(timespec='seconds')}Z"

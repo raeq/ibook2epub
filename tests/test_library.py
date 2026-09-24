@@ -778,6 +778,26 @@ class TestItFailsSafely:
 
         assert sorted(item["id"] for item in found) == ["U1", "U2"]
 
+    @pytest.mark.parametrize(
+        ("seconds", "instant"),
+        [
+            (-47345904000.0, "0500-09-02T00:00:00Z"),
+            (-63082368000.0, "0002-01-01T00:00:00Z"),
+        ],
+    )
+    def test_an_early_year_is_still_written_with_four_digits(self, seconds, instant):
+        # strftime("%Y") does not pad on glibc, so a garbage timestamp in the
+        # year 500 was written "500-09-02T00:00:00Z": not RFC 3339, and a
+        # violation of the schema both exports ship.
+        assert coredata.moment(seconds) == instant
+
+    def test_an_early_year_still_validates_against_the_schema(self, tmp_path):
+        make_databases(tmp_path, rows=[highlight(created=-47345904000.0)])
+
+        found = annotations.collect(tmp_path)
+
+        assert annotations.schema_problems(annotations.build_document(found)) == []
+
     def test_reading_does_not_write_to_the_database(self, tmp_path):
         make_databases(tmp_path)
         database = next(tmp_path.rglob("BKLibrary*.sqlite"))
