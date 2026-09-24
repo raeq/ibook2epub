@@ -802,10 +802,18 @@ def _check_environment(args: argparse.Namespace) -> int | None:
     uses_shelf = not (args.annotations_only or args.library_export)
     blocker = _file_in_the_way(args.output_dir) if uses_shelf else None
     if blocker is not None:
+        # "is a file" was said of a dangling symlink and of a symlink loop too.
+        try:
+            mode = blocker.lstat().st_mode
+        except OSError:  # pragma: no cover - removed since it was found
+            mode = 0
+        kind = "is not a directory"
+        if stat.S_ISLNK(mode):
+            kind = "is a symlink to no directory"
+        elif stat.S_ISREG(mode):
+            kind = "is a file"
         logger.critical(
-            "Output path is not a directory: %s (%s is a file)",
-            args.output_dir,
-            blocker,
+            "Output path is not a directory: %s (%s %s)", args.output_dir, blocker, kind
         )
         return exits.NO_OUTPUT
     # A shelf that cannot be listed reads as an empty one: --verify found "No

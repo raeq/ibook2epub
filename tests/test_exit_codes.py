@@ -852,6 +852,29 @@ class TestAnOutputPathUnderAFileIsRefusedEverywhere:
         assert code == exits.NO_OUTPUT
         assert "afile" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        ("kind", "said"),
+        [
+            ("file", "is a file"),
+            ("dangling", "is a symlink to no directory"),
+            ("loop", "is a symlink to no directory"),
+        ],
+    )
+    def test_the_message_says_what_is_in_the_way(self, tmp_path, capsys, kind, said):
+        # A dangling symlink or a loop was reported as "is a file".
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        blocker = tmp_path / "blocker"
+        if kind == "file":
+            blocker.write_text("x", encoding="utf-8")
+        else:
+            blocker.symlink_to(tmp_path / "gone" if kind == "dangling" else blocker)
+
+        code = run.main(["-s", str(library), "-o", str(blocker / "books"), "-d"])
+
+        assert code == exits.NO_OUTPUT
+        assert f"({blocker} {said})" in capsys.readouterr().err
+
     def test_a_missing_directory_under_a_directory_is_still_made(
         self, tmp_path, output_dir
     ):
