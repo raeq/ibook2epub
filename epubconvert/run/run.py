@@ -178,16 +178,19 @@ def _plan_copies(args: argparse.Namespace, policy: NamingPolicy) -> CopyPlan:
     Find the files to take along and name them, once, for every caller.
 
     The orphan check, the copy and the ignored count all read this one plan.
+    Made under ``--no-copy-through`` too, which only stops the copying: left
+    empty, a package was reported exported from a zipped book's file, a copy
+    whose book is still in the library was listed as an orphan, and the
+    zipped books were counted as not books.
 
     :param args: Parsed command line arguments.
     :param policy: The naming policy in force.
 
-    :return: The plan, empty under ``--no-copy-through``. When some files went
-        unnamed, the run is told what that costs rather than left with an
-        orphan count it cannot explain.
+    :return: The plan. When some files went unnamed, the run is told what that
+        costs rather than left with an orphan count it cannot explain.
     """
     plan = plan_copies(
-        [] if args.no_copy_through else collect_copyable(args.source_dir),
+        collect_copyable(args.source_dir),
         policy,
         max_workers=args.workers,
         skip_incomplete=args.skip_incomplete,
@@ -221,7 +224,7 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     # The copies that lost their name, as the run reports them.
     decisions += [
         Decision(source, COLLISION, reason=reason)
-        for source, reason in select_copies(copies, args.match).lost
+        for source, reason in _to_copy(args, copies).lost
     ]
     # Orphans come from the whole library, not this run's filtered subset:
     # --match narrows a run, not the shelf. Files copied through claim their
@@ -484,7 +487,7 @@ def _run_export(
             args.max_export_files,
         )
 
-    copyable = _copyable(args, copies) if found is not None else []
+    copyable = copies.sources if found is not None else []
     options = ExportOptions(
         covers=args.covers,
         min_free_mb=args.min_free,
@@ -517,7 +520,7 @@ def _run_export(
             if locked and not args.dry_run:
                 sweep_partials(args.output_dir)
             copy_through_all(
-                select_copies(copies, args.match),
+                _to_copy(args, copies),
                 args.output_dir,
                 report,
                 max_workers=args.workers,
@@ -575,24 +578,18 @@ def _run_export(
     )
 
 
-def _copyable(args: argparse.Namespace, copies: CopyPlan) -> list[Path]:
+def _to_copy(args: argparse.Namespace, copies: CopyPlan) -> CopyPlan:
     """
-    Every file in the library that is a book without being a package.
-
-    Wanted for the annotations, which name a book only by its name: a zipped
-    ``b/Foo.epub`` and a package ``a/Foo.epub/`` are one key, and counting
-    only the packages gave the zipped book's highlights to the package.
+    Narrow the library's copies to the ones this run copies.
 
     :param args: Parsed command line arguments.
-    :param copies: The plan this run already made, which walked for them.
+    :param copies: Every file to take along, under the names it takes.
 
-    :return: The files, from the plan when it has them. Under
-        ``--no-copy-through`` it has none, but the zipped book is still in the
-        library and still owns its highlights, so the library is walked.
+    :return: The files ``--match`` selects, or none under
+        ``--no-copy-through``: the flag stops the copying, and the copies
+        still claim their names and their files on the shelf.
     """
-    if args.no_copy_through:
-        return collect_copyable(args.source_dir)
-    return copies.sources
+    return CopyPlan() if args.no_copy_through else select_copies(copies, args.match)
 
 
 def _selected(

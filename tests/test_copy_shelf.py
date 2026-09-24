@@ -92,3 +92,67 @@ class TestSuffixModeKeepsACopyAtItsFile:
         assert identifier_of(output_dir / "Book (2).epub") == "urn:uuid:ADDED"
         assert "orphan" not in again.out
         assert "collision" not in again.out
+
+
+class TestNoCopyThroughStillSeesTheCopies:
+    """
+    ``--no-copy-through`` stopped the library's zipped books and PDFs being
+    walked at all, so the claim pass and the orphan check never saw them: a
+    package was reported exported from a zipped book's file, a copy whose book
+    is still in the library was listed as an orphan, and the zipped books were
+    counted as not books. The flag only stops the copying.
+    """
+
+    NO_COPY = "--no-copy-through"
+
+    def test_a_package_is_not_exported_from_a_copied_books_file(
+        self, tmp_path, output_dir, capsys
+    ):
+        argv = _copy_then_package(tmp_path, output_dir)
+        library = Path(argv[1])
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, self.NO_COPY)
+        run.main([*argv, self.NO_COPY])
+        captured = capsys.readouterr()
+
+        assert listed == [("Book.epub", "collision")]
+        assert "Already exported" not in captured.err
+        assert "holds another book, urn:uuid:ZIPPED" in captured.err
+        assert identifier_of(output_dir / "Book.epub") == "urn:uuid:ZIPPED"
+
+    def test_a_copy_whose_book_is_in_the_library_is_no_orphan(
+        self, tmp_path, output_dir, capsys
+    ):
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "zipped" / "Beta.epub", "urn:uuid:BETA")
+        make_metadata_package(
+            library / "pkg", "Alpha.epub", title="Alpha", identifier="urn:uuid:ALPHA"
+        )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+        run.main([*argv, "-q"])
+        capsys.readouterr()
+
+        run.main(["-s", str(library), "-o", str(output_dir), "--list", self.NO_COPY])
+        listed = capsys.readouterr().out
+        run.main([*argv, self.NO_COPY])
+        ran = capsys.readouterr().out
+
+        assert "orphan" not in listed
+        assert "ignored" not in listed
+        assert "orphaned" not in ran
+        assert "ignored" not in ran
+
+    def test_nothing_is_copied(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "zipped" / "Beta.epub", "urn:uuid:BETA")
+        (library / "Paper.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", self.NO_COPY]
+        )
+
+        assert code == 0
+        assert not list(output_dir.glob("*.epub"))
+        assert not list(output_dir.glob("*.pdf"))
+        assert " copied" not in capsys.readouterr().out

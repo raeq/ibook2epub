@@ -171,7 +171,8 @@ class TestCopyThroughCanBeTurnedOff:
 
         assert list(output_dir.glob("*.epub")) == []
         assert list(output_dir.glob("*.pdf")) == []
-        assert "2 ignored" in capsys.readouterr().out
+        # Books, though not copied: "ignored" counts files that are not books.
+        assert "ignored" not in capsys.readouterr().out
 
 
 class TestOnlyRealFilesAreCopied:
