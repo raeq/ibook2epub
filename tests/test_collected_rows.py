@@ -11,8 +11,9 @@ the other half of the contract: what comes out must be what the schema says.
 # Test names describe the behaviour under test; separate docstrings would only
 # restate them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
-# pylint: disable=too-few-public-methods
+# pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -99,3 +100,61 @@ class TestANulInThePathCostsOnlyTheBook:
 
         assert library.read_package_once(Path("Dune.epub"), parsed) is None
         assert parsed == {Path("Dune.epub"): None}
+
+
+class TestWhatIsCollectedObeysTheSchema:
+    def test_an_empty_id_is_refused(self, tmp_path, caplog):
+        # The schema's id has minLength 1, and an empty one is also what a
+        # rerun cannot match an entry on, so it was merged as new every time.
+        with caplog.at_level(logging.WARNING):
+            found = _collected(tmp_path, [highlight(uuid=""), highlight(uuid="U2")])
+
+        assert [item["id"] for item in found] == ["U2"]
+        assert "annotation id is empty" in caplog.text
+
+    def test_a_negative_style_is_left_out(self, tmp_path):
+        # The schema holds style to a minimum of 0.
+        found = _collected(tmp_path, [highlight(style=-1)])
+
+        assert "style" not in found[0]
+
+    def test_a_style_of_zero_is_kept(self, tmp_path):
+        found = _collected(tmp_path, [highlight(style=0)])
+
+        assert found[0]["style"] == 0
+
+    def test_a_cfi_after_a_book_address_is_stored_bare(self, tmp_path):
+        # Apple can store "<address>#epubcfi(...)". CFI_FORM reads it, but the
+        # schema's cfi is ^epubcfi\( and the address is Apple's name for its
+        # own copy of the book, which the "book" object already describes.
+        found = _collected(
+            tmp_path, [highlight(location="1234.ibooks#epubcfi(/6/4[ch1]!/4/2:0)")]
+        )
+
+        assert found[0]["cfi"] == "epubcfi(/6/4[ch1]!/4/2:0)"
+
+    @pytest.mark.parametrize("location", ["chapter-15", "x epubcfi(/6[a]!)"])
+    def test_what_is_not_a_cfi_is_left_out(self, tmp_path, location):
+        found = _collected(tmp_path, [highlight(location=location)])
+
+        assert "cfi" not in found[0]
+        assert found[0]["text"] == "Summary roadside justice"
+
+    def test_the_whole_collection_passes_the_shipped_schema(self, tmp_path):
+        found = _collected(
+            tmp_path,
+            [
+                highlight(uuid="", text="empty id"),
+                highlight(uuid="U2", text="negative style", style=-1),
+                highlight(
+                    uuid="U3",
+                    text="address form",
+                    location="book.epub#epubcfi(/6/4[ch1]!/4/2:0)",
+                ),
+                highlight(uuid="U4", text="not a cfi", location="chapter-15"),
+                highlight(uuid="U5", text="infinite", style=float("inf")),
+            ],
+        )
+
+        assert annotations.schema_problems(annotations.build_document(found)) == []
+        assert sorted(item["id"] for item in found) == ["U2", "U3", "U4", "U5"]
