@@ -357,34 +357,54 @@ def split(text: str) -> Split | None:
     edited, with nested maps, block scalars and plugin keys, and this project
     has no YAML reader nor should it acquire one it must then keep correct.
 
+    Or line 1 is the start marker, and the head is empty. The frontmatter is
+    the reader's, and one who deleted every property deleted the fences too;
+    requiring them called this tool's own note foreign, failed every run and
+    never updated it again. Absent stays absent, as any other edit to the
+    frontmatter stays.
+
     :param text: The file's contents, already decoded.
 
     :return: The regions, or None when this file is not one of ours.
     """
     lines = normalise(text).split("\n")
-    if not lines or lines[0].rstrip() != "---":
+    if START_PATTERN.match(lines[0]):
+        return _regions("", lines[0], lines[1:])
+    if lines[0].rstrip() != "---":
         return None
     for index in range(1, len(lines)):
         if lines[index].rstrip() != "---":
             continue
         if index + 1 >= len(lines):
             return None
-        found = START_PATTERN.match(lines[index + 1])
-        if not found:
-            return None
         head = "\n".join(lines[: index + 1]) + "\n"
-        rest = lines[index + 2 :]
-        for offset, line in enumerate(rest):
-            if END_PATTERN.match(line.rstrip()):
-                return Split(
-                    head,
-                    found.group(1),
-                    "\n".join(rest[:offset]) + "\n" if rest[:offset] else "",
-                    "\n".join(rest[offset:]),
-                )
-        # A missing end marker is treated as an edit. Skipping a note that may
-        # be fine is recoverable; overwriting one that is not is not.
+        return _regions(head, lines[index + 1], lines[index + 2 :])
+    return None
+
+
+def _regions(head: str, marker: str, rest: list[str]) -> Split | None:
+    """
+    Divide what follows the frontmatter at the end marker.
+
+    :param head: The frontmatter, fences included, or "" when there is none.
+    :param marker: The line that should be the start marker.
+    :param rest: Every line after it.
+
+    :return: The regions, or None when this file is not one of ours.
+    """
+    found = START_PATTERN.match(marker)
+    if not found:
         return None
+    for offset, line in enumerate(rest):
+        if END_PATTERN.match(line.rstrip()):
+            return Split(
+                head,
+                found.group(1),
+                "\n".join(rest[:offset]) + "\n" if rest[:offset] else "",
+                "\n".join(rest[offset:]),
+            )
+    # A missing end marker is treated as an edit. Skipping a note that may be
+    # fine is recoverable; overwriting one that is not is not.
     return None
 
 
@@ -500,10 +520,13 @@ def wrote_it(existing: str) -> bool:
 
     :param existing: The note as it stands.
 
-    :return: True when it carries this tool's start marker.
+    :return: True when it carries this tool's start marker, below the
+        frontmatter or, when the reader has deleted that, on line 1.
     """
     lines = normalise(existing).split("\n")
-    if not lines or lines[0].rstrip() != "---":
+    if START_PATTERN.match(lines[0]):
+        return True
+    if lines[0].rstrip() != "---":
         return False
     for index in range(1, len(lines)):
         if lines[index].rstrip() == "---":

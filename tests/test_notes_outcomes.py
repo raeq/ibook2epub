@@ -221,3 +221,53 @@ class TestANoteThatIsNotUtf8IsLeftAlone:
 
         assert code == exits.FAILED
         assert sidecar.read_bytes() == NOT_UTF8
+
+
+def _without_frontmatter(note: str) -> str:
+    return note[note.index("<!-- ibook2epub sha256=") :]
+
+
+class TestAReaderMayDeleteTheFrontmatter:
+    """
+    The frontmatter is the reader's, so removing every property -- and the
+    fences with them -- is theirs to do. The note was then called "not written
+    by ibook2epub", the run exited 1 every time, and the note was never
+    updated again.
+    """
+
+    def test_the_note_is_still_recognised_as_ours(self):
+        note = _without_frontmatter(notes.compose([_highlight("Alpha.epub", "hl")]))
+
+        assert notes.wrote_it(note) is True
+        assert notes.is_ours(note) is True
+
+    def test_an_edit_inside_the_generated_region_is_still_detected(self):
+        note = _without_frontmatter(notes.compose([_highlight("Alpha.epub", "hl")]))
+        edited = note.replace("> hl", "> edited")
+
+        assert notes.wrote_it(edited) is True
+        assert notes.is_ours(edited) is False
+
+    def test_a_vault_run_updates_it_and_leaves_the_frontmatter_deleted(
+        self, tmp_path: Path
+    ):
+        # Written once and never rewritten, as the README promises: putting
+        # it back would undo the reader's edit on every run.
+        vault = tmp_path / "vault"
+        found = [_highlight("Alpha.epub", "first")]
+        notes.write_vault(found, str(vault), ALONE, copyable=())
+        note = vault / "Alpha.md"
+        note.write_text(
+            _without_frontmatter(note.read_text(encoding="utf-8")) + "mine\n",
+            encoding="utf-8",
+        )
+        found.append(_highlight("Alpha.epub", "second"))
+
+        code = notes.write_vault(found, str(vault), ALONE, copyable=())
+
+        updated = note.read_text(encoding="utf-8")
+        assert code == exits.SUCCESS
+        assert updated.startswith("<!-- ibook2epub sha256=")
+        assert "> second" in updated
+        assert updated.endswith(f"{notes.END_MARKER}\nmine\n")
+        assert sorted(path.name for path in vault.iterdir()) == ["Alpha.md"]
