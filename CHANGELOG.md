@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--validate` no longer rejects a book whose manifest names a URL with a
+  scheme it did not know. Only `http`, `https`, `ftp`, `ftps`, `data` and
+  `mailto` counted as remote. Any other scheme -- `kindle:embed:`, `tel:`,
+  `urn:` -- was looked for as a file inside the book, reported missing, and
+  the book was never written and was retried on every run. An href with any
+  scheme, or starting `//`, now names something outside the book. A query is
+  also no longer read as part of a file name, so `ch1.xhtml?x=1` finds
+  `ch1.xhtml`.
+
 - Under `--name-by author-title`, a book is no longer reported exported by an
   archive that holds a different book with the same name, and `--refresh` and
   `--force` no longer write over that archive. With no state file, a run took
