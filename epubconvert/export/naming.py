@@ -124,6 +124,13 @@ def filesystem_key(filename: str) -> str:
     lived on HFS+ is stored decomposed while the same name typed fresh is
     composed.
 
+    The folding is Unicode's *full* folding, where ``ß`` folds to ``ss``, and
+    that is deliberate rather than an over-reach: case-insensitive APFS, the
+    macOS default, folds the same way (its table maps U+00DF to ``ss``), so
+    ``Straße.epub`` and ``Strasse.epub`` are one file there. Simple 1:1
+    folding would call them two names, and the second write would replace the
+    first. A false collision is reported; a real one is a lost book.
+
     :param filename: The candidate output filename.
 
     :return: A key equal for any two names the filesystem cannot tell apart.

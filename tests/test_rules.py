@@ -667,6 +667,18 @@ class TestRuleAFilesystemClashIsNotACompletedBook:
 
         assert decisions[0].status in {planning.EXPORTED, planning.COLLISION}
 
+    def test_a_full_case_fold_variant_is_one_file(self):
+        # Pinned because it looks like an over-reach and is not: APFS folds
+        # case with Unicode's full mapping, so Straße.epub and Strasse.epub
+        # are one file on a Mac's default volume. Folding 1:1 instead would
+        # plan two writes to it, and one book would replace the other.
+        assert naming.filesystem_key("Straße.epub") == naming.filesystem_key(
+            "STRASSE.epub"
+        )
+        assert naming.filesystem_key("Straße.epub") == naming.filesystem_key(
+            "Strasse.epub"
+        )
+
 
 class TestRuleTheStubWalkIsStructuralEverywhere:
     """Whether the tree can be examined is not a platform question.
