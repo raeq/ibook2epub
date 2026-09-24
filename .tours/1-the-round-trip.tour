@@ -44,7 +44,7 @@
     {
       "title": "Two guard rails, before anything runs",
       "file": "epubconvert/run/cli.py",
-      "pattern": "source = args\\.source_dir\\.resolve\\(\\)",
+      "pattern": "source = Path\\(os\\.path\\.realpath\\(args\\.source_dir\\)\\)",
       "description": "`parse_args` does more than parse. It rejects an output directory that sits **inside** the source tree, because writing there pollutes the next run: temporary files land mid-scan, and finished exports start looking like source packages to `collect_package_dirs`.\n\nJust above, the comment on `--verify` explains why it needs no iBooks library: checking a shelf of exported books should not require owning one. Whether directories exist and tools are installed is checked later, in `run.main`, which can give each failure its own exit code."
     },
     {

@@ -24,6 +24,7 @@ import pytest
 from epubconvert.collect import annotations, library, validate
 from epubconvert.export import inspect_output
 from epubconvert.run import run
+from epubconvert.utils.display import printable, printable_json
 from tests.conftest import CONTAINER, make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -333,3 +334,44 @@ class TestJsonOnStandardOutputIsPrintable:
         run.main(["-s", str(tmp_path), "-ao", str(target), "-q"])
 
         assert f"Beware{CLEAR}" in target.read_text(encoding="utf-8")
+
+
+#: Unicode's bidirectional formatting characters: ALM, LRM and RLM, the
+#: embeddings and overrides, and the isolates.
+BIDI = ["\u061c", "\u200e", "\u200f", *map(chr, range(0x202A, 0x202F))] + [
+    *map(chr, range(0x2066, 0x206A))
+]
+
+
+class TestBidiControlsDoNotReachTheTerminal:
+    """
+    None of these is a control character, so each went through ``printable``
+    untouched, and U+202E reverses the rest of the line it is printed on: a
+    name could make the line reporting it read as something else.
+    """
+
+    @pytest.mark.parametrize("char", BIDI)
+    def test_printable_escapes_each(self, char):
+        shown = printable(f"Evil{char}X.epub")
+
+        assert char not in shown
+        assert f"\\u{ord(char):04x}" in shown
+
+    @pytest.mark.parametrize("char", BIDI)
+    def test_printable_json_escapes_each_and_decodes_the_same(self, char):
+        name = f"Evil{char}X.epub"
+
+        shown = printable_json(json.dumps([name], ensure_ascii=False))
+
+        assert char not in shown
+        assert json.loads(shown) == [name]
+
+    @pytest.mark.parametrize("flags", [["--list"], ["--list", "--json"], ["-d"]])
+    def test_a_run_prints_none_of_them(self, tmp_path, capsys, flags):
+        books = tmp_path / "lib"
+        make_metadata_package(books, "Evil\u202eX.epub", title="T")
+
+        run.main(["-s", str(books), "-o", str(tmp_path / "out"), *flags])
+
+        captured = capsys.readouterr()
+        assert "\u202e" not in captured.out + captured.err

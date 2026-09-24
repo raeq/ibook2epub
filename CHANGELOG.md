@@ -9,6 +9,71 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--verify`'s repair command names the output directory (`-o`) and, when you
+  gave one, the library (`-s`), so it works as printed; it reminds you to add
+  the naming flags you export with. It also works for names containing
+  control characters, tabs or undecodable bytes, and for names starting with
+  a dash.
+
+- A symlink loop in `-o` or `-s` no longer ends argument parsing in a
+  traceback on Python 3.10-3.12. A dry run whose output path runs through a
+  symlink loop, or onto a read-only or unwritable location, exits 5 as the
+  real run does, instead of 0.
+
+- `--list`, `--list --json`, `--verify` and a conversion's summary piped into
+  `head` or a pager end quietly with their own exit code instead of a
+  BrokenPipeError traceback.
+
+- `-ao`/`-ad` with a Markdown vault accept `--skip-incomplete` and
+  `--workers`, which they use when naming notes.
+
+- `--match` finds book names stored in decomposed Unicode (from HFS+), so
+  `--match café` matches "Café Society".
+
+- The `-m` help says `0=unlimited`, which no terminal width splits.
+
+- Bidirectional control characters (such as U+202E) in book names are escaped
+  in terminal and log output and in JSON printed to standard output. The
+  Goodreads CSV keeps them, so a right-to-left title imports intact.
+
+- The lock holder quoted when another run holds the output lock is escaped,
+  and a lock file that is not UTF-8 no longer turns "another run is using
+  this directory" (exit 3) into a traceback.
+
+- `--list` and `--verify` say they are reading the output directory, not
+  "Writing output to".
+
+- Two books whose names differ only in extension or case (a package and a
+  PDF, say) no longer share one vault note. The second is reported as a name
+  collision, or gets `Name (2).md` under `--on-collision suffix`.
+
+- `-ao` names vault notes after the book's file on the shelf, as `-ad` does,
+  so it no longer writes one edition's highlights over another edition's
+  note. Each note's marker now names its book, and a note tagged for another
+  book is never rewritten (exit 1). Older untagged notes are still
+  recognised, and gain the tag only when their highlights change.
+
+- A line between the frontmatter and a note's start marker, or above the
+  marker once the frontmatter is deleted, no longer makes ibook2epub call its
+  own note foreign and exit 1 on every run.
+
+- The README states which annotation destinations keep highlights deleted in
+  Books (only the `-ad`/`-ao` JSON file) and which mirror Books.
+
+- An `-ad`/`-ao` JSON export with id-less, non-string-id or duplicate-id
+  entries, or unknown top-level keys, is refused (exit 5, left untouched)
+  instead of losing those entries on merge.
+
+- `--verify` checks books on the shelf whose extension is not lower case,
+  such as a copied-through `Foo.EPUB`.
+
+- `-ao -` and `--library-export -` write UTF-8 whatever the terminal's
+  encoding, instead of crashing with UnicodeEncodeError.
+
+- `--library-export` refuses a vault note's name in any case (`Dune.MD`), so
+  `--force` cannot write the catalogue over a note on a case-insensitive
+  volume.
+
 - A package and an already-zipped book that want one shelf name no longer
   shadow each other. The package gets the name; the copy is reported as a name
   collision, or copied as `Name (2).epub` under `--on-collision suffix`.

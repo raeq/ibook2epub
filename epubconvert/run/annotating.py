@@ -10,7 +10,8 @@ still decides which of these a run does.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -218,12 +219,29 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     # highlights to books, and a zipped book shares its name with a package.
     markdown = args.annotations_format == "markdown"
     copyable = collect_copyable(args.source_dir) if markdown else []
+    # Named after the file each book is placed at when there is a shelf to
+    # place it on, as -ad names it. Named from the assignment, an edition
+    # moved on to its marked name wrote its highlights into the note of the
+    # edition that holds the plain name.
     named = (
-        _with_copies(args, policy, _named(args, policy), copyable, shelf=False)
+        _with_copies(
+            args,
+            policy,
+            _named(args, policy),
+            copyable,
+            shelf=args.output_dir.is_dir(),
+            highlighted={_source_of(item) for item in found},
+        )
         if markdown
         else []
     )
     return write_export(args, found, args.annotations_only, named, copyable=copyable)
+
+
+def _source_of(item: dict[str, Any]) -> object:
+    """The package name an annotation's book was read from, if it says."""
+    book = item.get("book")
+    return book.get("source") if isinstance(book, dict) else None
 
 
 def _with_copies(
@@ -233,6 +251,7 @@ def _with_copies(
     copyable: Sequence[Path],
     *,
     shelf: bool,
+    highlighted: Collection[object] | None = None,
 ) -> list[Assignment]:
     """
     Name the library's books without a package too, for a vault's notes.
@@ -249,6 +268,10 @@ def _with_copies(
     :param copyable: The library's already-zipped books and PDFs.
     :param shelf: Whether to place each book on the shelf, so its note is
         named after the file it is found at, as the conversion route names it.
+    :param highlighted: The package names that have highlights, when only
+        those need the archive under their name read to be placed. Every
+        other book is placed by its name alone, so a run that writes three
+        notes does not open every archive on a 2,000-book shelf.
 
     :return: The packages' names, then the other books'.
     """
@@ -267,7 +290,14 @@ def _with_copies(
         unopened=copies.evicted,
     )
     everything = [*names.packages, *names.copies]
-    return settled(everything, args.output_dir, policy) if shelf else everything
+    if not shelf:
+        return everything
+    if highlighted is not None:
+        everything = [
+            item if item.package.name in highlighted else replace(item, identifier=None)
+            for item in everything
+        ]
+    return settled(everything, args.output_dir, policy)
 
 
 def apply_annotations(

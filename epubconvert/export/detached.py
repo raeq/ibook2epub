@@ -24,18 +24,19 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from ..collect.annotations import STDOUT
+from ..collect.annotations import SCHEMA_PATH, STDOUT
 from ..collect.annotations import build_document as build_annotation_document
 from ..collect.annotations import merge as merge_annotations
 from ..collect.coredata import ContainerUnavailableError
 from ..collect.library import collect as collect_library
-from ..utils import exits
+from ..utils import exits, schema
 from ..utils.app_logger import logger
 from ..utils.contained import is_free
 from ..utils.display import printable, printable_json
 from ..utils.policy import Assignment, NamingPolicy
 from . import catalogue, notes
 from .archive import write_atomically
+from .naming import encode_name, filesystem_key
 from .notes import SIDECAR_SUFFIX
 
 
@@ -66,7 +67,13 @@ def write_export(
     :return: A process exit code.
     """
     if args.annotations_format == "markdown":
-        return notes.write_vault(found, destination, named, copyable=copyable)
+        return notes.write_vault(
+            found,
+            destination,
+            named,
+            copyable=copyable,
+            suffix=args.on_collision == "suffix",
+        )
     return _write_detached(found, destination)
 
 
@@ -157,6 +164,12 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
             f"{target.name} is already there and is not an annotation export; "
             "move it aside rather than have this overwrite it"
         )
+    unmergeable = _unmergeable(loaded)
+    if unmergeable is not None:
+        raise ContainerUnavailableError(
+            f"{target.name} is already there and {unmergeable}, which a rerun "
+            "would drop; move it aside rather than have this overwrite it"
+        )
     # A "\ud83d" escape is valid JSON and decodes to a lone surrogate, which
     # UTF-8 cannot encode. Merged, it made the write raise UnicodeEncodeError
     # -- not an OSError -- out of main as a traceback. Found here, it is
@@ -170,6 +183,42 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
             "overwrite it"
         )
     return loaded
+
+
+def _unmergeable(document: dict[str, Any]) -> str | None:
+    """
+    Say what in an export a merge could not carry into the next one.
+
+    The merge keys every entry on its id and rebuilds the envelope, so an
+    entry with no id, or one that is not a string, was dropped; of two
+    entries sharing an id the later silently won; and a top-level key of the
+    reader's own went with the old envelope. This file is the one place
+    highlights deleted in Books are kept, so it is refused, as any other file
+    that is not the document expected is, rather than rewritten less some of
+    what it held. The schema allows no other top-level key, so the reader's
+    are not carried through either.
+
+    :param document: The export read back, already known to be an object
+        holding an ``annotations`` list.
+
+    :return: What is wrong, as the end of a sentence, or None when nothing is.
+    """
+    extra = sorted(set(document) - ENVELOPE_KEYS)
+    if extra:
+        return f"has a top-level key this tool does not write ({extra[0]!r})"
+    seen: set[str] = set()
+    for position, entry in enumerate(document["annotations"], start=1):
+        key = entry.get("id") if isinstance(entry, dict) else None
+        if not isinstance(key, str) or not key:
+            return f"its annotation {position} has no id to match it on"
+        if key in seen:
+            return f"two of its annotations share the id {key!r}"
+        seen.add(key)
+    return None
+
+
+#: The top-level keys the export's schema allows; it allows no others.
+ENVELOPE_KEYS = frozenset(schema.load(SCHEMA_PATH)["properties"])
 
 
 def _read_back(target: Path) -> str | None:
@@ -197,13 +246,28 @@ def _read_back(target: Path) -> str | None:
 
 def _emit(text: str) -> None:
     """
-    Write a document to standard output.
+    Write a document to standard output, as UTF-8 whatever it is set to.
+
+    Through the text layer, a locale or ``PYTHONIOENCODING`` that is not
+    UTF-8 raised UnicodeEncodeError out of the run at the first title in
+    another script. JSON is UTF-8 by definition (RFC 8259), and the CSV is
+    the file a tracker imports, which expects UTF-8 too, so the bytes go out
+    as UTF-8 under the text layer. A stream with no bytes layer -- one a
+    caller swapped in -- is written as text.
 
     :param text: The whole document, ending in a newline.
     """
+    stream = sys.stdout
+    raw = getattr(stream, "buffer", None)
     try:
-        sys.stdout.write(text)
-        sys.stdout.flush()
+        if raw is None:
+            stream.write(text)
+        else:
+            # Whatever already went through the text layer goes out first.
+            stream.flush()
+            raw.write(encode_name(text))
+            raw.flush()
+        stream.flush()
     except BrokenPipeError:
         # "-ao - | head" and "| less" then q are how the flag's own help text
         # says to use it. Closing the pipe is the reader saying they have seen
@@ -332,7 +396,12 @@ def _note_name(name: str) -> bool:
 
     :return: True when writing it would take a note's place.
     """
-    return name.endswith(".md") or name.endswith(SIDECAR_SUFFIX)
+    # Folded as the filesystem folds it: on a case-insensitive volume, the
+    # macOS default, "Dune.MD" is the note "Dune.md", and --force wrote the
+    # catalogue over it.
+    return filesystem_key(name).endswith(
+        (filesystem_key(".md"), filesystem_key(SIDECAR_SUFFIX))
+    )
 
 
 def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:

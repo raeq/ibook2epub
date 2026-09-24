@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import glob
+import os
 import shlex
 import sys
 from collections.abc import Sequence
@@ -45,7 +46,7 @@ from ..export.naming import (
 from ..utils import app_logger, exits
 from ..utils.app_logger import logger
 from ..utils.defaults import SOURCE_CANDIDATES
-from ..utils.display import printable
+from ..utils.display import emit, printable
 from ..utils.policy import Assignment, NamingPolicy
 from .annotating import (
     annotations_after_export,
@@ -106,7 +107,10 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
             logger.info("Using discovered iBooks library: %s", args.source_dir)
         else:
             logger.info("Examining source: %s", args.source_dir)
-    if not converts_nothing:
+    if args.list_only or args.verify:
+        # Both only read the shelf, and "Writing" said otherwise.
+        logger.info("Reading output directory: %s", args.output_dir)
+    elif not converts_nothing:
         logger.info("Writing output to: %s", args.output_dir)
     # Keyed off the policy object rather than re-derived from the raw argument.
     # Two independent statements of one fact drift apart the moment
@@ -234,10 +238,10 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             assigned=everything,
         )
     )
-    print(render_listing(decisions + orphans, args.as_json))
+    emit(render_listing(decisions + orphans, args.as_json))
     ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     if ignored and not args.as_json:
-        print(f"{ignored} ignored (not books)")
+        emit(f"{ignored} ignored (not books)")
     return 0
 
 
@@ -258,9 +262,10 @@ def _run_verify(args: argparse.Namespace) -> int:
 
     checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
     if not checked:
-        print(f"No archives found in {args.output_dir}.")
+        emit(f"No archives found in {printable(str(args.output_dir))}.")
         return 0
-    print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
+    shelf = printable(str(args.output_dir))
+    emit(f"Verified {checked} archive(s) in {shelf}: {damaged} damaged.")
     if damaged:
         _advise_repair(args, broken)
     return exits.DAMAGED if damaged else exits.SUCCESS
@@ -294,25 +299,61 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
     patterns = {name: _repair_pattern(name, packages) for name in broken}
     forced = [name for name in broken if patterns[name] is not None]
     aside = [name for name in broken if patterns[name] is None]
-    # Through printable as well as shlex.quote: quoting makes a name one shell
-    # word, and does nothing about the ESC and CR that rewrite the line.
+    # Quoting makes a name one shell word, and does nothing about the ESC and
+    # CR that rewrite the line: a path or a name is escaped with printable,
+    # and a pattern holds "?" for each such character instead, since --match
+    # would read the escape literally (see _repair_pattern).
     if forced:
-        print("Re-export each damaged book, for example:")
+        emit("Re-export each damaged book, for example:")
+        shelf = _shelf_flags(args)
         for name in forced[:3]:
-            quoted = printable(shlex.quote(patterns[name] or ""))
-            print(f"  ibook2epub --match {quoted} --force")
+            # Joined to the flag, so a name that starts with a dash is not
+            # read as one.
+            quoted = shlex.quote(patterns[name] or "")
+            emit(f"  ibook2epub --match={quoted} --force {shelf}")
         if len(forced) > 3:
-            print(f"  ...and {len(forced) - 3} more")
+            emit(f"  ...and {len(forced) - 3} more")
+        # --verify refuses them, so it cannot know what the shelf was named by.
+        emit("  (add the --name-by/-p/--on-collision flags you export with)")
     if aside:
-        print(
-            f"Move each of these out of {args.output_dir} and rerun as before: "
-            "no package in the library has its name, so --force cannot reach "
-            "it, and a run puts back a book missing from the shelf."
+        emit(
+            f"Move each of these out of {printable(str(args.output_dir))} and "
+            "rerun as before: --force cannot single it out, and a run puts "
+            "back a book missing from the shelf."
         )
         for name in aside[:3]:
-            print(f"  {printable(name)}")
+            emit(f"  {printable(name)}")
         if len(aside) > 3:
-            print(f"  ...and {len(aside) - 3} more")
+            emit(f"  ...and {len(aside) - 3} more")
+
+
+def _shelf_flags(args: argparse.Namespace) -> str:
+    """
+    Spell out the shelf and the library a repair command has to name.
+
+    The advice named neither. Run as printed, it looked for the library in
+    its default home and exited 4; given ``-s`` it wrote a fresh copy to
+    ``~/Books`` and left the damaged file where it was.
+
+    :param args: Parsed command line arguments.
+
+    :return: ``-s`` when the library was given rather than discovered, and
+        ``-o`` always, each quoted as one shell word and escaped for display.
+    """
+    flags = [] if args.source_auto else ["-s", _as_word(args.source_dir)]
+    return printable(shlex.join([*flags, "-o", _as_word(args.output_dir)]))
+
+
+def _as_word(path: Path) -> str:
+    """
+    Spell a path so that argparse cannot take it for a flag.
+
+    :param path: A path as the user gave it.
+
+    :return: The path, led by ``./`` when it would otherwise start with a dash.
+    """
+    text = str(path)
+    return f"./{text}" if text.startswith("-") else text
 
 
 def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
@@ -323,21 +364,29 @@ def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
     :param packages: Every package in the library.
 
     :return: The plainest pattern that selects them and nothing else, or None
-        when no package has that name.
+        when no package has that name, or none can be printed that does.
     """
     wanted = {package for package in packages if package.name.lower() == name.lower()}
     if not wanted:
         return None
     stem, suffix = Path(name).stem, Path(name).suffix
     # The stem reads best but matches anywhere, so "Plain" finds Complain too.
-    # The escaped name is anchored only if escaping gave it a bracket.
-    for pattern in (stem, glob.escape(name)):
-        chosen = {p for p in packages if matches_pattern(p.name, pattern)}
+    # The escaped name is anchored only if escaping gave it a bracket. The
+    # bracketed dot makes the last a glob, which matches the whole name.
+    for pattern in (
+        stem,
+        glob.escape(name),
+        f"{glob.escape(stem)}[.]{suffix[1:]}",
+    ):
+        # What the advice prints is escaped for display, and --match reads
+        # "\x1b" as four characters: a character printable would escape
+        # becomes "?", which makes the pattern a glob, and is then checked
+        # like any other, since "?" matches more than that one character.
+        masked = "".join(char if printable(char) == char else "?" for char in pattern)
+        chosen = {p for p in packages if matches_pattern(p.name, masked)}
         if chosen == wanted:
-            return pattern
-    # The bracketed dot makes it a glob, which matches the whole name, and
-    # every other character stands for itself: this selects exactly *wanted*.
-    return f"{glob.escape(stem)}[.]{suffix[1:]}"
+            return masked
+    return None
 
 
 def _plan_options(args: argparse.Namespace) -> PlanOptions:
@@ -650,10 +699,47 @@ def _file_in_the_way(output_dir: Path) -> Path | None:
     :return: The nearest existing part of the path when it is not a directory,
         otherwise None.
     """
+    nearest = _nearest_existing(output_dir)
+    return None if nearest is None or nearest.is_dir() else nearest
+
+
+def _nearest_existing(output_dir: Path) -> Path | None:
+    """
+    Find the part of the output path that ``mkdir(parents=True)`` builds on.
+
+    :param output_dir: The output directory as given.
+
+    :return: The path itself if it exists, else its nearest existing parent.
+    """
     for candidate in (output_dir, *output_dir.parents):
-        if candidate.exists():
-            return None if candidate.is_dir() else candidate
+        # lexists: a symlink loop or a dangling link never exists(), so the
+        # search looked past it to a writable parent, while mkdir fails on it.
+        if os.path.lexists(candidate):
+            return candidate
     return None
+
+
+def _unwritable_shelf(args: argparse.Namespace) -> Path | None:
+    """
+    Find what stops this run creating or locking the shelf, when it writes one.
+
+    A dry run on a read-only volume exited 0, and the real run could neither
+    create the shelf nor open its lock file and exited 5: the rehearsal said
+    all was well for a run that could not start. Judged on the part of the
+    path that exists, as :func:`_file_in_the_way` judges it.
+
+    :param args: Parsed command line arguments.
+
+    :return: That directory when it cannot be written, otherwise None. Always
+        None for ``--list`` and ``--verify``, which only read the shelf, and
+        for the runs that never touch it.
+    """
+    if args.list_only or args.verify or args.annotations_only or args.library_export:
+        return None
+    nearest = _nearest_existing(args.output_dir)
+    if nearest is None or os.access(nearest, os.W_OK | os.X_OK):
+        return None
+    return nearest
 
 
 def _check_environment(args: argparse.Namespace) -> int | None:
@@ -703,6 +789,14 @@ def _check_environment(args: argparse.Namespace) -> int | None:
             "Output path is not a directory: %s (%s is a file)",
             args.output_dir,
             blocker,
+        )
+        return exits.NO_OUTPUT
+    unwritable = _unwritable_shelf(args)
+    if unwritable is not None:
+        logger.critical(
+            "Cannot create or lock output directory %s: %s is not writable",
+            args.output_dir,
+            unwritable,
         )
         return exits.NO_OUTPUT
 
@@ -848,7 +942,10 @@ def _run(args: argparse.Namespace) -> int:
     # Standard output belongs to the document when one is going there; a
     # summary in the middle of it would make the JSON unparsable, which is the
     # one thing a pipe cannot tolerate.
-    print(summary, file=sys.stderr if args.annotations_detached == STDOUT else None)
+    if args.annotations_detached == STDOUT:
+        print(summary, file=sys.stderr)
+    else:
+        emit(summary)  # `ibook2epub | head` closes the pipe before it.
     # Recorded in the log file only: the console already has it from the
     # print above, and logging it plainly printed every run's summary twice.
     app_logger.file_only(summary)

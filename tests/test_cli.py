@@ -75,6 +75,47 @@ class TestParseArgs:
 
         assert code == exits.NO_SOURCE
 
+    @pytest.mark.parametrize("where", ["-o", "-s"])
+    @pytest.mark.parametrize("below", ["", "books"])
+    def test_a_symlink_loop_is_the_run_s_business_not_a_traceback(
+        self, library, tmp_path, where, below
+    ):
+        # Path.resolve() raises RuntimeError on a symlink loop on Python 3.10
+        # to 3.12, out of argument parsing: a traceback and exit 1.
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+        given = {"-s": str(library), "-o": str(tmp_path / "out")}
+        given[where] = str(loop / below) if below else str(loop)
+
+        args = cli.parse_args([part for pair in given.items() for part in pair])
+
+        parsed = args.output_dir if where == "-o" else args.source_dir
+        assert str(parsed) == given[where]
+
+    def test_a_library_behind_a_symlink_loop_is_a_missing_library(self, tmp_path):
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+
+        code = run.main(["-s", str(loop), "-o", str(tmp_path / "out"), "-q"])
+
+        assert code == exits.NO_SOURCE
+
+    @pytest.mark.parametrize("below", ["", "books"])
+    @pytest.mark.parametrize("dry_run", [[], ["-d"]])
+    def test_an_output_path_through_a_symlink_loop_cannot_be_created(
+        self, library, tmp_path, below, dry_run
+    ):
+        # The real run fails at mkdir with 5. The dry run judged the nearest
+        # part of the path that exists(), which a loop never does, so it looked
+        # past the loop to its writable parent and exited 0.
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+        output = loop / below if below else loop
+
+        code = run.main(["-s", str(library), "-o", str(output), "-q", *dry_run])
+
+        assert code == exits.NO_OUTPUT
+
     def test_negative_cap_is_rejected(self, library):
         with pytest.raises(SystemExit):
             cli.parse_args(["-s", str(library), "-m", "-1"])
@@ -84,11 +125,15 @@ class TestParseArgs:
 
         assert args.verbose == 2
 
-    def test_help_documents_the_no_limit_sentinel(self):
-        # The README quotes this help text; keep them honest about 0=no limit.
+    @pytest.mark.parametrize("width", [51, 69, 72, 75, 79, 120])
+    def test_help_documents_the_no_limit_sentinel(self, monkeypatch, width):
+        # The README quotes this help text; keep them honest about the
+        # sentinel. "0=no limit" had a space argparse could wrap at, and did
+        # at some widths, which split it across two lines.
+        monkeypatch.setenv("COLUMNS", str(width))
         help_text = cli.build_parser().format_help()
 
-        assert "0=no limit" in help_text
+        assert "0=unlimited" in help_text
 
 
 class TestLoggerConfiguration:
@@ -323,6 +368,38 @@ class TestLockDiagnostics:
             pass
 
         assert f"pid={os.getpid()}" in str(excinfo.value)
+
+    def test_the_holder_is_quoted_escaped(self, output_dir):
+        # Read back from the output directory, so anyone who can write there
+        # decides what a refused run prints: it was printed raw.
+        pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
+        with convert.output_lock(output_dir):
+            (output_dir / convert.LOCK_NAME).write_text(
+                "pid=\x1b[2Kforged host=\x9b31mX\n", encoding="utf-8"
+            )
+            with (
+                pytest.raises(convert.OutputLockedError) as excinfo,
+                convert.output_lock(output_dir),
+            ):
+                pass
+
+        assert "forged" in str(excinfo.value)
+        assert not {"\x1b", "\x9b"} & set(str(excinfo.value))
+
+    def test_a_holder_that_is_not_text_is_still_a_held_lock(self, output_dir):
+        # A host name is bytes the system chose, and the lock file anyone's:
+        # reading it as UTF-8 raised UnicodeDecodeError, a traceback and exit
+        # 1 where a held lock exits 3.
+        pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
+        with convert.output_lock(output_dir):
+            (output_dir / convert.LOCK_NAME).write_bytes(b"pid=1 host=\xff\xfe\n")
+            with (
+                pytest.raises(convert.OutputLockedError) as excinfo,
+                convert.output_lock(output_dir),
+            ):
+                pass
+
+        assert "pid=1 host=\\udcff\\udcfe" in str(excinfo.value)
 
     def test_a_stale_lock_file_does_not_block(self, output_dir):
         # flock is released by the kernel when the holder dies, so a lock file

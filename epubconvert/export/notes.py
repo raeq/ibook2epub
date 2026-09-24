@@ -43,6 +43,7 @@ from .naming import (
     encode_name,
     truncate_bytes,
 )
+from .notenames import note_names
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
 #: copied through untouched. Written from the first run even when there is
@@ -56,10 +57,18 @@ END_PATTERN = re.compile(r"^<!-- ibook2epub end")
 
 #: Carries the digest of the generated region.
 START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
+#: Carries the digest and the book the note is of: a digest of its asset id
+#: (:func:`book_tags`). Notes written before the tag existed carry none and
+#: are still read; each gains one the next time its region is rewritten.
+TAGGED_TEMPLATE = "<!-- ibook2epub sha256={digest} book={book} -->"
 #: Trailing white space is part of the pattern, not stripped by each caller:
 #: an editor may leave some after the marker, and the one caller that did not
 #: strip it -- the escaper -- let a forged marker with a trailing space through.
-START_PATTERN = re.compile(r"^<!-- ibook2epub sha256=([0-9a-f]{16,64}) -->\s*$")
+START_PATTERN = re.compile(
+    r"^<!-- ibook2epub sha256=([0-9a-f]{16,64})(?: book=([0-9a-f]{8,64}))? -->\s*$"
+)
+#: The book tag within a start marker.
+BOOK_TAG = re.compile(r" book=[0-9a-f]{8,64}(?= -->)")
 
 #: Largest note this will read back. A note of a few hundred highlights is
 #: tens of kilobytes; anything past this is a runaway or a planted file, and
@@ -345,56 +354,61 @@ class Split(NamedTuple):
     generated: str
     #: The end marker and everything after it. The reader's.
     tail: str
+    #: The book the start marker is tagged for, or None for a note written
+    #: before notes were tagged.
+    book: str | None = None
 
 
 def split(text: str) -> Split | None:
     """
     Divide an existing note into its four regions.
 
-    Structural rather than semantic: line 1 is ``---``, scan to the next
-    ``---``, the next line is the start marker. Deliberately not YAML parsing --
-    answering this from the frontmatter would mean parsing YAML a reader has
-    edited, with nested maps, block scalars and plugin keys, and this project
-    has no YAML reader nor should it acquire one it must then keep correct.
+    Structural rather than semantic: the first start marker, and everything
+    above it is the head. Deliberately not YAML parsing -- answering this from
+    the frontmatter would mean parsing YAML a reader has edited, with nested
+    maps, block scalars and plugin keys, and this project has no YAML reader
+    nor should it acquire one it must then keep correct.
 
-    Or line 1 is the start marker, and the head is empty. The frontmatter is
-    the reader's, and one who deleted every property deleted the fences too;
-    requiring them called this tool's own note foreign, failed every run and
-    never updated it again. Absent stays absent, as any other edit to the
-    frontmatter stays.
+    The head is the reader's whatever it holds. The marker was looked for only
+    straight after the closing ``---``, or on line 1 once the reader deleted
+    the frontmatter, so a blank line or a ``Related: [[X]]`` above it called
+    this tool's own note foreign, failed every run and never updated it
+    again. The first marker is the real one: every line of the generated
+    region that could pass for one is escaped (:func:`_unforged`), and the
+    frontmatter above it quotes every value.
 
     :param text: The file's contents, already decoded.
 
     :return: The regions, or None when this file is not one of ours.
     """
     lines = normalise(text).split("\n")
-    if START_PATTERN.match(lines[0]):
-        return _regions("", lines[0], lines[1:])
-    if lines[0].rstrip() != "---":
+    start = _first_start(lines)
+    if start is None:
         return None
-    for index in range(1, len(lines)):
-        if lines[index].rstrip() != "---":
-            continue
-        if index + 1 >= len(lines):
-            return None
-        head = "\n".join(lines[: index + 1]) + "\n"
-        return _regions(head, lines[index + 1], lines[index + 2 :])
+    index, found = start
+    head = "\n".join(lines[:index]) + "\n" if index else ""
+    return _regions(head, found, lines[index + 1 :])
+
+
+def _first_start(lines: list[str]) -> tuple[int, re.Match[str]] | None:
+    """Find the first start marker, and the line it is on, if any line is one."""
+    for index, line in enumerate(lines):
+        found = START_PATTERN.match(line)
+        if found:
+            return index, found
     return None
 
 
-def _regions(head: str, marker: str, rest: list[str]) -> Split | None:
+def _regions(head: str, found: re.Match[str], rest: list[str]) -> Split | None:
     """
-    Divide what follows the frontmatter at the end marker.
+    Divide what follows the start marker at the end marker.
 
-    :param head: The frontmatter, fences included, or "" when there is none.
-    :param marker: The line that should be the start marker.
+    :param head: Everything above the start marker, or "" when nothing is.
+    :param found: The start marker.
     :param rest: Every line after it.
 
     :return: The regions, or None when this file is not one of ours.
     """
-    found = START_PATTERN.match(marker)
-    if not found:
-        return None
     for offset, line in enumerate(rest):
         if END_PATTERN.match(line.rstrip()):
             return Split(
@@ -402,6 +416,7 @@ def _regions(head: str, marker: str, rest: list[str]) -> Split | None:
                 found.group(1),
                 "\n".join(rest[:offset]) + "\n" if rest[:offset] else "",
                 "\n".join(rest[offset:]),
+                found.group(2),
             )
     # A missing end marker is treated as an edit. Skipping a note that may be
     # fine is recoverable; overwriting one that is not is not.
@@ -520,20 +535,78 @@ def wrote_it(existing: str) -> bool:
 
     :param existing: The note as it stands.
 
-    :return: True when it carries this tool's start marker, below the
-        frontmatter or, when the reader has deleted that, on line 1.
+    :return: True when it carries this tool's start marker, wherever the
+        reader's head leaves it.
     """
-    lines = normalise(existing).split("\n")
-    if START_PATTERN.match(lines[0]):
-        return True
-    if lines[0].rstrip() != "---":
-        return False
-    for index in range(1, len(lines)):
-        if lines[index].rstrip() == "---":
-            return index + 1 < len(lines) and bool(
-                START_PATTERN.match(lines[index + 1])
-            )
-    return False
+    return _start_marker_of(existing) is not None
+
+
+def _start_marker_of(existing: str) -> re.Match[str] | None:
+    """
+    Find the start marker of a note this tool wrote.
+
+    :param existing: The note as it stands.
+
+    :return: The first start marker, or None.
+    """
+    start = _first_start(normalise(existing).split("\n"))
+    return None if start is None else start[1]
+
+
+def book_tags(found: list[dict[str, Any]]) -> set[str]:
+    """
+    Name the book a note is of, as its start marker records it.
+
+    A note's name is worked out afresh each run, and two routes once worked
+    it out two ways: ``-ao`` wrote one edition's highlights over the note of
+    the other edition, which held its name. The tag lets a note refuse a book
+    that is not its own, whatever named it.
+
+    Apple's asset id, digested as a marked name digests an identifier. It is
+    on every annotation, read from the row itself, so it does not come and go
+    with whether a package document could be read, as a ``dc:identifier``
+    does; and a store book's id is a purchase number, which has no business
+    in a reader's vault undigested.
+
+    :param found: This book's annotations.
+
+    :return: Every tag they carry: usually one, and none when no annotation
+        names its asset.
+    """
+    tags = set()
+    for item in found:
+        book = item.get("book")
+        asset = book.get("assetId") if isinstance(book, dict) else None
+        if isinstance(asset, str) and asset:
+            tags.add(disambiguator(asset))
+    return tags
+
+
+def of_another_book(existing: str, found: list[dict[str, Any]]) -> bool:
+    """
+    Whether a note is tagged for a book other than the one being written.
+
+    A note written before notes were tagged, or annotations that name no
+    asset, say nothing either way, and the note is taken as this book's, as
+    it always was.
+
+    :param existing: The note as it stands.
+    :param found: The annotations about to be written into it.
+
+    :return: True when the note's tag names another book.
+    """
+    marker = _start_marker_of(existing)
+    held = marker.group(2) if marker is not None else None
+    tags = book_tags(found)
+    return held is not None and bool(tags) and held not in tags
+
+
+def _start_marker(generated: str, book: str | None) -> str:
+    """Render the start marker for a region, tagged for its book when known."""
+    digest = digest_of(generated)
+    if book is None:
+        return START_TEMPLATE.format(digest=digest)
+    return TAGGED_TEMPLATE.format(digest=digest, book=book)
 
 
 def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
@@ -546,7 +619,7 @@ def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
     :return: The file's contents.
     """
     generated = body(found)
-    marker = START_TEMPLATE.format(digest=digest_of(generated))
+    marker = _start_marker(generated, min(book_tags(found), default=None))
     book = found[0].get("book", {}) if found else {}
     below = tail if tail is not None else f"{END_MARKER}\n"
     return f"{frontmatter(book)}{marker}\n{generated}{below}"
@@ -555,6 +628,11 @@ def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
 def rewrite(existing: str, found: list[dict[str, Any]]) -> str:
     """
     Re-render a note this tool wrote, keeping both of the reader's regions.
+
+    A note whose region would come out the same is returned as it stands, so
+    a rerun with nothing new writes nothing and a vault under version control
+    stays quiet. A note written before notes were tagged is therefore tagged
+    only when its region is rewritten anyway.
 
     :param existing: The note as it stands.
     :param found: This book's annotations, in reading order.
@@ -565,8 +643,10 @@ def rewrite(existing: str, found: list[dict[str, Any]]) -> str:
     if held is None:
         raise ValueError("not a note this tool wrote")
     generated = body(found)
-    marker = START_TEMPLATE.format(digest=digest_of(generated))
-    return f"{held.head}{marker}\n{generated}{held.tail}"
+    if generated == held.generated and digest_of(generated) == held.digest:
+        return normalise(existing)
+    book = held.book if held.book is not None else min(book_tags(found), default=None)
+    return f"{held.head}{_start_marker(generated, book)}\n{generated}{held.tail}"
 
 
 def is_ours(existing: str) -> bool:
@@ -587,6 +667,7 @@ def write_vault(
     named: Sequence[Assignment],
     *,
     copyable: Sequence[Path],
+    suffix: bool = False,
 ) -> int:
     """
     Write one Markdown note per annotated book, into a vault.
@@ -607,6 +688,10 @@ def write_vault(
         answer to a name a package may carry too. Left out, a zipped book's
         highlights were written into the note of the package that shares its
         name.
+    :param suffix: Whether the run settles a collision with ``" (n)"``, as
+        ``--on-collision suffix`` asks. Two books can hold distinct names and
+        still want one note -- ``Dune.epub`` and ``Dune.pdf`` -- and under it
+        the second is numbered rather than left without one.
 
     :return: A process exit code.
     """
@@ -625,20 +710,15 @@ def write_vault(
         return exits.NO_OUTPUT
 
     index = index_by_package(found, [item.package for item in named], copyable=copyable)
-    tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
-    collided: list[str] = []
-    for item in named:
-        mine = for_book(item.package.name, index)
-        if not mine:
-            continue
-        if not item.filename:
-            # Lost a name collision, so it has no stem to share. Under -ao no
-            # planner runs to report the collision, and these highlights were
-            # dropped without a word.
-            collided.append(item.package.name)
-            continue
-        target = directory / (Path(item.filename).stem + ".md")
-        tally[_write_one(target, mine)].append(target.name)
+    tally, collided = _write_notes(
+        directory,
+        [
+            (item, mine)
+            for item in named
+            if (mine := for_book(item.package.name, index))
+        ],
+        suffix=suffix,
+    )
 
     logger.info(
         "Wrote %d note(s) to %s.", len(tally["written"]), printable(str(directory))
@@ -682,6 +762,37 @@ def write_vault(
     return exits.FAILED if unsaved else exits.SUCCESS
 
 
+def _write_notes(
+    directory: Path,
+    wanted: list[tuple[Assignment, list[dict[str, Any]]]],
+    *,
+    suffix: bool,
+) -> tuple[dict[str, list[str]], list[str]]:
+    """
+    Write each book's note, and name the books that have none to write.
+
+    :param directory: The vault.
+    :param wanted: Each book with highlights, and its highlights.
+    :param suffix: Whether a book that loses its note's name is numbered.
+
+    :return: The notes by outcome, and the books that lost a name collision.
+    """
+    tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
+    names = note_names([item for item, _ in wanted if item.filename], suffix=suffix)
+    collided: list[str] = []
+    for item, mine in wanted:
+        name = names[item.package] if item.filename else None
+        if name is None:
+            # Lost a name collision: the book's own, which leaves it no stem to
+            # share -- under -ao no planner runs to report that, and these
+            # highlights were dropped without a word -- or its note's, when
+            # another book's file has the same stem.
+            collided.append(item.package.name)
+            continue
+        tally[_write_one(directory / name, mine)].append(name)
+    return tally, collided
+
+
 #: Everything :func:`_write_one` can report, so the tally cannot be typo'd into
 #: silently dropping a case.
 OUTCOMES = (
@@ -689,6 +800,7 @@ OUTCOMES = (
     "unchanged",
     "kept",
     "foreign",
+    "another",
     "unreadable",
     "blocked",
     "failed",
@@ -701,8 +813,9 @@ OUTCOMES = (
 #: wrote no notes reporting success. ``foreign`` is here by decision, not by
 #: default: the file is the reader's and is never touched, but the book is
 #: exactly as unsaved as when the same file sits at the sidecar's path, and
-#: moving it aside is a fix only the reader can make.
-UNSAVED = ("foreign", "unreadable", "blocked", "failed")
+#: moving it aside is a fix only the reader can make. ``another`` is the same
+#: case with a note this tool did write, for another book.
+UNSAVED = ("foreign", "another", "unreadable", "blocked", "failed")
 
 #: What the reader is told about each outcome worth mentioning. Every sentence
 #: has to be true of every file it counts: "not written by ibook2epub" was
@@ -716,6 +829,9 @@ REPORTS = {
     "books' highlights were not written; see the errors above: %s",
     "foreign": "%d file(s) were not written by ibook2epub and were left alone, "
     "so their books' highlights were not written; move them aside and rerun: %s",
+    "another": "%d note(s) hold another book's highlights and were left alone, "
+    "so these books' highlights were not written; two books want one note, so "
+    "rerun with --on-collision suffix, or move the note aside: %s",
     "failed": "%d note(s) could not be written: %s",
 }
 
@@ -785,6 +901,11 @@ def _write_one(  # pylint: disable=too-many-return-statements
 
     if not wrote_it(existing):
         return "foreign"
+    if of_another_book(existing, mine):
+        # A name is worked out afresh each run, and a note tagged for another
+        # book is that book's whatever this run named it. Checked before the
+        # sidecar, which would carry this book's highlights beside it.
+        return "another"
     if not is_ours(existing):
         # Edited inside the generated region, or missing the end marker, which
         # is treated as an edit. Either way the note is left exactly as it is

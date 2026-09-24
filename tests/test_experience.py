@@ -12,7 +12,9 @@ source directory can go unmentioned.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import os
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -42,7 +44,7 @@ class TestAdviceThatWorks:
         advice = capsys.readouterr().out
         # The stem, not the filename: that is what --match takes, and the
         # advice has to be runnable as printed.
-        assert "--match Book1 --force" in advice
+        assert "--match=Book1 --force" in advice
 
     def test_force_warns_when_the_cap_will_cut_it_short(
         self, tmp_path, output_dir, capsys
@@ -69,6 +71,12 @@ class TestVerifyAdviceRepairsTheBook:
     library, or named with a suffix, is no package's name at all: ``--match``
     finds nothing, and the copy is skipped because its name is taken.
     """
+
+    @pytest.fixture(autouse=True)
+    def _no_home_shelf(self, tmp_path, monkeypatch):
+        # Advice that forgets -o writes to the default shelf: keep that one
+        # in the test's own directory, never the real ~/Books.
+        monkeypatch.setattr(cli, "DEFAULT_OUTPUT", tmp_path / "default shelf")
 
     @staticmethod
     def _damage_and_verify(
@@ -109,9 +117,123 @@ class TestVerifyAdviceRepairsTheBook:
             if line.strip().startswith("ibook2epub ")
         ]
         capsys.readouterr()
-        run.main([*shlex.split(command)[1:], *base[:4], "-q"])
+        # Exactly as printed: the run is told nothing the advice left out.
+        run.main(shlex.split(command)[1:])
 
         assert "Exported 1 epub file(s)" in capsys.readouterr().out
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_the_printed_command_names_the_shelf_and_the_library(
+        self, tmp_path, capsys
+    ):
+        # It named neither: run as printed it looked for the library in its
+        # default home and exited 4, and given -s it wrote a fresh copy to
+        # ~/Books while the damaged file stayed where it was.
+        library = tmp_path / "my lib"
+        output_dir = tmp_path / "Kindle books"
+        self._book(library, "Dune.epub")
+        base, advice = self._damage_and_verify(library, output_dir, "Dune.epub", capsys)
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        assert f"-o {shlex.quote(str(output_dir))}" in command
+        assert f"-s {shlex.quote(str(library))}" in command
+        # --verify refuses the naming flags, so it cannot know them.
+        assert "--name-by/-p/--on-collision" in advice
+        run.main(shlex.split(command)[1:])
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_a_discovered_library_is_left_to_discovery(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        self._book(library, "Dune.epub")
+        monkeypatch.setattr("epubconvert.run.cli.discover_source", lambda: library)
+        output_dir = tmp_path / "out"
+        run.main(["-o", str(output_dir), "-q"])
+        (output_dir / "Dune.epub").write_bytes(b"CORRUPTED")
+        capsys.readouterr()
+        run.main(["-o", str(output_dir), "--verify", "-q"])
+
+        [command] = [
+            line.strip()
+            for line in capsys.readouterr().out.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        assert " -s " not in command
+        run.main(shlex.split(command)[1:])
+        assert run.main(["-o", str(output_dir), "--verify", "-q"]) == 0
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Bad\x1bName.epub",
+            "Tab\tTitle.epub",
+            # What os.walk hands back for a name that is not UTF-8.
+            "Bad\udcff name.epub",
+            "-30-.epub",
+            "--help.epub",
+        ],
+    )
+    def test_a_name_display_escapes_still_gets_a_working_command(
+        self, tmp_path, output_dir, capsys, title
+    ):
+        # The pattern was the name escaped for display, which --match reads
+        # literally: 'Bad\x1bName' matched nothing. And "--match -30-" made
+        # argparse read the pattern as a flag and exit 2.
+        library = tmp_path / "lib"
+        for name in (title, "Other.epub"):
+            self._book(library, name)
+        base, advice = self._damage_and_verify(library, output_dir, title, capsys)
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        capsys.readouterr()
+        run.main(shlex.split(command)[1:])
+
+        assert "Exported 1 epub file(s)" in capsys.readouterr().out
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_a_masked_name_that_selects_two_books_is_moved_aside(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Each control character becomes "?", which matches the other too.
+        library = tmp_path / "lib"
+        for name in ("Bad\x1bName.epub", "Bad\x1cName.epub"):
+            self._book(library, name)
+        _, advice = self._damage_and_verify(
+            library, output_dir, "Bad\x1bName.epub", capsys
+        )
+
+        assert "--match" not in advice
+        assert "\n  Bad\\x1bName.epub\n" in advice
+
+    def test_a_shelf_named_like_a_flag_is_still_the_shelf(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        # Typed as "-o=-shelf"; printed as "-o -shelf", -shelf reads as a flag.
+        monkeypatch.chdir(tmp_path)
+        library = tmp_path / "lib"
+        self._book(library, "Dune.epub")
+        base = ["-s", str(library), "-o=-shelf"]
+        run.main([*base, "-q"])
+        (tmp_path / "-shelf" / "Dune.epub").write_bytes(b"CORRUPTED")
+        capsys.readouterr()
+        assert run.main([*base, "--verify", "-q"]) == 7
+        advice = capsys.readouterr().out
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        run.main(shlex.split(command)[1:])
         assert run.main([*base, "--verify", "-q"]) == 0
 
     def test_a_book_copied_through_is_moved_aside_not_forced(
@@ -394,3 +516,80 @@ class TestTheLibraryNotFoundListingLinesUp:
         ]
         assert len(listed) == 2
         assert {len(line) - len(line.lstrip()) for line in listed} == {2}
+
+
+class TestAReportSaysItOnlyReads:
+    """
+    ``--list`` and ``--verify`` announced "Writing output to" a directory
+    they only read.
+    """
+
+    @pytest.mark.parametrize("mode", ["--list", "--verify"])
+    def test_it_announces_reading_the_shelf(self, tmp_path, output_dir, capsys, mode):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+
+        run.main(["-s", str(library), "-o", str(output_dir), mode])
+
+        err = capsys.readouterr().err
+        assert "Writing output to" not in err
+        assert f"Reading output directory: {output_dir}" in err
+
+
+@pytest.fixture(name="closed_stdout")
+def _closed_stdout():
+    """
+    A pipe whose reader has already gone, as after ``head``. Each test makes
+    it standard output itself: pytest restores its own capture between a
+    fixture's setup and the test.
+    """
+    reader, writer = os.pipe()
+    os.close(reader)
+    with os.fdopen(writer, "w", encoding="utf-8") as stream:
+        yield stream
+
+
+class TestAReaderThatStopsEarly:
+    """
+    ``--list | head`` is how a long listing gets read. The pipe closing is the
+    reader saying they have seen enough, and it ended in a BrokenPipeError
+    traceback and exit 1. The flush is the interpreter's own, at exit.
+    """
+
+    @pytest.mark.parametrize("flags", [["--list"], ["--list", "--json"]])
+    def test_a_listing_ends_quietly(self, tmp_path, monkeypatch, closed_stdout, flags):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+        code = run.main(["-s", str(library), "-o", str(tmp_path / "out"), *flags])
+        closed_stdout.flush()
+
+        assert code == 0
+
+    def test_a_verify_keeps_its_verdict(
+        self, tmp_path, output_dir, monkeypatch, closed_stdout
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        base = ["-s", str(library), "-o", str(output_dir), "-q"]
+        run.main(base)
+        (output_dir / "Book.epub").write_bytes(b"CORRUPTED")
+        monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+        code = run.main([*base, "--verify"])
+        closed_stdout.flush()
+
+        # The reader stopping says nothing about the shelf.
+        assert code == 7
+
+    def test_a_run_s_summary_ends_quietly(self, tmp_path, monkeypatch, closed_stdout):
+        # `ibook2epub | head`: the summary is the last thing printed.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+        code = run.main(["-s", str(library), "-o", str(tmp_path / "out"), "-m", "0"])
+        closed_stdout.flush()
+
+        assert code == 0

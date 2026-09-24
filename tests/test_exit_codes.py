@@ -12,6 +12,7 @@ something", "fix the path" and "a book is broken" are four different responses.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import os
 import re
 from pathlib import Path
 from zipfile import ZipFile
@@ -229,6 +230,71 @@ class TestEachFailureHasItsOwnCode:
         code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
 
         assert code == exits.NO_OUTPUT
+
+
+class TestAReadOnlyShelfStopsTheRehearsalToo:
+    """
+    A dry run on a read-only output volume exited 0, and the real run could
+    neither create the shelf nor lock it and exited 5: the rehearsal said all
+    was well for a run that could not start.
+    """
+
+    @needs_permissions
+    @pytest.mark.parametrize("below", ["", "books"])
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_an_unwritable_shelf_is_the_same_code_either_way(
+        self, tmp_path, below, mode
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        shelf.mkdir()
+        shelf.chmod(0o555)
+        try:
+            code = run.main(["-s", str(library), "-o", str(shelf / below), "-q", *mode])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.NO_OUTPUT
+
+    @needs_permissions
+    @pytest.mark.parametrize("mode", ["--list", "--verify"])
+    def test_a_report_on_an_unwritable_shelf_still_reads_it(self, tmp_path, mode):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        shelf.mkdir()
+        shelf.chmod(0o555)
+        try:
+            code = run.main(["-s", str(library), "-o", str(shelf), "-q", mode])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.SUCCESS
+
+    @pytest.mark.parametrize("below", ["", "books"])
+    def test_a_read_only_volume_stops_a_dry_run(
+        self, tmp_path, monkeypatch, capsys, below
+    ):
+        # A read-only mount refuses root as well, where chmod does not: this
+        # stands in for one, so it runs under any user.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        shelf.mkdir()
+        allowed = os.access
+        monkeypatch.setattr(
+            os,
+            "access",
+            lambda path, mode, **kwargs: (
+                Path(path) != shelf and allowed(path, mode, **kwargs)
+            ),
+        )
+
+        code = run.main(["-s", str(library), "-o", str(shelf / below), "-d", "-q"])
+
+        assert code == exits.NO_OUTPUT
+        assert str(shelf) in capsys.readouterr().err
 
 
 @pytest.fixture(name="refused")

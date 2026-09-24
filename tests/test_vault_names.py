@@ -22,6 +22,7 @@ from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import zipped_book
+from tests.test_copy_through import _count_opens, _evict
 
 PLAIN_NOTE = "Frank Herbert - Dune.md"
 
@@ -184,3 +185,35 @@ class TestABookWithNoPackageGetsANote:
 
         assert code == 0
         self._assert_both(vault)
+
+
+class TestAVaultLeavesAnEvictedBookAlone:
+    """
+    A vault names the books copied through as the shelf would, and under
+    ``--name-by author-title`` that opens a zipped epub: for an evicted one,
+    a download. ``--skip-incomplete`` is what says not to, and it was refused.
+    """
+
+    def test_skip_incomplete_is_honoured(self, tmp_path, monkeypatch):
+        library, container = tmp_path / "lib", tmp_path / "container"
+        _read_from(monkeypatch, container)
+        book = make_metadata_package(
+            library, "Package.epub", title="Package", identifier="urn:uuid:P"
+        )
+        evicted = zipped_book(tmp_path, library / "Zipped.epub", "urn:uuid:Z")
+        make_databases(
+            container,
+            rows=[highlight(asset="P", uuid="UP", text="PACKAGE TEXT")],
+            books=[library_row(asset="P", path=str(book), title="Package")],
+        )
+        _evict(monkeypatch, evicted)
+        opened = _count_opens(monkeypatch)
+
+        code = main(
+            ["-s", str(library), "-ao", str(tmp_path / "vault"), "-q"]
+            + ["--annotations-format", "markdown", "--name-by", "author-title"]
+            + ["--skip-incomplete"]
+        )
+
+        assert code == 0
+        assert not opened

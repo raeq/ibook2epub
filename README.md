@@ -197,7 +197,7 @@ Choosing books:
   Which books this run considers.
 
   -m, --max-export-files N
-                        Maximum number of packages to convert; 0=no limit,
+                        Maximum number of packages to convert; 0=unlimited,
                         default=5. Files copied through are not counted.
   -s, --source-dir SOURCE_DIR
                         Path of the source directory containing *.epub/
@@ -691,7 +691,7 @@ category: book
 tags: [books]
 source: ibook2epub
 ---
-<!-- ibook2epub sha256=351e6dffa048ee4a -->
+<!-- ibook2epub sha256=351e6dffa048ee4a book=3a90a3e2 -->
 # Leviathan Wakes
 *James S.A. Corey*
 
@@ -712,7 +712,7 @@ them there. So the file has four parts, and the tool owns exactly one of them:
 
 | | |
 |---|---|
-| the frontmatter | yours, and Obsidian's — add tags and aliases freely |
+| the frontmatter, and anything else above the marker line | yours, and Obsidian's — add tags, aliases and links freely |
 | the marker line | the tool's |
 | the highlights between the markers | the tool's |
 | everything below the end marker | yours |
@@ -723,9 +723,22 @@ all of it alone. Edit *inside* the highlights and the tool stops touching that
 note entirely, putting the new ones in a `.md.new` beside it so you never have
 to choose between keeping your edits and getting your highlights.
 
+The middle part mirrors Books: a highlight you delete there leaves the note on
+the next run, as it leaves each book's embedded set. Only the JSON file of
+`-ad` or `-ao` keeps highlights deleted in Books (see
+[Re-running](#re-running)). Anything of your own written below the end marker
+is never touched either way.
+
 A file at a note's path that the tool did not write, or one it cannot read,
 is never touched either. That book's highlights then reach no file at all, so
 the run names the file and exits `1`; move it aside and rerun.
+
+The marker line also names the book the note is of, as a digest of Apple's id
+for it, so a note is never rewritten with another book's highlights, whatever
+a later run names it. Two editions of a book that want one note are a name
+collision: the note stays the first one's, the run names it and exits `1`, and
+`--on-collision suffix` gives each its own. Notes written before the marker
+named its book are still recognised, and are tagged the next time they change.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
@@ -844,8 +857,24 @@ being gathered again.
 
 #### Re-running
 
-A rerun merges rather than replaces. Annotations are matched on the UUID Apple
-gives them, so a file you have been adding to is added to again:
+What a rerun does with a highlight you have deleted in Books depends on where
+the highlights go, and only one destination keeps it:
+
+| Destination | On a rerun |
+|---|---|
+| the `-ad` / `-ao` JSON file | merged into: a highlight deleted in Books is **kept** |
+| the set embedded in each book (`-ae`, `-ar`) | replaced: mirrors what Books holds now |
+| a vault note (`--annotations-format markdown`) | its highlights are replaced: mirrors what Books holds now |
+
+So the JSON file is the one to keep if you want everything you ever
+highlighted. A book that arrives carrying its own `META-INF/annotations.json`
+has it replaced by this run's set, not merged with it. One exception on the
+mirroring side: a book with no highlight left in Books is not touched at all,
+so its embedded set and its note keep the last highlights they had, rather
+than being emptied.
+
+The JSON file merges rather than replaces. Annotations are matched on the UUID
+Apple gives them, so a file you have been adding to is added to again:
 
 ```text
 3 added, 1 updated, 214 unchanged, 2 kept (no longer in Books)
@@ -856,6 +885,12 @@ point, and losing one because Apple lost it would defeat that. An export
 written by a different version of this tool is regenerated rather than trusted,
 because the locator is ahead of a moving draft and an old entry may not say
 what a current one would.
+
+A file at that path that the merge cannot account for in full is left exactly
+as it is, and the run stops with exit code `5` and names it: one that is not
+an export, an annotation with no id, two annotations sharing an id, or a
+top-level key the tool does not write. Merging any of those would drop
+something without a word, so move the file aside or fix it and rerun.
 
 [anno]: https://w3c.github.io/epub-specs/epub34/annotations/
 [frag]: https://developer.mozilla.org/en-US/docs/Web/URI/Fragment/Text_fragments

@@ -279,7 +279,17 @@ class TestWhenTheDestinationIsWrong:
     so a refusal costs no work and leaves nothing behind.
     """
 
-    @pytest.mark.parametrize("name", ["Leviathan Wakes.md", "Leviathan Wakes.md.new"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Leviathan Wakes.md",
+            "Leviathan Wakes.md.new",
+            # One file with the note on a case-insensitive volume, the macOS
+            # default, and passed by a case-sensitive guard.
+            "Leviathan Wakes.MD",
+            "Leviathan Wakes.Md.NEW",
+        ],
+    )
     def test_the_catalogue_will_not_take_a_note_s_name(
         self, tmp_path, monkeypatch, name
     ):
@@ -593,6 +603,23 @@ class TestTheFlagsRefuseWhatTheyCannotDo:
         # colliding pair under --on-collision skip loses a note; refusing the
         # flag in -ao would have made that loss unavoidable.
         assert cli.parse_args([*mode, *naming])
+
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            ["-ao", "vault"],
+            ["--library-export", "l.csv", "-ao", "vault"],
+            ["-ae", "-ar", "-ad", "vault"],
+        ],
+    )
+    @pytest.mark.parametrize("other", [["--skip-incomplete"], ["--workers", "3"]])
+    def test_a_vault_keeps_what_naming_its_books_consults(self, mode, other):
+        # A vault names each book copied through, in a pool, and opening an
+        # evicted one to name it is the download --skip-incomplete avoids:
+        # both were consulted there, and refused on the command line.
+        args = cli.parse_args([*mode, "--annotations-format", "markdown", *other])
+
+        assert args.skip_incomplete or args.workers == 3
 
     def test_the_annotation_default_has_nothing_to_state(self):
         # -an states the default of a conversion, and this run converts none.
