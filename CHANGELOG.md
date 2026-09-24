@@ -9,6 +9,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- One package the run could not search no longer ends the whole run. A
+  directory without search permission -- or, on macOS, one refused by the
+  privacy settings -- raised out of the check that keeps every read inside
+  its book, with a traceback and nothing exported. That package is now
+  refused like any other path the check cannot vouch for.
+
+- `--log-file` no longer drops a line that names a file whose name is not
+  valid UTF-8. The line is written with the undecodable bytes escaped,
+  where it used to be lost and replaced by a traceback on the console.
+
 - `--validate` no longer rejects a book whose manifest names a URL with a
   scheme it did not know. Only `http`, `https`, `ftp`, `ftps`, `data` and
   `mailto` counted as remote. Any other scheme -- `kindle:embed:`, `tel:`,

@@ -7,119 +7,102 @@
     {
       "title": "Two silent failures",
       "file": "epubconvert/collect/source.py",
-      "line": 4,
       "pattern": "Two conditions make a package impossible to convert into a readable book",
       "description": "A DRM-protected purchase produces a valid-looking archive nobody can open. A book iCloud has not downloaded produces one with empty files inside. Both pass every structural check, and both are discovered days later, on a device, by a reader.\n\nDetecting them turns that into a line in the run's output. Detection only — nothing here removes or circumvents protection; a protected book is reported and skipped."
     },
     {
       "title": "encryption.xml is not evidence of DRM",
       "file": "epubconvert/collect/source.py",
-      "line": 29,
       "pattern": "#: Encryption algorithms that are \\*not\\* DRM",
       "description": "The most expensive mistake available here, and it is easy to make: treat the presence of `META-INF/encryption.xml` as protection.\n\nBoth listed algorithms obfuscate embedded fonts, which is routine publishing practice. The book reads perfectly. In one real 2,805-book library, **every** package carrying `encryption.xml` used the Adobe font algorithm and not one was protected — so the naive check would have skipped a large slice of a normal library."
     },
     {
       "title": "Match by element, not by attribute",
       "file": "epubconvert/collect/source.py",
-      "line": 41,
       "pattern": "#: The element whose ``Algorithm`` attribute decides",
       "description": "`DigestMethod` and `CanonicalizationMethod` carry an `Algorithm` attribute too. Read those and a perfectly readable book is reported as DRM-protected.\n\nMatching is by **local name** (`tag.rpartition(\"}\")`), because packages differ in how they bind the xmlenc namespace.\n\nThe `encryption_algorithms` docstring explains why the file is parsed rather than pattern-matched: an attribute value may be single-quoted, which a text scan misses — and missing it reports a protected book as readable."
     },
     {
       "title": "Failing closed",
       "file": "epubconvert/collect/source.py",
-      "line": 89,
       "pattern": ":raises UnreadableEncryptionError: If the file exists but cannot be read",
       "description": "The direction of failure is the whole design here.\n\nA truncated `encryption.xml` is a realistic state for a partly synced iCloud file. Read that as \"no protection\" and the book is exported as an unopenable archive — which then sits in the output directory as a record of finished work that **no rerun will ever retry**.\n\nSo an unreadable encryption declaration means protected."
     },
     {
       "title": "And the caller agrees",
       "file": "epubconvert/collect/source.py",
-      "line": 165,
       "pattern": "    except UnreadableEncryptionError as exc:",
       "description": "`has_drm` catches the error and returns `True`. Fail-closed decisions are only worth making if every caller honours them; this is the one place that could have quietly undone the previous step."
     },
     {
       "title": "The undownloaded book",
       "file": "epubconvert/collect/source.py",
-      "line": 219,
       "pattern": "def has_dataless_files\\(package: Path\\) -> bool:",
       "description": "macOS sets `SF_DATALESS` on a file whose contents live only in the cloud. One such file anywhere in the package and the export would be a book full of empty chapters.\n\nThis walks the whole package, which is the expensive operation on a cloud library, so it only runs when `--skip-incomplete` asks for it. `os.walk` is used rather than `rglob` plus `is_file` because it already separates files from directories, sparing a stat per entry."
     },
     {
       "title": "An honest bound",
       "file": "epubconvert/collect/validate.py",
-      "line": 56,
       "pattern": "#: Cap on the \\*stored\\* size of XML read from an archive",
       "description": "Note what this comment refuses to claim. It bounds the **read**, not the parse: ElementTree expands internal entities, so a small document can still expand to something far larger, and this limit does not prevent that.\n\nIt rejects implausible files early. It is not a memory bound, and saying so would be worse than not having it."
     },
     {
       "title": "A rootfile that leaves the archive",
       "file": "epubconvert/collect/validate.py",
-      "line": 512,
       "pattern": "def _checked_opf_path\\(full_path: str\\) -> str:",
       "description": "`container.xml` names the package document, and `container.xml` came from the book. Normalize the path, then refuse one that resolves outside the archive."
     },
     {
       "title": "What \"outside\" means",
       "file": "epubconvert/utils/contained.py",
-      "line": 67,
       "pattern": "def escapes\\(path: str\\) -> bool:",
       "description": "Absolute, or `..`-prefixed after normalization. No archive member can match either, so inside a zip these are merely futile.\n\nThe module docstring names the reason they are rejected rather than ignored: **the source side**. Every name from the book is joined onto the `*.epub/` directory on disk, where they reach real files that are no part of the book."
     },
     {
       "title": "Three checks, because no one of them covers the others",
       "file": "epubconvert/utils/contained.py",
-      "line": 85,
       "pattern": "def resolve\\(",
       "description": "`escapes` rejects the `../` and absolute paths. The symlink test rejects a member that is itself a redirection, which the textual check cannot see because the name is ordinary. The resolved comparison at the end catches the last case: an intermediate directory that is a link out of the package.\n\nThis lives beside `escapes` rather than beside its caller on purpose, so the containment rule is in one place. Any future reader that turns a manifest entry into a path on disk — fonts, thumbnails, metadata sidecars — should come through here rather than reinvent half of it."
     },
     {
       "title": "Remote is legitimate",
       "file": "epubconvert/utils/contained.py",
-      "line": 38,
-      "pattern": "#: Prefixes that name a resource outside the archive rather than a member",
+      "pattern": "^_SCHEME = re\\.compile\\(",
       "description": "The counterweight to the last three steps. The epub specification allows a remote resource in the manifest, so resolving one as an archive path would report a perfectly good book as missing a file.\n\nStrictness that fires on valid input is not strictness, it is a bug."
     },
     {
       "title": "The cover, and what a book could make it copy",
       "file": "epubconvert/export/inspect_output.py",
-      "line": 73,
       "pattern": "The href is a value out of the book's own package document",
       "description": "`--covers` writes each book's cover image beside its archive. The href naming that image is attacker-controlled data.\n\nA manifest declaring `href=\"../../../secret\"` as its cover image would have this function read that file and write its bytes into the output directory — where they travel on to whatever device the shelf is copied to. Hence the `resolve` call, and `open_contained` for the read."
     },
     {
       "title": "with_suffix() would overwrite the book",
       "file": "epubconvert/export/inspect_output.py",
-      "line": 100,
       "pattern": "# with_suffix\\(\\) \\*replaces\\* the extension",
       "description": "The second trap in the same function, and a good one.\n\n`Path.with_suffix()` **replaces** an extension. A cover href ending in `.epub` would resolve to the archive itself — and the freshly exported book would be overwritten with image bytes.\n\nThe name is built from the stem instead, and any path that is not a new file beside the archive is refused."
     },
     {
       "title": "Failures here are swallowed on purpose",
       "file": "epubconvert/export/inspect_output.py",
-      "line": 125,
       "pattern": "    except \\(OSError, ValueError, ValidationError\\) as exc:",
       "description": "Writing a cover is a convenience, never the point of the run. By this point the book itself is complete and atomically in place.\n\nLetting a full disk or a rejected filename escape from here would abort the run and lose the counts for books that had already succeeded."
     },
     {
       "title": "The bug this module exists to catch",
       "file": "epubconvert/collect/validate.py",
-      "line": 8,
       "pattern": "That last check is the one that matters most here",
       "description": "A converter that silently drops a content file still produces a structurally valid **zip**. What breaks is the book, when a reader follows a manifest entry to a file that is not there.\n\nExactly that bug shipped in this project once. The module docstring says so, which is the right place for it."
     },
     {
       "title": "Everything the manifest promises",
       "file": "epubconvert/collect/validate.py",
-      "line": 809,
       "pattern": "def _check_manifest\\(members: set\\[str\\], package: Package\\) -> list\\[str\\]:",
       "description": "Manifest items must exist as members. Spine idrefs must exist in the manifest. Neither list may be empty.\n\nProblems are capped at five per category with an \"…and N more\" line, because a systematically broken book would otherwise print thousands."
     },
     {
       "title": "The stricter check, when asked",
       "file": "epubconvert/collect/validate.py",
-      "line": 861,
       "pattern": "def run_epubcheck\\(path: Path, timeout: int = 120\\) -> list\\[str\\]:",
       "description": "The external `epubcheck` tool, run through `subprocess` with a fixed executable resolved by `shutil.which`, no shell, and a timeout.\n\n`ValidationOptions.check` only reaches it when the structural checks passed — no point running a two-minute validator over an archive already known to be broken. `_check_environment` in `epubconvert/run/run.py` verifies the tool is on `PATH` before any book is converted, so the run exits `6` before doing any work rather than failing on the first book. An epubcheck that cannot run at all, or runs out of time, is logged and does not fail the book: it says nothing about the book."
     }

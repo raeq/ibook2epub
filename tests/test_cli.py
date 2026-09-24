@@ -165,6 +165,18 @@ class TestLoggerConfiguration:
 
         assert "hello from the log file" in log_path.read_text(encoding="utf-8")
 
+    def test_a_name_that_is_not_text_still_reaches_the_log_file(self, tmp_path):
+        # os.walk hands back an undecodable filename as lone surrogates, which
+        # a strict UTF-8 file handler cannot write: the line was dropped from
+        # the transcript and a traceback printed in its place.
+        log_path = tmp_path / "app.log"
+
+        app_logger.configure(verbosity=1, log_file=log_path)
+        app_logger.logger.warning("Could not read %s", "Caf\udce9.epub")
+        app_logger.configure(verbosity=1)  # Close the file handler.
+
+        assert "Could not read Caf" in log_path.read_text(encoding="utf-8")
+
 
 class TestMain:
     """End-to-end runs through the entry point."""

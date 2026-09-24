@@ -12,6 +12,7 @@ itself before it is cut.
 # pylint: disable=too-few-public-methods
 
 import os
+import re
 import subprocess
 import sys
 from importlib import metadata
@@ -210,3 +211,20 @@ class TestTheReadmeQuotesTheRealHelp:
         missing = sorted(option for option in wanted if option not in quoted)
 
         assert missing == []
+
+
+class TestEveryCiJobHasATimeout:
+    """A hung job otherwise holds a runner for GitHub's six-hour default."""
+
+    def test_every_job_declares_timeout_minutes(self):
+        workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text("utf-8")
+        jobs = workflow.split("\njobs:\n", 1)[1]
+        # Each job is a two-space-indented key; its body runs to the next one.
+        blocks = re.split(r"^  (?=[a-z][a-z0-9_-]*:\s*$)", jobs, flags=re.MULTILINE)
+        untimed = [
+            block.split(":", 1)[0]
+            for block in blocks
+            if block.strip() and "timeout-minutes:" not in block
+        ]
+
+        assert untimed == []

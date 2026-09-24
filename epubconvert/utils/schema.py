@@ -32,8 +32,21 @@ def load(path: Path) -> dict[str, Any]:
     return schema
 
 
+def _matches(pattern: re.Pattern[str], value: str) -> bool:
+    """
+    Match as JSON Schema does, where ``$`` ends the string.
+
+    Python's ``$`` also matches before a final newline, so ``"2026\\n"``
+    passed a four-digit pattern that every other validator rejects.
+    """
+    found = pattern.search(value)
+    return found is not None and (
+        not pattern.pattern.endswith("$") or found.end() == len(value)
+    )
+
+
 def document_problems(
-    document: dict[str, Any], schema: dict[str, Any], items: str, item: str
+    document: object, schema: dict[str, Any], items: str, item: str
 ) -> list[str]:
     """
     Check a whole export: its envelope, and each entry in its list.
@@ -45,6 +58,10 @@ def document_problems(
 
     :return: What is wrong with it, empty if nothing is.
     """
+    if not isinstance(document, dict):
+        # A hand-edited file can hold any JSON, and this raised on a list
+        # rather than reporting it.
+        return [f"document is a {type(document).__name__}, not an object"]
     problems: list[str] = []
     for name in schema["required"]:
         if name not in document:
@@ -53,7 +70,7 @@ def document_problems(
     instant = re.compile(schema["properties"]["generated"]["pattern"])
     # str(), like every other check here: a hand-edited document holding a
     # number raised out of the validator whose whole purpose is to report.
-    if "generated" in document and not instant.match(str(document["generated"])):
+    if "generated" in document and not _matches(instant, str(document["generated"])):
         problems.append(f"generated is not an instant: {document['generated']!r}")
 
     if "generator" in document:
@@ -131,7 +148,7 @@ def object_problems(
             problems.extend(object_problems(held, nested, f"{where}.{name}", schema))
             continue
         pattern = rule.get("pattern")
-        if pattern and not re.match(pattern, str(held)):
+        if pattern and not _matches(re.compile(pattern), str(held)):
             problems.append(f"{where}.{name} does not match {pattern}")
         minimum = rule.get("minLength")
         if minimum is not None and len(str(held)) < minimum:

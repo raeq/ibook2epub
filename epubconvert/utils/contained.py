@@ -35,10 +35,10 @@ import stat
 from pathlib import Path
 from typing import BinaryIO
 
-#: Prefixes that name a resource outside the archive rather than a member of
-#: it. The epub specification allows a remote manifest item, and resolving one
-#: as an archive path would report a perfectly good book as missing a file.
-#: A URL scheme and its colon (RFC 3986, section 3.1).
+#: A URL scheme and its colon (RFC 3986, section 3.1). An href that starts
+#: with one names a resource outside the archive rather than a member of it.
+#: The epub specification allows a remote manifest item, and resolving one as
+#: an archive path would report a perfectly good book as missing a file.
 _SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 
 
@@ -174,8 +174,10 @@ def _is_linked(candidate: Path) -> bool:
 
     :return: True for a symlink, or for a regular file with more than one name.
     """
-    if candidate.is_symlink():
-        return True
+    # One lstat inside the guard, rather than is_symlink() before it:
+    # is_symlink swallows only the errors meaning "absent", so a directory
+    # that could not be searched raised EACCES out of the rule instead of
+    # failing closed, and one unreadable package ended the whole run.
     try:
         info = candidate.lstat()
     except FileNotFoundError:
@@ -187,7 +189,9 @@ def _is_linked(candidate: Path) -> bool:
         # Anything else means we could not establish what this is, and the
         # rule fails closed.
         return True
-    return stat.S_ISREG(info.st_mode) and info.st_nlink > 1
+    return stat.S_ISLNK(info.st_mode) or (
+        stat.S_ISREG(info.st_mode) and info.st_nlink > 1
+    )
 
 
 def contains(root: Path, candidate: Path, *, resolved_root: Path | None = None) -> bool:

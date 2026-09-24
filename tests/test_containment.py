@@ -248,6 +248,24 @@ class TestTheRuleFailsClosed:
 
         assert contained.contains(package, member, resolved_root=resolved) is False
 
+    def test_a_name_whose_directory_cannot_be_searched_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        # Path.is_symlink swallows only the errors meaning "absent", so EACCES
+        # from a directory that cannot be searched escaped the rule as an
+        # exception, and one unreadable package ended the whole run. macOS
+        # reports a privacy refusal as EPERM, down the same path.
+        package = tmp_path / "Book.epub"
+        package.mkdir()
+
+        def refused(self):
+            raise PermissionError(13, "Permission denied", str(self))
+
+        monkeypatch.setattr(Path, "lstat", refused)
+
+        assert contained.resolve(package, "META-INF/sinf.xml") is None
+        assert contained.contains(package, package / "OEBPS") is False
+
 
 class TestTheCoverIsReadThroughTheRule:
     """
