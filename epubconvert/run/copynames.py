@@ -102,21 +102,11 @@ def claim_copies(
         if item.filename:
             claiming.claims.take(item.identity, 1, item.identity, item.filename)
             claiming.holders[filesystem_key(item.identity)] = item.filename
+            claiming.packaged[filesystem_key(item.identity)] = item
 
-    # A copy whose name is on the shelf claims first, as a package does, and
-    # before it one whose own bytes are on the shelf under its name or one of
-    # its numbers: two PDFs of one name have no identifier to tell them
-    # apart, and the first in sorted order took the other's file for its own
-    # copy and was never copied.
-    order = sorted(
-        claim_order([name for _, name in wanting], shelf_names(output_dir)),
-        key=lambda index: claiming.kept(*wanting[index]) is None,
+    named = claiming.settle(
+        wanting, claim_order([name for _, name in wanting], shelf_names(output_dir))
     )
-    claimed = {
-        index: claiming.name(*wanting[index], policy.identity(wanting[index][1]))
-        for index in order
-    }
-    named = [claimed[index] for index in range(len(wanting))]
     wanted = {filesystem_key(policy.identity(name)) for _, name in copies if name}
     return Names(_identified(assigned, wanted, policy), named)
 
@@ -139,6 +129,10 @@ class _Claiming:
     read: dict[Path, str | None] = field(default_factory=dict)
     #: The shelf's files by the key of their name less any " (n)", with n.
     numbered: dict[str, list[tuple[int, Path]]] = field(default_factory=dict)
+    #: The package given each name in the pass, by filesystem key.
+    packaged: dict[str, Assignment] = field(default_factory=dict)
+    #: The shelf's files a copy has kept as its own, each by one copy only.
+    taken: set[Path] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         for key, found in self.existing.items():
@@ -150,7 +144,43 @@ class _Claiming:
                 position = int(numbered["position"])
                 self.numbered.setdefault(plain, []).append((position, found))
 
-    def kept(self, source: Path, name: str) -> tuple[Path, str, str | None] | None:
+    def settle(
+        self, wanting: Sequence[tuple[Path, str]], order: Sequence[int]
+    ) -> list[Assignment]:
+        """
+        Name every copy, in the order to claim.
+
+        A copy whose own bytes are on the shelf under its name or one of its
+        numbers claims first: two PDFs of one name have no identifier to tell
+        them apart, and the first in sorted order took the other's file for
+        its own copy and was never copied. Of those, one whose file is its
+        size before one whose file only declares its identifier, which two
+        copies of one book share. Then one whose name is on the shelf, as a
+        package does. Each file is kept by one copy at most, so one that
+        finds its file already kept claims a name with the rest.
+
+        :param wanting: Each copy and the name it wants, in sorted order.
+        :param order: Indices into *wanting*, from
+            :func:`~epubconvert.run.claims.claim_order`.
+
+        :return: Each copy's assignment, in the order of *wanting*.
+        """
+        claimed: dict[int, Assignment] = {}
+        for exact in (True, False):
+            for index in order:
+                if index not in claimed and (kept := self.keep(*wanting[index], exact)):
+                    claimed[index] = kept
+        for index in order:
+            if index not in claimed:
+                source, name = wanting[index]
+                claimed[index] = self.name(
+                    source, name, self.setup.policy.identity(name)
+                )
+        return [claimed[index] for index in range(len(wanting))]
+
+    def kept(
+        self, source: Path, name: str, *, exact: bool = False
+    ) -> tuple[Path, str, str | None] | None:
         """
         Find *source*'s own copy on the shelf, under its name or one of its numbers.
 
@@ -163,6 +193,7 @@ class _Claiming:
 
         :param source: The file to copy.
         :param name: The name it wants.
+        :param exact: Only a file of *source*'s size will do.
 
         :return: The file, its identity and *source*'s identifier when it was
             read; None when no file there is *source*'s.
@@ -173,12 +204,47 @@ class _Claiming:
         if self.setup.on_collision != SUFFIX:
             numbers = [entry for entry in numbers if entry[0] == 1]
         for _position, found in sorted(numbers):
+            # One file is one copy's: two copies of one book, or a copy and a
+            # package of one, share an identifier, and the second took the
+            # first's file for its own. The collision the first run reported
+            # was gone from the next, and in suffix mode the second copy's own
+            # file was listed as an orphan.
+            if found in self.taken or self._packages(source, found):
+                continue
             # Whether another book wants it is a question about the name,
             # not the number.
-            own, identifier = self._own(source, found, wanted)
+            own, identifier = self._own(source, found, wanted, exact=exact)
             if own:
                 return found, policy.identity(found.name), identifier
         return None
+
+    def keep(self, source: Path, name: str, exact: bool) -> Assignment | None:
+        """
+        Keep a copy at its own file on the shelf, if it has one no copy kept.
+
+        Copied before the book now holding the name arrived: the copy keeps
+        its file, whatever the mode, and that book moves on (placing.place) or
+        is a collision. Settled only in _lost, this never ran under
+        ``--on-collision suffix``, where a free ``" (n)"`` always exists: the
+        copy was written again under one and its file listed as an orphan.
+
+        :param source: The file to copy.
+        :param name: The name it wants.
+        :param exact: Only a file of *source*'s size will do.
+
+        :return: Its assignment, or None when it has to claim a name.
+        """
+        kept = self.kept(source, name, exact=exact)
+        if kept is None:
+            return None
+        mine, identity, identifier = kept
+        self.taken.add(mine)
+        # Refused only where a package was given the name, since no other
+        # copy's file gets here: the copy's own bytes, which it keeps while
+        # that package moves on.
+        self.claims.take(identity, 1, identity, mine.name)
+        self.holders.setdefault(filesystem_key(identity), mine.name)
+        return Assignment(source, mine.name, identity, identifier=identifier)
 
     def name(self, source: Path, name: str, group: str) -> Assignment:
         """
@@ -190,18 +256,6 @@ class _Claiming:
 
         :return: Its assignment.
         """
-        kept = self.kept(source, name)
-        if kept is not None:
-            # Copied before the book now holding the name arrived: the copy
-            # keeps its file, whatever the mode, and that book moves on
-            # (placing.place) or is a collision. Settled only in _lost, this
-            # never ran under --on-collision suffix, where a free " (n)"
-            # always exists: the copy was written again under one and its file
-            # listed as an orphan.
-            mine, identity, identifier = kept
-            self.claims.take(identity, 1, identity, mine.name)
-            self.holders.setdefault(filesystem_key(identity), mine.name)
-            return Assignment(source, mine.name, identity, identifier=identifier)
         taken = _claim(self.claims, name, group, setup=self.setup)
         if taken is None:
             return self._lost(source, group)
@@ -247,7 +301,43 @@ class _Claiming:
             identifier=identifier,
         )
 
-    def _own(self, source: Path, found: Path, key: str) -> tuple[bool, str | None]:
+    def _packages(self, source: Path, found: Path) -> bool:
+        """
+        Decide whether *found* may be the archive of the package named after it.
+
+        A package given the name in this pass claimed it first. The file is
+        another book's when the identifiers say so: a copy on the shelf
+        before a package of its name arrived. When they cannot, because one
+        of them declares none, a file of the copy's size is the copy's. A
+        copy and a package of one book declare one identifier, and the copy
+        took the package's archive for its own on the next run: the size
+        does not tell them apart there, since a converted archive can be the
+        size of the zipped book it was made from.
+
+        :param source: The file to copy.
+        :param found: A file on the shelf under a name it wants.
+
+        :return: True when a package was given its name and it may be that
+            package's archive.
+        """
+        key = filesystem_key(self.setup.policy.identity(found.name))
+        item = self.packaged.get(key)
+        if item is None:
+            return False
+        identifier = item.identifier
+        if identifier is None and not getattr(
+            self.setup.policy, "needs_metadata", False
+        ):
+            # Named from the folder, so the package document was not read.
+            identifier = usable_identifier(_metadata_of(item.package, True))
+        holder = identifier_on_shelf(found) if identifier is not None else None
+        if holder is not None:
+            return holder == identifier
+        return not _same_size(source, found)
+
+    def _own(
+        self, source: Path, found: Path, key: str, *, exact: bool = False
+    ) -> tuple[bool, str | None]:
         """
         Decide whether *found* is *source*'s copy, which is written byte for byte.
 
@@ -263,6 +353,8 @@ class _Claiming:
         :param source: The file to copy.
         :param found: The file on the shelf under the name it wants.
         :param key: That name's filesystem key.
+        :param exact: Only a file of *source*'s size will do, whatever the
+            identifiers say.
 
         :return: Whether it is, and *source*'s identifier when it was read.
         """
@@ -273,7 +365,7 @@ class _Claiming:
         if identifier is not None:
             holder = identifier_on_shelf(found)
             if holder is not None:
-                return holder == identifier, identifier
+                return holder == identifier and (same or not exact), identifier
         return same, identifier
 
     def _identifier(self, source: Path) -> str | None:
