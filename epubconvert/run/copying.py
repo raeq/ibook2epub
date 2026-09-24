@@ -41,6 +41,10 @@ def _copy_and_record(group: Sequence[tuple[Path, Path]], report: Report) -> None
         try:
             copy_through(source, target)
         except OSError as exc:
+            # Counted, not only logged: a copy that failed silently left the
+            # run exiting 0 with a clean summary and the book not on the shelf.
+            with _REPORT_LOCK:
+                report.failed += 1
             logger.error("Could not copy %s: %s", printable(source.name), exc)
             continue
         with _REPORT_LOCK:

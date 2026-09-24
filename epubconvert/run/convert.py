@@ -741,13 +741,18 @@ def _remaining_hint(report: Report, remaining: int) -> str:
     fails the same book again (#15). The count itself is unchanged; only the
     advice is split by cause.
 
+    The held-back count is taken first because it is exact: the cap counts it
+    where it is applied. ``report.failed`` also counts failed copies, which
+    are not among the books remaining, and taken first it turned a book the
+    cap held back into one that had failed.
+
     :param report: The run's report.
     :param remaining: Pending books this run did not export.
 
     :return: The sentences to append, each prefixed with a space.
     """
-    failed = min(report.failed, remaining)
-    held = min(report.held_back, remaining - failed)
+    held = min(report.held_back, remaining)
+    failed = min(report.failed, remaining - held)
     unattempted = remaining - failed - held
     parts = [f" {remaining} remaining."]
     if held:
