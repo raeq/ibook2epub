@@ -49,7 +49,7 @@
     {
       "title": "Ctrl-C is a normal way to stop",
       "file": "epubconvert/run/run.py",
-      "pattern": "        except KeyboardInterrupt:",
+      "pattern": "    except KeyboardInterrupt:\\n        # Stopping is a normal way to end a long run",
       "description": "Not an error path — a supported one. Every finished book is already complete and atomically in place, so a rerun simply continues.\n\nThe `Report` is created in `_run_export`, before the lock, rather than inside the exporter, precisely so the partial counts survive this."
     },
     {

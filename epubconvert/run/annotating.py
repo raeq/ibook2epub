@@ -454,7 +454,7 @@ def apply_annotations(
             copyable=copyable,
         )
         # A failed book outranks the destination's own error, the order a
-        # conversion run uses too: see run._outcome.
+        # conversion run uses too: see afterwards.outcome.
         return code if code != exits.SUCCESS else written
     return code
 
