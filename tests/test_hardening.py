@@ -463,6 +463,26 @@ class TestOneBookCannotKillTheRun:
         assert len(list(output_dir.glob("*.epub"))) == 1
 
 
+class TestAnUnscannableNameIsLoggedSafely:
+    """A directory the walk cannot read is named in a warning, escaped."""
+
+    @pytest.mark.parametrize(
+        "scan", [archive.collect_package_dirs, archive.collect_copyable]
+    )
+    def test_the_name_in_the_warning_is_escaped(self, tmp_path, records, scan):
+        # Regression: exc.filename went into the warning raw, so a directory
+        # named with ESC[2K erased the line reporting it, and one holding an
+        # undecodable byte made the log file's handler raise on the surrogate.
+        hostile = tmp_path / "Shelf\x1b[2K\udcff"
+        hostile.write_bytes(b"not a directory, so scandir fails on it")
+
+        scan(hostile)
+
+        assert records
+        for text in records:
+            assert text == printable(text), text
+
+
 class TestSurrogateNamesDoNotAbortTheRun:
     """One undecodable filename must not cost the whole library."""
 

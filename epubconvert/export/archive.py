@@ -120,6 +120,22 @@ def is_excluded(name: str, *, at_root: bool) -> bool:
     )
 
 
+def _shown(exc: OSError, fallback: Path) -> str:
+    """
+    Name the path an ``os.walk`` error is about, safe to log.
+
+    ``exc.filename`` is a directory name off the disk, so it is input: raw, a
+    name carrying ``ESC[2K`` erased the warning reporting it, and one holding
+    an undecodable byte made the log file's handler raise on the surrogate.
+
+    :param exc: The error ``os.walk`` handed to ``onerror``.
+    :param fallback: The directory being walked, if the error names none.
+
+    :return: The name, escaped.
+    """
+    return printable(os.fsdecode(exc.filename or fallback))
+
+
 def collect_copyable(source_dir: Path) -> list[Path]:
     """
     Find files worth copying to the shelf unchanged.
@@ -139,7 +155,7 @@ def collect_copyable(source_dir: Path) -> list[Path]:
     resolved = source_dir.resolve()
 
     def on_error(exc: OSError) -> None:
-        logger.warning("Could not scan %s: %s", exc.filename or source_dir, exc)
+        logger.warning("Could not scan %s: %s", _shown(exc, source_dir), exc)
 
     for root, dirs, files in os.walk(source_dir, onerror=on_error):
         directory = Path(root)
@@ -151,7 +167,9 @@ def collect_copyable(source_dir: Path) -> list[Path]:
                 continue
             if not contains(source_dir, path, resolved_root=resolved):
                 logger.warning(
-                    "Skipped symlink %s in %s", printable(name), source_dir.name
+                    "Skipped symlink %s in %s",
+                    printable(name),
+                    printable(source_dir.name),
                 )
                 continue
             found.append(path)
@@ -208,7 +226,7 @@ def count_ignored(source_dir: Path, packages: Sequence[Path]) -> int:
     ignored = 0
 
     def on_error(exc: OSError) -> None:
-        logger.debug("Could not count entries in %s: %s", source_dir, exc)
+        logger.debug("Could not count entries in %s: %s", _shown(exc, source_dir), exc)
 
     for root, dirs, files in os.walk(source_dir, onerror=on_error):
         directory = Path(root)
@@ -238,7 +256,7 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
     def on_error(exc: OSError) -> None:
         # os.walk swallows scandir failures unless onerror is supplied, so an
         # unreadable directory would otherwise be skipped in total silence.
-        logger.warning("Could not scan %s: %s", exc.filename or source_dir, exc)
+        logger.warning("Could not scan %s: %s", _shown(exc, source_dir), exc)
 
     for root, dirs, _files in os.walk(source_dir, onerror=on_error):
         descend = []
@@ -257,7 +275,10 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
                         "Ignoring symlinked package %s", printable(str(candidate))
                     )
                 else:
-                    logger.debug("Not following symlinked directory %s", candidate)
+                    logger.debug(
+                        "Not following symlinked directory %s",
+                        printable(str(candidate)),
+                    )
                 continue
             if name.endswith(PACKAGE_SUFFIX):
                 found.append(candidate)
@@ -266,7 +287,9 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
         dirs[:] = descend
 
     found.sort()
-    logger.debug("Found %d epub package(s) under %s", len(found), source_dir)
+    logger.debug(
+        "Found %d epub package(s) under %s", len(found), printable(str(source_dir))
+    )
     return found
 
 
@@ -448,7 +471,7 @@ def zip_package(
             stored: set[str] = set()
             for path in _members(source_dir):
                 if is_excluded(path.name, at_root=path.parent == source_dir):
-                    logger.trace("Excluded from archive: %s", path.name)
+                    logger.trace("Excluded from archive: %s", printable(path.name))
                     continue
                 arcname = path.relative_to(source_dir).as_posix()
                 if annotations and arcname == EMBEDDED_PATH:
