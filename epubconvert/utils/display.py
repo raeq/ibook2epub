@@ -6,12 +6,15 @@ who sideloaded the book put on the directory. Anything shown to a user goes
 through here first.
 
 Kept in its own module because both the exporter and the planner display names,
-and neither should have to import the other to do it.
+and neither should have to import the other to do it. What a report prints on
+standard output goes out through :func:`emit` here too.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 
 #: DEL, C1 and lone surrogates: what :func:`_is_control` flags besides C0.
 _UNPRINTABLE_ABOVE_C0 = re.compile("[\x7f-\x9f\ud800-\udfff]")
@@ -57,6 +60,27 @@ def printable_json(document: str) -> str:
     return _UNPRINTABLE_ABOVE_C0.sub(
         lambda found: f"\\u{ord(found.group()):04x}", document
     )
+
+
+def emit(text: str) -> None:
+    """
+    Print a report's text on standard output, and stop quietly if nobody reads.
+
+    ``--list | head`` is how a long listing gets read, and the pipe closing
+    ended it in a BrokenPipeError traceback and exit 1. The reader closing it
+    is saying they have seen enough, not reporting an error, so the run goes
+    on to its own exit code: a ``--verify`` still exits 7 for a damaged shelf.
+
+    :param text: What to print; a newline is added.
+    """
+    try:
+        print(text, flush=True)
+    except BrokenPipeError:
+        # Standard output is pointed at the null device, so neither the next
+        # line nor the interpreter's flush at exit can raise again.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
 
 
 def collapse(value: object) -> str:

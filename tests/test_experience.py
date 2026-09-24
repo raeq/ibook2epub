@@ -12,7 +12,9 @@ source directory can go unmentioned.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import os
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -514,3 +516,51 @@ class TestTheLibraryNotFoundListingLinesUp:
         ]
         assert len(listed) == 2
         assert {len(line) - len(line.lstrip()) for line in listed} == {2}
+
+
+@pytest.fixture(name="closed_stdout")
+def _closed_stdout():
+    """
+    A pipe whose reader has already gone, as after ``head``. Each test makes
+    it standard output itself: pytest restores its own capture between a
+    fixture's setup and the test.
+    """
+    reader, writer = os.pipe()
+    os.close(reader)
+    with os.fdopen(writer, "w", encoding="utf-8") as stream:
+        yield stream
+
+
+class TestAReaderThatStopsEarly:
+    """
+    ``--list | head`` is how a long listing gets read. The pipe closing is the
+    reader saying they have seen enough, and it ended in a BrokenPipeError
+    traceback and exit 1. The flush is the interpreter's own, at exit.
+    """
+
+    @pytest.mark.parametrize("flags", [["--list"], ["--list", "--json"]])
+    def test_a_listing_ends_quietly(self, tmp_path, monkeypatch, closed_stdout, flags):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+        code = run.main(["-s", str(library), "-o", str(tmp_path / "out"), *flags])
+        closed_stdout.flush()
+
+        assert code == 0
+
+    def test_a_verify_keeps_its_verdict(
+        self, tmp_path, output_dir, monkeypatch, closed_stdout
+    ):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        base = ["-s", str(library), "-o", str(output_dir), "-q"]
+        run.main(base)
+        (output_dir / "Book.epub").write_bytes(b"CORRUPTED")
+        monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+        code = run.main([*base, "--verify"])
+        closed_stdout.flush()
+
+        # The reader stopping says nothing about the shelf.
+        assert code == 7

@@ -46,7 +46,7 @@ from ..export.naming import (
 from ..utils import app_logger, exits
 from ..utils.app_logger import logger
 from ..utils.defaults import SOURCE_CANDIDATES
-from ..utils.display import printable
+from ..utils.display import emit, printable
 from ..utils.policy import Assignment, NamingPolicy
 from .annotating import (
     annotations_after_export,
@@ -235,10 +235,10 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             assigned=everything,
         )
     )
-    print(render_listing(decisions + orphans, args.as_json))
+    emit(render_listing(decisions + orphans, args.as_json))
     ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     if ignored and not args.as_json:
-        print(f"{ignored} ignored (not books)")
+        emit(f"{ignored} ignored (not books)")
     return 0
 
 
@@ -259,10 +259,10 @@ def _run_verify(args: argparse.Namespace) -> int:
 
     checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
     if not checked:
-        print(f"No archives found in {printable(str(args.output_dir))}.")
+        emit(f"No archives found in {printable(str(args.output_dir))}.")
         return 0
     shelf = printable(str(args.output_dir))
-    print(f"Verified {checked} archive(s) in {shelf}: {damaged} damaged.")
+    emit(f"Verified {checked} archive(s) in {shelf}: {damaged} damaged.")
     if damaged:
         _advise_repair(args, broken)
     return exits.DAMAGED if damaged else exits.SUCCESS
@@ -301,27 +301,27 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
     # and a pattern holds "?" for each such character instead, since --match
     # would read the escape literally (see _repair_pattern).
     if forced:
-        print("Re-export each damaged book, for example:")
+        emit("Re-export each damaged book, for example:")
         shelf = _shelf_flags(args)
         for name in forced[:3]:
             # Joined to the flag, so a name that starts with a dash is not
             # read as one.
             quoted = shlex.quote(patterns[name] or "")
-            print(f"  ibook2epub --match={quoted} --force {shelf}")
+            emit(f"  ibook2epub --match={quoted} --force {shelf}")
         if len(forced) > 3:
-            print(f"  ...and {len(forced) - 3} more")
+            emit(f"  ...and {len(forced) - 3} more")
         # --verify refuses them, so it cannot know what the shelf was named by.
-        print("  (add the --name-by/-p/--on-collision flags you export with)")
+        emit("  (add the --name-by/-p/--on-collision flags you export with)")
     if aside:
-        print(
+        emit(
             f"Move each of these out of {printable(str(args.output_dir))} and "
             "rerun as before: --force cannot single it out, and a run puts "
             "back a book missing from the shelf."
         )
         for name in aside[:3]:
-            print(f"  {printable(name)}")
+            emit(f"  {printable(name)}")
         if len(aside) > 3:
-            print(f"  ...and {len(aside) - 3} more")
+            emit(f"  ...and {len(aside) - 3} more")
 
 
 def _shelf_flags(args: argparse.Namespace) -> str:
