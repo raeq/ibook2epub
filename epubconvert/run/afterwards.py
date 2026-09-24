@@ -77,7 +77,8 @@ def _as_decided(
     :param policy: The naming policy the names came from.
 
     :return: The assignment with no name for a collision, or the name of the
-        file the plan exports it to or found it at. A vault note shares that
+        file the plan exports it to, found it at, or placed a book it could
+        not write at. A vault note shares that
         file's stem: named from the assignment, an edition that moved on to
         its marked name wrote its highlights into the other edition's note.
     """
@@ -85,9 +86,14 @@ def _as_decided(
         return entry
     if decision.status == COLLISION:
         return replace(entry, filename="", reason=decision.reason)
-    if decision.target is not None and decision.target.name != entry.filename:
-        name = decision.target.name
-        return replace(entry, filename=name, identity=policy.identity(name))
+    # A book the plan could not write, such as a DRM-protected one, has no
+    # target: its note was named after its plain name, which another
+    # edition's archive holds, and the run was refused that edition's note.
+    target = decision.target or decision.placed
+    if target is not None and target.name != entry.filename:
+        return replace(
+            entry, filename=target.name, identity=policy.identity(target.name)
+        )
     return entry
 
 

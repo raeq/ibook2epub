@@ -108,6 +108,10 @@ class Decision:
     status: Status
     target: Path | None = None
     reason: str | None = None
+    #: Where the plan placed a book it then found it could not write, such
+    #: as a DRM-protected one: a vault note is named after it, as ``-ao``
+    #: names it.
+    placed: Path | None = None
 
     @property
     def display_name(self) -> str:
@@ -628,6 +632,8 @@ def _decide(
 
     unusable = _decide_before_writing(package, found, settings, unread=unread)
     if unusable is not None:
+        if unusable.status != COLLISION:
+            unusable.placed = found or output_dir / filename
         return unusable
 
     if found is not None and (forced or refreshing):

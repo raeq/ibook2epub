@@ -18,11 +18,13 @@ from pathlib import Path
 import pytest
 
 from epubconvert.collect import annotations
+from epubconvert.export.naming import disambiguator
 from epubconvert.run.run import main
 from tests.conftest import make_metadata_package
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import zipped_book
 from tests.test_copy_through import _count_opens, _evict
+from tests.test_source import REAL_ENCRYPTION, add_meta
 
 PLAIN_NOTE = "Frank Herbert - Dune.md"
 
@@ -88,6 +90,23 @@ class TestANoteFollowsTheBooksArchive:
         assert "EDITION A TEXT" in notes[PLAIN_NOTE]
         assert "EDITION B TEXT" not in notes[PLAIN_NOTE]
         assert "EDITION B TEXT" in notes[moved.stem + ".md"]
+
+    def test_for_a_book_that_cannot_be_converted(self, tmp_path, monkeypatch):
+        # DRM-protected, so the plan decided it with no target: the note was
+        # named after its plain name, the other edition's, and the run exited
+        # 1 telling the reader two books want one note.
+        vault = tmp_path / "vault"
+        flags = ["-ad", str(vault), "--annotations-format", "markdown"]
+        library, output, _ = self._replace_the_edition(tmp_path, monkeypatch, flags)
+        add_meta(library / "Dune.epub", "META-INF/encryption.xml", REAL_ENCRYPTION)
+
+        code = main(["-s", str(library), "-o", str(output), *self.FLAGS, *flags])
+
+        marked = f"Frank Herbert - Dune [{disambiguator('urn:isbn:9780593099322')}].md"
+        notes = self._notes(vault)
+        assert code == 0
+        assert "EDITION B TEXT" not in notes[PLAIN_NOTE]
+        assert "EDITION B TEXT" in notes[marked]
 
     def test_after_a_refresh(self, tmp_path, monkeypatch):
         vault = tmp_path / "vault"
