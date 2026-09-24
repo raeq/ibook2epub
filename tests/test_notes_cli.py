@@ -44,7 +44,7 @@ def _library(
         else [library_row(path=str(package), title="Leviathan Wakes")],
     )
     monkeypatch.setattr(
-        "epubconvert.run.run.collect_annotations",
+        "epubconvert.run.annotating.collect_annotations",
         lambda policy=None: annotations.collect(tmp_path / "container", policy),
     )
     return library

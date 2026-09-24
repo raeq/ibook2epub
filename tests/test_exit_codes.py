@@ -173,7 +173,7 @@ class TestEachFailureHasItsOwnCode:
         # turned the refusal into a code: a refresh started while a scheduled
         # conversion ran died with a traceback and exit 1.
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations", lambda **_kwargs: []
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
         )
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
@@ -189,7 +189,7 @@ class TestEachFailureHasItsOwnCode:
         self, tmp_path, output_dir, monkeypatch
     ):
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations", lambda **_kwargs: []
+            "epubconvert.run.annotating.collect_annotations", lambda **_kwargs: []
         )
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
@@ -222,7 +222,7 @@ class TestARefusalHasItsOwnCode:
     @needs_permissions
     def test_the_annotation_export(self, refused, monkeypatch):
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(refused, policy),
         )
 
@@ -242,7 +242,7 @@ class TestARefusalHasItsOwnCode:
     @needs_permissions
     def test_a_refresh_that_converts_nothing(self, refused, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(refused, policy),
         )
         source = tmp_path / "lib"
@@ -256,7 +256,7 @@ class TestARefusalHasItsOwnCode:
 
     def test_an_absent_container_keeps_its_code(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "absent", policy),
         )
 

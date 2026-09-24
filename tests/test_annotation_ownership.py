@@ -66,7 +66,7 @@ class TestAnnotationsAreTheReadersOwnWork:
             books=[library_row(path=str(package), title="Locked Book")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -168,7 +168,7 @@ class TestHighlightsThatReachedNoFileAreReported:
             ],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -259,7 +259,7 @@ class TestHighlightsThatReachedNoFileAreReported:
             ],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
 

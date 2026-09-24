@@ -544,8 +544,8 @@ def write_vault(
         # Highlights were read and not one reached a note. Every book they
         # belong to is absent from the library this run walked, so nothing
         # was matched -- which said "Wrote 0 note(s)" and exited 0. The same
-        # shape as run._warn_about_stranded, and for the same reason: silence
-        # here reads as "you had nothing to export".
+        # shape as annotating._warn_about_stranded, and for the same reason:
+        # silence here reads as "you had nothing to export".
         #
         # Two counts that are true whatever narrowed the run, and no third
         # invented from them: under --match the other books were excluded on
@@ -598,7 +598,7 @@ def _naming(names: list[str]) -> str:
 
     Named rather than counted, because a reader with several edited notes in a
     large vault would otherwise have to glob for them. The same shape
-    ``run._warn_about_stranded`` uses.
+    ``annotating._warn_about_stranded`` uses.
 
     :param names: The files this outcome applies to.
 
