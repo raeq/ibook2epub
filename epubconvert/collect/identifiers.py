@@ -150,9 +150,28 @@ def _isbn10_sum(body: str) -> int:
 ISBN13_PREFIXES = ("978", "979")
 
 
+#: Nine-digit ISBN bodies a converter writes as filler: ``0123456789`` and
+#: ``123456789X`` carry valid check characters. So does every repeated digit,
+#: which weighs 55 times itself, a multiple of 11: ``0000000000`` passed as an
+#: ISBN and reached a tracker's import and the notes' frontmatter as one.
+_PLACEHOLDER_BODIES = frozenset({"012345678", "123456789"})
+
+
+def _placeholder(body: str) -> bool:
+    """Whether an ISBN's nine-digit body is filler rather than a book's."""
+    return len(set(body)) == 1 or body in _PLACEHOLDER_BODIES
+
+
 def _is_isbn13(digits: str) -> bool:
-    """Whether *digits* is a book's EAN-13: 978 or 979, and a valid check digit."""
+    """
+    Whether *digits* is a book's EAN-13: 978 or 979, and a valid check digit.
+
+    The body between the prefix and the check digit is judged as an ISBN-10's
+    is, so the thirteen-digit form of a placeholder is refused as well.
+    """
     if len(digits) != 13 or not digits.startswith(ISBN13_PREFIXES):
+        return False
+    if _placeholder(digits[3:12]):
         return False
     return _ascii_digits(digits) and _isbn13_sum(digits) % 10 == 0
 
@@ -162,6 +181,8 @@ def _is_isbn10(digits: str) -> bool:
     if len(digits) != 10 or not _ascii_digits(digits[:9]):
         return False
     if not (_ascii_digits(digits[9]) or digits[9] in "Xx"):
+        return False
+    if _placeholder(digits[:9]):
         return False
     check = 10 if digits[9] in "Xx" else int(digits[9])
     return (_isbn10_sum(digits[:9]) + check) % 11 == 0

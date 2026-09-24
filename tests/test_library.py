@@ -363,6 +363,22 @@ class TestTheIdentifierComesFromTheBook:
         assert catalogue.matchable_count(found) == 0
         assert row["ISBN13"] == ""
 
+    @pytest.mark.parametrize(
+        "declared",
+        ["0000000000", "urn:isbn:9999999999", "0123456789", "123456789X"]
+        + ["9780000000002", "urn:isbn:9781234567897", "9790000000001"],
+    )
+    def test_a_placeholder_isbn_is_not_an_isbn(self, tmp_path, declared):
+        # Each passes its check digit: a repeated digit weighs 55 times itself,
+        # a multiple of 11. Written back, a converter's filler became an ISBN.
+        self._package(tmp_path, declared)
+
+        found = library.collect(tmp_path)
+        row = _csv_rows(catalogue.goodreads_csv(found, unknown_shelf=None))[0]
+
+        assert found[0]["identifier"] == declared
+        assert (row["ISBN13"], row["ISBN"]) == ("", "")
+
     def test_a_979_isbn_is_still_an_isbn(self, tmp_path):
         self._package(tmp_path, "979-10-90636-07-1")
 
