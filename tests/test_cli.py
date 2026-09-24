@@ -75,6 +75,31 @@ class TestParseArgs:
 
         assert code == exits.NO_SOURCE
 
+    @pytest.mark.parametrize("where", ["-o", "-s"])
+    @pytest.mark.parametrize("below", ["", "books"])
+    def test_a_symlink_loop_is_the_run_s_business_not_a_traceback(
+        self, library, tmp_path, where, below
+    ):
+        # Path.resolve() raises RuntimeError on a symlink loop on Python 3.10
+        # to 3.12, out of argument parsing: a traceback and exit 1.
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+        given = {"-s": str(library), "-o": str(tmp_path / "out")}
+        given[where] = str(loop / below) if below else str(loop)
+
+        args = cli.parse_args([part for pair in given.items() for part in pair])
+
+        parsed = args.output_dir if where == "-o" else args.source_dir
+        assert str(parsed) == given[where]
+
+    def test_a_library_behind_a_symlink_loop_is_a_missing_library(self, tmp_path):
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+
+        code = run.main(["-s", str(loop), "-o", str(tmp_path / "out"), "-q"])
+
+        assert code == exits.NO_SOURCE
+
     def test_negative_cap_is_rejected(self, library):
         with pytest.raises(SystemExit):
             cli.parse_args(["-s", str(library), "-m", "-1"])

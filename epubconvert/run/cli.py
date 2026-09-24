@@ -781,8 +781,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     # Writing into the tree being scanned pollutes the next run: temporary
     # files land mid-scan and finished exports look like source packages.
-    source = args.source_dir.resolve()
-    output = args.output_dir.resolve()
+    # realpath rather than Path.resolve(), as in _same_destination: on Python
+    # 3.10 to 3.12 the latter raises RuntimeError on a symlink loop, a
+    # traceback and exit 1 where the run reports a missing library itself.
+    source = Path(os.path.realpath(args.source_dir))
+    output = Path(os.path.realpath(args.output_dir))
     if output == source or output.is_relative_to(source):
         parser.error(
             f"output directory must not be inside the source directory: "
