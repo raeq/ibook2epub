@@ -28,6 +28,7 @@ from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
     MAX_SUFFIX,
     Claims,
+    Wanting,
     claim_order,
     kept_numbers,
     lost_to,
@@ -225,14 +226,15 @@ def assign_names(
     a crowded group is marked, not all but the first, because "all but the
     first" is itself a position.
 
-    Two things still move a name, and both are visible. A book entering or
-    leaving a collision gains or loses its marker, which is one rename rather
-    than a cascade. And a book whose identifier is junk or shared -- 92 books in
-    a surveyed library claim to be ``none``, and 52 more share a real value --
-    keeps the old positional suffix, because a marker that pretended to be
-    stable would be worse than a number that admits it is not. A numbered book
-    whose own file is on the shelf keeps that number when the books before it
-    leave (:func:`~epubconvert.run.claims.kept_numbers`).
+    Two things still move a name, and both are visible. A book entering a
+    collision gains its marker, which is one rename rather than a cascade. And
+    a book whose identifier is junk or shared -- 92 books in a surveyed
+    library claim to be ``none``, and 52 more share a real value -- keeps the
+    old positional suffix, because a marker that pretended to be stable would
+    be worse than a number that admits it is not. A book whose own file is on
+    the shelf under a number of its name, or under its marked name, keeps it
+    when the books before it leave, or its crowd does
+    (:func:`~epubconvert.run.claims.kept_numbers`).
 
     Policies that name a book after its own metadata need the package document
     read first. That read is skipped entirely for the policies that do not ask
@@ -254,18 +256,22 @@ def assign_names(
     crowded = Counter(policy.identity(name) for _, name, _ in wanted)
     claims = Claims()
 
-    first = [_bases(name, metadata, setup, crowded)[0] for _, name, metadata in wanted]
+    bases = [_bases(name, metadata, setup, crowded) for _, name, metadata in wanted]
+    first = [base for base, _ in bases]
     read = getattr(policy, "needs_metadata", False)
     kept = (
         kept_numbers(
             [
-                (
+                Wanting(
                     base,
+                    stable,
                     usable_identifier(metadata),
                     crowded[policy.identity(name)] == 1,
                     None if read else package,
                 )
-                for base, (package, name, metadata) in zip(first, wanted, strict=True)
+                for (base, stable), (package, name, metadata) in zip(
+                    bases, wanted, strict=True
+                )
             ],
             shelf,
             policy,

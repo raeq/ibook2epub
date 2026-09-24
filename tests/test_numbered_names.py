@@ -216,6 +216,35 @@ class TestSharingOneIdentifier:
         assert "orphan" not in ran.out
         assert sorted(output_dir.glob("*.epub")) == sorted([first, third])
 
+    def test_the_second_keeps_its_file_when_it_is_left_alone(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Alone, it wants the plain name again, and its file is under its
+        # marked name, numbered: only the plain name's numbers were looked
+        # at, so it was written again and its file listed as an orphan.
+        library = tmp_path / "lib"
+        for folder in ("a", "b"):
+            make_metadata_package(
+                library / folder,
+                "Dune.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier="urn:isbn:9780441013593",
+            )
+        argv = _argv(library, output_dir, *AUTHOR_TITLE)
+        run.main([*argv, "-q"])
+        [first, second] = sorted(output_dir.glob("*.epub"), key=len_then_name)
+        remove_tree(library / "a")
+        first.unlink()
+        capsys.readouterr()
+
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert "Exported 0 epub file(s)" in ran.out
+        assert "orphan" not in ran.out
+        assert list(output_dir.glob("*.epub")) == [second]
+
 
 def len_then_name(path: Path) -> tuple[int, str]:
     """Order ``X.epub``, ``X (2).epub``, ``X (3).epub`` by their number."""

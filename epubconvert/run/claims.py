@@ -13,7 +13,7 @@ import re
 import unicodedata
 from collections.abc import Collection, Iterable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from ..collect.identifiers import usable_identifier
 from ..collect.source import is_evicted
@@ -268,10 +268,23 @@ def numbered_names(
     return index
 
 
+class Wanting(NamedTuple):
+    """What :func:`kept_numbers` needs to know of one package."""
+
+    #: The name it claims first.
+    base: str
+    #: Its digest-marked name, or *base* when it has none or is marked.
+    stable: str
+    #: Its usable identifier, when naming read one.
+    identifier: str | None
+    #: No other package wants its name.
+    alone: bool
+    #: The package to read its identifier from, when naming did not.
+    unread: Path | None
+
+
 def kept_numbers(
-    books: Sequence[tuple[str, str | None, bool, Path | None]],
-    shelf: Collection[str],
-    policy: NamingPolicy,
+    books: Sequence[Wanting], shelf: Collection[str], policy: NamingPolicy
 ) -> dict[int, str]:
     """
     Find the numbered file on the shelf each package in suffix mode keeps.
@@ -287,45 +300,54 @@ def kept_numbers(
     A file under a name another book wants is never kept, as for a title
     that looks like a number (``Dune (2)``).
 
-    Identifiers are read only for a name with numbered files on the shelf:
-    under a policy that names from the folder, the book's own too, unless
-    iCloud has evicted it. A rerun over a shelf with no numbered name reads
-    nothing. A copy's own bytes are its own whatever an identifier says, so
-    a copy that keeps the file sends the package back to claim a name
-    (copynames._Claiming.reclaim).
+    A book that has left its crowd wants its plain name again, and its
+    archive is under its marked name, or that name numbered where it shares
+    its identifier: it keeps that too, rather than being written again
+    under the plain name and its archive listed as an orphan.
 
-    :param books: Each package's first name, usable identifier when naming
-        read one, whether no other package wants its name, and the package
-        to read its identifier from when naming did not, in sorted order.
+    Identifiers are read only for a name with numbered files on the shelf,
+    or a marked name with any: under a policy that names from the folder,
+    the book's own too, unless iCloud has evicted it. A rerun over a shelf
+    with neither reads nothing. A copy's own bytes are its own whatever an
+    identifier says, so a copy that keeps the file sends the package back to
+    claim a name (copynames._Claiming.reclaim).
+
+    :param books: Each package, in sorted order.
     :param shelf: The shelf's names, from :func:`shelf_names`.
     :param policy: The naming policy in force.
 
     :return: The file kept, by index into *books*.
     """
     index = numbered_names(shelf, policy)
-    wanted = {filesystem_key(policy.identity(book[0])) for book in books}
+    wanted = {filesystem_key(policy.identity(book.base)) for book in books}
     directory = getattr(shelf, "directory", None)
     kept: dict[int, str] = {}
-    for position, (base, identifier, alone, unread) in enumerate(books):
-        numbers = sorted(
-            (number, name)
-            for number, name in index.get(filesystem_key(policy.identity(base)), [])
-            if name not in kept.values()
-            and (number == 1 or filesystem_key(policy.identity(name)) not in wanted)
+
+    def forms(name: str) -> list[tuple[int, str]]:
+        return sorted(
+            (number, found)
+            for number, found in index.get(filesystem_key(policy.identity(name)), [])
+            if found not in kept.values()
+            and (number == 1 or filesystem_key(policy.identity(found)) not in wanted)
         )
-        if directory is None or all(number == 1 for number, _ in numbers):
+
+    for position, book in enumerate(books):
+        numbers = forms(book.base)
+        marked = forms(book.stable) if book.stable != book.base else []
+        if directory is None or (all(n == 1 for n, _ in numbers) and not marked):
             continue
-        if identifier is None and unread is not None and not is_evicted(unread):
-            identifier = source_identifier(unread)
+        identifier = book.identifier
+        if identifier is None and book.unread and not is_evicted(book.unread):
+            identifier = source_identifier(book.unread)
         if identifier is not None:
             found = [
                 name
-                for _, name in numbers
+                for _, name in [*numbers, *marked]
                 if identifier_on_shelf(directory / name) == identifier
             ]
             if found:
                 kept[position] = found[0]
-        elif alone and len(numbers) == 1:
+        elif book.alone and len(numbers) == 1 and numbers[0][0] > 1:
             kept[position] = numbers[0][1]
     return kept
 

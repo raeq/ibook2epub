@@ -95,9 +95,9 @@ four properties:
   never lists the archive of a book that is still in the library: the list
   a person reviews before deleting. Checked in `Changing` and the copies
   and removal configurations. Suffix mode breaks it by design when a book
-  enters a collision and takes its marker, or a marked book leaves one: the
-  old file stays, and is reported as an orphan. A numbered book leaving one
-  keeps its number where anything can say the numbered file is its own
+  enters a collision and takes its marker: the old file stays, and is
+  reported as an orphan. A book whose crowd leaves keeps its marked or
+  numbered file where anything can say it is its own
   (`claims.kept_numbers`); the configurations below say where nothing can.
 
 Names are strings, so a title that looks like a suffix (`Dune (2)`) collides
@@ -136,9 +136,10 @@ identifier, and a file under a name a package was given is that package's
 unless the identifiers say otherwise. `KeepNumbered` switches on
 `claims.kept_numbers`: in suffix mode a package keeps the numbered file of its
 name that declares its identifier, which is read for this whatever the
-policy, or, with no usable identifier, the one numbered file when no other
-package wants the name and nothing holds the plain name; a copy that keeps
-that file sends the package back to claim a name (`_Claiming.reclaim`).
+policy, or the file of its marked name once its crowd has left it; with no
+usable identifier, the one numbered file when no other package wants the name
+and nothing holds the plain name. A copy that keeps that file sends the
+package back to claim a name (`_Claiming.reclaim`).
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
@@ -162,9 +163,10 @@ that file sends the package back to claim a name (`_Claiming.reclaim`).
 | `CopiesRemovals` | as `CopiesSuffix` | books added and removed | all | the same | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `CopiesRemovalsStuck` | the same, without `KeepNumbered` | books added and removed | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 | `CopiesRemovalsRead` | the same, every identifier read | books added and removed | all | on | all four hold |
-| `CopiesRemovalsDeleted` | the same, each book removed with its archive | books added and removed | all | on | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `CopiesRemovalsDeleted` | the same, each book removed with its archive | books added and removed | all | on | all four hold |
 | `NumberedRemovals` | `--match`, `--refresh`, suffix mode, named from the folder, two packages | removed with their archives | none | before a write | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `NumberedRemovalsStuck` | the same, without `KeepNumbered` | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `NumberedRemovalsCrowd` | `NumberedRemovals` with three packages | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 
 What the configurations that fail show:
 
@@ -239,9 +241,10 @@ What the configurations that fail show:
   again, until a copy kept its own file under any of its numbers.
 
   With removals too, `CopiesRemovals` holds NoArchiveOfTheLibraryIsAnOrphan
-  named from the folder, and `CopiesRemovalsRead` all four where naming
-  reads every identifier. Named from the folder, ExportedMeansTheBooksOwnFile
-  still fails as in `FolderNamedReports`.
+  named from the folder, and `CopiesRemovalsRead` and
+  `CopiesRemovalsDeleted` all four where naming reads every identifier,
+  whether a book's archive stays or goes with it. Named from the folder,
+  ExportedMeansTheBooksOwnFile still fails as in `FolderNamedReports`.
 
 - **`CopiesSharedIdLoose` and `CopiesOneIdentifierLoose`** are the claim
   pass before `KeepOne`. It asked of each copy only whether a file under its
@@ -263,22 +266,23 @@ What the configurations that fail show:
   stayed, written again where it went with its book, and its own archive
   listed as an orphan either way. A package's identifier is now read for a
   name with numbered files on the shelf, and it keeps the one declaring
-  it. `NumberedRemovals` is the rule for books with no usable identifier:
-  two packages of one name, the numbered one alone once the other leaves
-  with its archive. With three it does not hold: two books want the plain
-  name, and nothing says which numbered file is whose.
-  `tests/test_numbered_names.py` replays these against the CLI.
+  it, or, once its crowd has left it, the file of its marked name. That
+  was a rename by design, and `CopiesRemovalsDeleted` found the case of it
+  that left an orphan: a book moved on to its marked name past another
+  book's archive took its plain name back once that archive was deleted.
+  `NumberedRemovals` is the rule for books with no usable identifier: two
+  packages of one name, the numbered one alone once the other leaves with
+  its archive. `tests/test_numbered_names.py` replays these against the CLI.
 
   The model found a case the rule had made worse, now closed: a package
   alone among the packages kept a numbered file that was a copy's own
   bytes, moved on past it, and left the plain name to another copy, and a
   later run listed its archive as an orphan (`_Claiming.reclaim`).
 
-- **`CopiesRemovalsDeleted`** is the limit of the marker. A book that moved
-  on to its marked name because another book's archive held its plain name
-  takes the plain name back once that archive is deleted, and its archive
-  under the marked name is an orphan: the same rename as a book leaving a
-  collision.
+- **`NumberedRemovalsCrowd`** is the limit of that rule: with three
+  packages and no usable identifier, once the first leaves, two books still
+  want the plain name, and nothing says which numbered file is whose. The
+  last takes the second's number, and its own archive is an orphan.
 
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.

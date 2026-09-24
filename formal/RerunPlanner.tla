@@ -59,9 +59,10 @@
  * suffix mode, its own name numbered, as a copy has. KeepNumbered is
  * claims.kept_numbers: in suffix mode a package keeps the numbered file of
  * its name that declares its identifier, which is read for this whatever
- * the policy, or, with no usable identifier, the one numbered file when no
- * other package wants its name and nothing holds the plain name; one that
- * kept a file a copy keeps claims a name again (_Claiming.reclaim). TakesArchive stands for a person deleting a book's
+ * the policy, or the file of its marked name once its crowd has left it;
+ * with no usable identifier, the one numbered file when no other package
+ * wants its name and nothing holds the plain name. One that kept a file a
+ * copy keeps claims a name again (_Claiming.reclaim). TakesArchive stands for a person deleting a book's
  * archive with the book: nothing in the tool deletes one.
  *
  * find_orphans is modelled too: an archive on the shelf is an orphan when no
@@ -170,30 +171,42 @@ Sorted(S) ==
    name each package keeps, in sorted order, never one another kept or one
    under a name another package wants. Where it has a usable identifier,
    read for this even where naming read none, the lowest-numbered file
+   declaring it, and, once its crowd has left it, one of its marked name
    declaring it; where it has none, the one numbered file, when no other
    package wants the name and nothing holds the plain name. "" for a
    package that keeps none. *)
 RECURSIVE Numbered(_, _, _)
 Numbered(S, order, taken) ==
     IF order = <<>> THEN [b \in {} |-> ""]
-    ELSE LET b     == Head(order)
-             base  == Base(S, b)
-             wants == {Base(S, d) : d \in S}
-             there == {k \in 1..MoveLimit :
-                         LET n == Suffixed(base, k)
-                         IN /\ shelf[n] # 0
-                            /\ n \notin taken
-                            /\ (k = 1 \/ n \notin wants)}
-             found == IF b \in Usable
-                        THEN {k \in there : Mate(shelf[Suffixed(base, k)], b)}
-                        ELSE IF Crowd(S, Wanted[b]) = 1 THEN there ELSE {}
-             keep  == /\ KeepNumbered
-                      /\ OnCollision = "suffix"
-                      /\ \E k \in there : k > 1
-                      /\ IF b \in Usable THEN found # {} ELSE Cardinality(found) = 1
-             name  == IF keep THEN Suffixed(base, Min(found)) ELSE ""
-             rest  == Numbered(S, Tail(order),
-                               IF keep THEN taken \cup {name} ELSE taken)
+    ELSE LET b      == Head(order)
+             base   == Base(S, b)
+             stable == IF Digested(b) THEN Marked(Wanted[b], b) ELSE Wanted[b]
+             wants  == {Base(S, d) : d \in S}
+             Forms(nm) == {k \in 1..MoveLimit :
+                             LET n == Suffixed(nm, k)
+                             IN /\ shelf[n] # 0
+                                /\ n \notin taken
+                                /\ (k = 1 \/ n \notin wants)}
+             there  == Forms(base)
+             marked == IF stable # base THEN Forms(stable) ELSE {}
+             Mine(nm, T) == {k \in T : Mate(shelf[Suffixed(nm, k)], b)}
+             look   == /\ KeepNumbered
+                       /\ OnCollision = "suffix"
+                       /\ (\E k \in there : k > 1) \/ marked # {}
+             name   == IF ~look THEN ""
+                       ELSE IF b \in Usable
+                         THEN IF Mine(base, there) # {}
+                                THEN Suffixed(base, Min(Mine(base, there)))
+                              ELSE IF Mine(stable, marked) # {}
+                                THEN Suffixed(stable, Min(Mine(stable, marked)))
+                              ELSE ""
+                       ELSE IF /\ Crowd(S, Wanted[b]) = 1
+                               /\ Cardinality(there) = 1
+                               /\ \A k \in there : k > 1
+                         THEN Suffixed(base, Min(there))
+                       ELSE ""
+             rest   == Numbered(S, Tail(order),
+                                IF name = "" THEN taken ELSE taken \cup {name})
          IN [c \in {b} \cup DOMAIN rest |-> IF c = b THEN name ELSE rest[c]]
 
 (* _claim: the first free candidate, in sorted order of packages. "" means

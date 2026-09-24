@@ -634,7 +634,8 @@ came out distinct, and two independent runs produced identical results.
 
 One thing the marker cannot fix: a book *entering* a collision gains its marker,
 which is a rename. That happens once, when the second copy shows up, instead of
-every time the group changes.
+every time the group changes. A book *leaving* one keeps the marked archive it
+has on the shelf rather than being written again under the plain name.
 
 A PDF or an already-zipped book that is copied rather than converted competes
 for its name too, after every package: a package `a/Book.epub/` and a zipped
