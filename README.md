@@ -624,8 +624,10 @@ for its name too, after every package: a package `a/Book.epub/` and a zipped
 `b/Book.epub` want one file, and the package gets it. The copy is reported as a
 name collision, or under `--on-collision suffix` is copied as `Book (2).epub`;
 a copy has no digest marker, so it is always numbered. A copy already on the
-shelf before the package arrived keeps its file, and the package is reported as
-a collision rather than as exported from the other book's file.
+shelf before the package arrived keeps its file, in either mode, and is not
+copied again: the package is reported as a collision rather than as exported
+from the other book's file, or under `--on-collision suffix` is written beside
+it, as `Book (2).epub` when it has no digest marker either.
 
 ### Taking your highlights with you
 

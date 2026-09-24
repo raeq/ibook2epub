@@ -62,8 +62,9 @@ def claim_copies(
 
     What is already on the shelf is weighed as for a package
     (:func:`epubconvert.run.placing.place`), and read only where two books meet
-    at a name: a copy that lost its name but finds its own bytes under it --
-    copied before the package arrived -- keeps that file, and the package that
+    at a name: a copy that finds its own bytes under the name another book
+    holds -- copied before the package arrived -- keeps that file in either
+    mode, rather than being copied again under a suffix, and the package that
     now wants it has its identifier read, as a folder-named book about to be
     written has, so it is not reported exported from the other book's file.
 
@@ -126,6 +127,16 @@ class _Claiming:
 
         :return: Its assignment.
         """
+        key = filesystem_key(group)
+        found = self.existing.get(key)
+        if found is not None and key in self.holders and _same_size(source, found):
+            # Copied before the book now holding the name arrived: the copy
+            # keeps its file, whatever the mode, and that book moves on
+            # (placing.place) or is a collision. Settled only in _lost, this
+            # never ran under --on-collision suffix, where a free " (n)"
+            # always exists: the copy was written again under one and its
+            # file listed as an orphan.
+            return Assignment(source, found.name, group)
         taken = _claim(self.claims, name, group, setup=self.setup)
         if taken is None:
             return self._lost(source, group)

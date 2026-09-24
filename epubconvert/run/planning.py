@@ -308,7 +308,10 @@ def _assign_one(
         _named_from_folder(metadata, setup.policy),
         usable_identifier(metadata),
         # Where it goes if its name holds another book; see placing.place.
-        stable if setup.on_collision == SUFFIX and stable != name else None,
+        # Its own name, numbered, when it has no digest: a copy already on
+        # the shelf keeps its file (copynames.claim_copies), and a package
+        # with nowhere to go was a collision on every run in suffix mode.
+        stable if setup.on_collision == SUFFIX else None,
     )
 
 
