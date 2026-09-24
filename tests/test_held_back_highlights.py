@@ -80,3 +80,58 @@ class TestBooksHeldBackByTheCap:
 
         assert "1 annotation(s) from 1 book(s) reached no file: Book7.epub." in err
         assert "2 annotation(s) wait for books -m held back" in err
+
+
+class TestBooksTheFloorStopped:
+    """
+    A book the --min-free floor kept from starting was not attempted, like a
+    book -m held back, and the summary sends it back to a rerun. Its
+    highlights were said to have reached no file, with the DRM advice.
+    """
+
+    def test_before_the_first_book_are_not_said_to_have_reached_no_file(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        library = _annotated_library(tmp_path, monkeypatch)
+        monkeypatch.setattr("epubconvert.run.convert.free_megabytes", lambda _path: 1)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-ae", "-m", "0"]
+            + ["--min-free", "10"]
+        )
+        captured = capsys.readouterr()
+
+        assert code == 1
+        assert "8 not attempted" in captured.out
+        assert "reached no file" not in captured.err
+        assert (
+            "8 annotation(s) wait for books the --min-free floor stopped; they go "
+            "in when a rerun converts those."
+        ) in captured.err
+
+    def test_part_way_through_are_not_said_to_have_reached_no_file(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # One worker, so every book measures the volume: room for the check
+        # before the run and for the first book, and none after.
+        library = _annotated_library(tmp_path, monkeypatch)
+        measured: list[Path] = []
+
+        def filling(path: Path) -> int:
+            measured.append(path)
+            return 100 if len(measured) <= 2 else 1
+
+        monkeypatch.setattr("epubconvert.run.convert.free_megabytes", filling)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-ae", "-m", "0", "-w", "1"]
+            + ["--min-free", "10"]
+        )
+        captured = capsys.readouterr()
+
+        assert code == 1
+        assert "Exported 1 epub file(s)" in captured.out
+        assert "reached no file" not in captured.err
+        assert "7 annotation(s) wait for books the --min-free floor stopped" in (
+            captured.err
+        )

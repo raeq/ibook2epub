@@ -25,7 +25,7 @@ import unicodedata
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from random import shuffle
 from typing import BinaryIO
@@ -148,6 +148,10 @@ class Report:
     #: counted there turned a book the floor stopped into one that "failed".
     copies_failed: int = 0
     held_back: int = 0  # Pending books the export cap left for a later run.
+    #: Packages the --min-free floor kept from starting. Not attempted, like
+    #: the books the cap held back: their highlights wait for a rerun, and
+    #: were said to have reached no file, with the DRM advice.
+    stopped: set[Path] = field(default_factory=set)
 
 
 #: Guards the shared Report and progress counter, which worker threads update.
@@ -243,6 +247,7 @@ def _zip_and_record(
         # counts a full volume, and the summary sends it back to a rerun.
         with _REPORT_LOCK:
             report.aborted = True
+            report.stopped.add(package)
         logger.info(
             "Not started, the volume is below --min-free: %s", printable(package.name)
         )
@@ -408,6 +413,7 @@ async def export_planned(
         # failures would claim work that never started.
         logger.warning("Nothing exported: %d book(s) left unattempted.", len(pending))
         report.aborted = True
+        report.stopped.update(package for package, _ in pending)
         return report
 
     progress = _Progress(len(pending), default_workers(max_workers))
