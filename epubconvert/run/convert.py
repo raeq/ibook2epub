@@ -769,12 +769,15 @@ def format_summary(
     :param dry_run: Whether the run was a dry run.
     :param remaining: Books still to convert after this run, if known.
 
-    :return: The summary line.
+    :return: The summary line, with the output directory escaped for display:
+        a path that is not UTF-8 raised UnicodeEncodeError under a strict
+        stdout after the books were written.
     """
+    shelf = printable(str(output_dir))
     if dry_run:
         summary = (
             f"Dry run: would export {report.planned} epub file(s) to "
-            f"{output_dir} (skipped {report.skipped} already present"
+            f"{shelf} (skipped {report.skipped} already present"
         )
         summary += _clauses(report, failures=False)
         summary += ")."
@@ -786,7 +789,7 @@ def format_summary(
 
     summary = (
         f"Exported {report.exported} epub file(s) "
-        f"({report.files_written} member files) to {output_dir}"
+        f"({report.files_written} member files) to {shelf}"
     )
     if report.skipped:
         summary += f", skipped {report.skipped}"
@@ -795,7 +798,7 @@ def format_summary(
     if report.interrupted:
         summary = f"Interrupted. {summary}"
     if report.aborted:
-        summary = f"Aborted: not enough free space on {output_dir}. {summary}"
+        summary = f"Aborted: not enough free space on {shelf}. {summary}"
     if remaining:
         summary += _remaining_hint(report, remaining)
     return summary
