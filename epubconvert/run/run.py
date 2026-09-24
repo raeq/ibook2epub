@@ -562,6 +562,44 @@ def main(argv: Sequence[str] | None = None) -> int:
         return exits.INTERRUPTED
 
 
+def _after_export(
+    args: argparse.Namespace,
+    report: Report,
+    named: Sequence[Assignment],
+    found: list[dict[str, Any]] | None,
+    copyable: Sequence[Path],
+) -> int | None:
+    """
+    Do the annotation work the export leaves over, unless the run was stopped.
+
+    Ctrl-C asks the run to stop, and this went on regardless: it wrote a vault
+    of notes after the reader had asked for nothing more to be written, and
+    warned that highlights "reached no file" for books that were never
+    attempted, which says a book cannot be converted when it was only not
+    reached.
+
+    :param args: Parsed command line arguments.
+    :param report: The export's report, which says whether it was stopped.
+    :param named: The names the export used.
+    :param found: The annotations this run read, or None.
+    :param copyable: The library's already-zipped books and PDFs.
+
+    :return: What :func:`~epubconvert.run.annotating.annotations_after_export`
+        returns, or None when the run was stopped.
+    """
+    if not report.interrupted:
+        return annotations_after_export(args, named, found, copyable=copyable)
+    # Said only when there was somewhere else for them to go. Under -ae alone
+    # every book converted before the Ctrl-C already carries its own.
+    elsewhere = args.annotations_detached or args.annotations_refresh
+    if found is not None and elsewhere and not args.dry_run:
+        logger.warning(
+            "Your highlights were not written: the run was interrupted first. "
+            "Rerun to write them."
+        )
+    return None
+
+
 def _run(args: argparse.Namespace) -> int:
     """
     Do what the command line asked, once logging is set up.
@@ -608,7 +646,7 @@ def _run(args: argparse.Namespace) -> int:
 
     # After the books are on the shelf, so annotations reach them by the same
     # path --annotations-refresh uses. A dry run writes nothing, here included.
-    annotated = annotations_after_export(args, named, found, copyable=copyable)
+    annotated = _after_export(args, report, named, found, copyable)
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     # Standard output belongs to the document when one is going there; a
     # summary in the middle of it would make the JSON unparsable, which is the

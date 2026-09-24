@@ -21,9 +21,10 @@ import pytest
 from epubconvert.collect import annotations
 from epubconvert.collect import library as library_module
 from epubconvert.export import naming
-from epubconvert.run import convert, run
+from epubconvert.run import annotating, convert, run
 from epubconvert.utils import exits
 from tests.conftest import make_package, needs_permissions
+from tests.test_annotations import highlight, library_row, make_databases
 
 
 class TestTheCodesAreDistinct:
@@ -365,3 +366,56 @@ class TestTheDocumentedTableMatchesTheCode:
         code = run.main(["-s", str(source), "-o", str(output_dir), "--verify", "-q"])
 
         assert code == exits.SUCCESS
+
+
+@pytest.fixture(name="annotated")
+def _annotated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A library of two books, each with a highlight in Apple's container."""
+    library = tmp_path / "lib"
+    rows, books = [], []
+    for index, name in enumerate(("Old.epub", "Other.epub")):
+        package = make_package(library, name)
+        rows.append(highlight(uuid=f"U{index}", asset=f"A{index}"))
+        books.append(library_row(asset=f"A{index}", path=str(package)))
+    make_databases(tmp_path / "container", rows=rows, books=books)
+    monkeypatch.setattr(
+        annotating,
+        "collect_annotations",
+        lambda policy=None: annotations.collect(tmp_path / "container", policy),
+    )
+    return library
+
+
+def _interrupt(*_args, **_kwargs):
+    raise KeyboardInterrupt
+
+
+class TestAnInterruptedRunLeavesTheHighlightsAlone:
+    """
+    Ctrl-C stops the run. The annotation work after the export went on
+    regardless: it wrote a vault of notes after the reader had asked the run
+    to stop, and warned that highlights "reached no file" for books that were
+    simply never attempted.
+    """
+
+    def test_no_note_is_written_after_ctrl_c(
+        self, annotated, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(run, "export_planned", _interrupt)
+        vault = tmp_path / "vault"
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0"]
+
+        code = run.main([*argv, "-ad", str(vault), "--annotations-format", "markdown"])
+
+        assert code == exits.INTERRUPTED
+        assert not vault.exists()
+        assert "highlights were not written" in capsys.readouterr().err
+
+    def test_books_never_attempted_are_not_called_stranded(
+        self, annotated, output_dir, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(run, "export_planned", _interrupt)
+
+        run.main(["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-ae"])
+
+        assert "reached no file" not in capsys.readouterr().err
