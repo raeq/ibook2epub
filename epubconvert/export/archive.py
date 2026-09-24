@@ -13,6 +13,7 @@ import errno
 import json
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
@@ -717,20 +718,61 @@ def write_atomically(target: Path, text: str) -> None:
     artifact the merge machinery exists to protect; this is the same
     temporary-then-replace path :func:`~epubconvert.export.archive.zip_package` uses.
 
+    A replace swaps in a new file, so three things the old one carried are
+    carried across deliberately:
+
+    - **Its mode.** Every rerun wrote the partial at the umask's mode, so an
+      export the user had made 0600 became readable by everyone again.
+    - **Its being a link.** The replace landed on the link itself, so a link
+      into a synced folder became a regular file here and the synced copy went
+      stale without a word. A link is now written through: the partial goes
+      beside the file it resolves to, so the rename stays atomic there.
+    - **Its contents, durably.** Without an fsync before the rename, a crash
+      just after it can leave the name on a file whose data never reached the
+      disk -- the old contents gone and the new ones empty.
+
     :param target: The file to replace.
     :param text: What it should hold.
 
     :raises OSError: If it could not be written. The old file survives.
     """
+    # Resolved unconditionally: a plain path resolves to itself, give or take
+    # a linked parent, and a link resolves to the file the user meant.
+    target = Path(os.path.realpath(target))
+    try:
+        # Permission bits only: a setuid or sticky bit on a notes file is not
+        # something to reproduce.
+        mode = stat.S_IMODE(target.stat().st_mode) & 0o777
+    except FileNotFoundError:
+        mode = file_mode()
     handle, temporary = tempfile.mkstemp(
         dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
     )
     os.close(handle)
     partial = Path(temporary)
     try:
-        partial.chmod(file_mode())
         partial.write_text(text, encoding="utf-8")
+        _sync(partial)
+        # After the write, not before: a target the user made read-only would
+        # otherwise make its own partial unwritable.
+        partial.chmod(mode)
         partial.replace(target)
     except BaseException:
         partial.unlink(missing_ok=True)
         raise
+
+
+def _sync(path: Path) -> None:
+    """
+    Push a written file's data to the disk.
+
+    ``fsync`` flushes the file, not the descriptor it is called on, so a fresh
+    descriptor on a file that has just been written and closed is enough.
+
+    :param path: The file to flush.
+    """
+    descriptor = os.open(path, os.O_RDWR)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

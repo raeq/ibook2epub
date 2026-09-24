@@ -24,10 +24,11 @@ from epubconvert.export.archive import (
     ARCHIVE_TIMESTAMP,
     file_mode,
     replace_annotations,
+    write_atomically,
     zip_package,
 )
 from epubconvert.run import convert, run
-from tests.conftest import make_package
+from tests.conftest import make_package, needs_permissions
 
 
 def digest(path: Path) -> str:
@@ -785,3 +786,83 @@ def _cover_package(package: Path) -> Path:
     cover.parent.mkdir(parents=True, exist_ok=True)
     cover.write_bytes(b"JPEGDATA")
     return package
+
+
+class TestRewritingASidecarKeepsWhatTheUserSet:
+    """
+    ``write_atomically`` replaces the detached export and the notes on every
+    rerun. A replace swaps in a new file, so whatever the user set on the old
+    one -- its mode, the fact that it is a link -- has to be carried across.
+    """
+
+    def test_a_private_file_stays_private(self, tmp_path):
+        # Regression: every rerun wrote a fresh partial at the umask's mode,
+        # so an export the user had made 0600 became 0644 again.
+        target = tmp_path / "highlights.json"
+        write_atomically(target, "first")
+        target.chmod(0o600)
+
+        write_atomically(target, "second")
+
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+        assert target.read_text(encoding="utf-8") == "second"
+
+    def test_a_new_file_honours_the_umask(self, tmp_path):
+        target = tmp_path / "highlights.json"
+
+        write_atomically(target, "first")
+
+        assert stat.S_IMODE(target.stat().st_mode) == file_mode()
+
+    def test_a_symlinked_target_is_written_through(self, tmp_path):
+        # Regression: the replace landed on the link itself, so a link into a
+        # synced folder became a regular file here and the synced copy went
+        # stale without a word.
+        real = tmp_path / "synced" / "highlights.json"
+        real.parent.mkdir()
+        real.write_text("old", encoding="utf-8")
+        link = tmp_path / "highlights.json"
+        link.symlink_to(real)
+
+        write_atomically(link, "new")
+
+        assert link.is_symlink()
+        assert real.read_text(encoding="utf-8") == "new"
+        assert [p.name for p in real.parent.iterdir()] == ["highlights.json"]
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "highlights.json",
+            "synced",
+        ]
+
+    def test_the_new_contents_reach_the_disk_before_the_rename(
+        self, tmp_path, monkeypatch
+    ):
+        # Without an fsync, a crash just after the rename can leave the name
+        # pointing at a file whose data was never written: the old contents
+        # gone and the new ones empty.
+        target = tmp_path / "highlights.json"
+        target.write_text("old", encoding="utf-8")
+        synced: list[str] = []
+        real_fsync = os.fsync
+
+        def recording_fsync(descriptor):
+            synced.append(target.read_text(encoding="utf-8"))
+            real_fsync(descriptor)
+
+        monkeypatch.setattr("epubconvert.export.archive.os.fsync", recording_fsync)
+
+        write_atomically(target, "new")
+
+        assert synced == ["old"]
+        assert target.read_text(encoding="utf-8") == "new"
+
+    @needs_permissions
+    def test_a_read_only_file_can_still_be_rewritten(self, tmp_path):
+        target = tmp_path / "highlights.json"
+        write_atomically(target, "first")
+        target.chmod(0o444)
+
+        write_atomically(target, "second")
+
+        assert stat.S_IMODE(target.stat().st_mode) == 0o444
+        assert target.read_text(encoding="utf-8") == "second"
