@@ -26,12 +26,14 @@ from ..utils.defaults import (
 from .planning import COLLISION_MODES, SKIP, STATUSES
 
 #: Flags that only mean something when books are converted or the shelf is
-#: read, each with its spelling. A run that converts nothing -- --library-export
-#: or --annotations-only -- refuses every one of them rather than ignoring it,
-#: because a flag the user typed that changes nothing is a run doing something
-#: other than what was asked, silently. One list for both modes, so the next
-#: conversion flag is not forgotten by one of them. --epubcheck comes before
-#: --validate, which it implies, so the flag named is the one typed. Judged
+#: read, each with its spelling. A run that converts nothing -- --library-export,
+#: --annotations-only or --annotations-refresh -- refuses every one of them
+#: rather than ignoring it, because a flag the user typed that changes nothing
+#: is a run doing something other than what was asked, silently. One list for
+#: every such mode, so the next conversion flag is not forgotten by one of
+#: them: -ar was, and "-ae -ar --match X" refreshed every book on the shelf.
+#: --epubcheck comes before --validate, which it implies, so the flag named is
+#: the one typed. Judged
 #: against the parser's defaults rather than by truthiness, so a flag with a
 #: real default -- --min-free, -m -- is caught too; one typed *as* its default
 #: is indistinguishable from untyped and passes, which changes nothing.
@@ -592,6 +594,17 @@ def _check_convert_nothing_flags(
         mode = "--library-export"
     elif args.annotations_only:
         mode = "--annotations-only"
+    elif args.annotations_refresh:
+        # A third convert-nothing mode, and it was missing here: it walks the
+        # whole shelf and consults none of these, so "-ae -ar --match Alpha"
+        # rewrote every archive rather than Alpha's. The two above cannot
+        # reach it -- each refuses -ae, which -ar requires.
+        mode = "--annotations-refresh"
+        if args.force:
+            parser.error(
+                f"{mode} rewrites an archive's annotations only when they "
+                "changed and never converts a book, so --force has nothing to do"
+            )
     else:
         return
     if args.force and args.library_export in (None, "", STDOUT):
