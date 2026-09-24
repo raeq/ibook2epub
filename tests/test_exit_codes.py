@@ -12,6 +12,7 @@ something", "fix the path" and "a book is broken" are four different responses.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import errno
 import os
 import re
 from pathlib import Path
@@ -295,6 +296,94 @@ class TestAReadOnlyShelfStopsTheRehearsalToo:
 
         assert code == exits.NO_OUTPUT
         assert str(shelf) in capsys.readouterr().err
+
+
+def _refuse_opening(monkeypatch, path: Path, error: int = errno.EACCES) -> None:
+    """Make *path* refuse to open, as a read-only file does for anyone but root."""
+    opener = os.open
+
+    def refusing(file, flags, *args, **kwargs):
+        if os.fspath(file) == str(path):
+            raise OSError(error, os.strerror(error), str(file))
+        return opener(file, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", refusing)
+
+
+class TestTheRehearsalJudgesTheLockFile:
+    """
+    The rehearsal judged only the shelf directory, and the real run opens the
+    lock file in it. A lock file that could not be opened (mode 444) let a dry
+    run exit 0 where the real run exited 5; and a read-only shelf holding a
+    writable lock file, with nothing to convert, refused every run with 5
+    although the real lock would have been taken.
+    """
+
+    @staticmethod
+    def _shelf(tmp_path: Path) -> tuple[list[str], Path]:
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        base = ["-s", str(library), "-o", str(shelf), "-q"]
+        assert run.main(base) == exits.SUCCESS
+        return base, shelf
+
+    @pytest.mark.parametrize("error", [errno.EACCES, errno.EROFS])
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_lock_file_that_cannot_be_opened_stops_both(
+        self, tmp_path, monkeypatch, error, mode
+    ):
+        base, shelf = self._shelf(tmp_path)
+        (shelf / "Book.epub").unlink()
+        _refuse_opening(monkeypatch, shelf / convert.LOCK_NAME, error)
+
+        assert run.main([*base, *mode]) == exits.NO_OUTPUT
+
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_lock_file_that_is_a_link_stops_both(self, tmp_path, mode):
+        base, shelf = self._shelf(tmp_path)
+        (shelf / convert.LOCK_NAME).unlink()
+        (shelf / convert.LOCK_NAME).symlink_to(tmp_path / "elsewhere")
+
+        assert run.main([*base, *mode]) == exits.NO_OUTPUT
+        assert not (tmp_path / "elsewhere").exists()
+
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_read_only_shelf_with_a_writable_lock_file_is_not_refused(
+        self, tmp_path, monkeypatch, mode
+    ):
+        base, shelf = self._shelf(tmp_path)
+        allowed = os.access
+        monkeypatch.setattr(
+            os,
+            "access",
+            lambda path, mode, **kwargs: (
+                Path(path) != shelf and allowed(path, mode, **kwargs)
+            ),
+        )
+
+        assert run.main([*base, *mode]) == exits.SUCCESS
+
+    @needs_permissions
+    @pytest.mark.parametrize("mode", [[], ["-d"]])
+    def test_a_read_only_lock_file_stops_both(self, tmp_path, mode):
+        base, shelf = self._shelf(tmp_path)
+        (shelf / "Book.epub").unlink()
+        (shelf / convert.LOCK_NAME).chmod(0o444)
+
+        assert run.main([*base, *mode]) == exits.NO_OUTPUT
+
+    @needs_permissions
+    @pytest.mark.parametrize("mode", [[], ["-d"], ["--list"]])
+    def test_a_read_only_shelf_with_nothing_to_do(self, tmp_path, mode):
+        base, shelf = self._shelf(tmp_path)
+        shelf.chmod(0o555)
+        try:
+            code = run.main([*base, *mode])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.SUCCESS
 
 
 #: Every route that reads the shelf, as extra arguments after -s and -o.

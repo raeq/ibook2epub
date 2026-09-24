@@ -17,6 +17,7 @@ import asyncio
 import glob
 import os
 import shlex
+import stat
 import sys
 from collections.abc import Sequence
 from contextlib import nullcontext
@@ -53,6 +54,7 @@ from .annotating import (
 from .claims import shelf_names
 from .cli import parse_args
 from .convert import (
+    LOCK_NAME,
     ExportOptions,
     OutputLockedError,
     Report,
@@ -709,16 +711,44 @@ def _unwritable_shelf(args: argparse.Namespace) -> Path | None:
 
     :param args: Parsed command line arguments.
 
-    :return: That directory when it cannot be written, otherwise None. Always
-        None for ``--list`` and ``--verify``, which only read the shelf, and
-        for the runs that never touch it.
+    The lock file is what the run opens, so when there is one it is judged
+    instead: the directory alone let a lock file the run could not open (mode
+    444) pass the rehearsal, and refused a read-only shelf whose lock file
+    would have opened. On a read-only volume opening it fails too, with EROFS.
+
+    :return: The lock file or directory that cannot be written, otherwise
+        None. Always None for ``--list`` and ``--verify``, which only read the
+        shelf, and for the runs that never touch it.
     """
     if args.list_only or args.verify or args.annotations_only or args.library_export:
         return None
+    lock = args.output_dir / LOCK_NAME
+    if os.path.lexists(lock):
+        return None if _lock_opens(lock) else lock
     nearest = _nearest_existing(args.output_dir)
     if nearest is None or os.access(nearest, os.W_OK | os.X_OK):
         return None
     return nearest
+
+
+def _lock_opens(lock: Path) -> bool:
+    """
+    Report whether the run could open an existing lock file, as it opens it.
+
+    :param lock: The lock file, known to exist.
+
+    :return: True for a plain file -- not a link of either kind, as
+        :func:`~epubconvert.run.convert.output_lock` requires -- that opens
+        for writing.
+    """
+    try:
+        info = lock.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            return False
+        os.close(os.open(lock, os.O_RDWR | os.O_NOFOLLOW))
+    except OSError:
+        return False
+    return True
 
 
 def _check_environment(args: argparse.Namespace) -> int | None:
