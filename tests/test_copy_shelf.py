@@ -251,3 +251,48 @@ class TestAPdfOnTheShelfIsWeighed:
         assert row["status"] == "collision"
         assert Path(row["source"]).parent.name == "0"
         assert (output_dir / "Paper.pdf").read_bytes() == b"%PDF-1.4 paper A"
+
+
+class TestTwoZippedBooksOfOneSize:
+    """
+    A copy was taken for its own file on the shelf by its size alone. Two
+    different zipped books of one name and one size: the one added later,
+    earlier in sort order, found the other's file and was never copied, with
+    nothing said. Where two books want one name, the identifiers decide.
+    """
+
+    @staticmethod
+    def _equal_sizes(tmp_path: Path, output_dir: Path, mode: str) -> list[str]:
+        library = tmp_path / "lib"
+        first = zipped_book(tmp_path, library / "a" / "Book.epub", "urn:uuid:A", "A")
+        argv = ["-s", str(library), "-o", str(output_dir), "--on-collision", mode]
+        run.main([*argv, "-m", "0", "-q"])
+        added = zipped_book(tmp_path, library / "0" / "Book.epub", "urn:uuid:C", "C")
+        assert added.stat().st_size == first.stat().st_size
+        return argv
+
+    def test_skip_mode_reports_the_newcomer(self, tmp_path, output_dir, capsys):
+        argv = self._equal_sizes(tmp_path, output_dir, "skip")
+        capsys.readouterr()
+
+        run.main([*argv, "-m", "0"])
+        captured = capsys.readouterr()
+
+        assert identifier_of(output_dir / "Book.epub") == "urn:uuid:A"
+        assert "1 name collision(s)" in captured.out
+        assert "this book is urn:uuid:C" in captured.err
+
+    def test_suffix_mode_copies_the_newcomer_beside_it(
+        self, tmp_path, output_dir, capsys
+    ):
+        argv = self._equal_sizes(tmp_path, output_dir, "suffix")
+
+        run.main([*argv, "-m", "0", "-q"])
+        capsys.readouterr()
+        run.main([*argv, "-m", "0"])
+        again = capsys.readouterr()
+
+        assert identifier_of(output_dir / "Book.epub") == "urn:uuid:A"
+        assert identifier_of(output_dir / "Book (2).epub") == "urn:uuid:C"
+        assert " copied" not in again.out
+        assert "collision" not in again.out

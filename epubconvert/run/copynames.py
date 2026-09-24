@@ -8,6 +8,7 @@ the files that are taken along rather than converted.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -81,20 +82,23 @@ def claim_copies(
 
     :return: The packages' names, some with an identifier read, and the copies'.
     """
+    wanting = sorted(
+        ((source, name) for source, name in copies if name is not None),
+        key=lambda entry: entry[0],
+    )
+    wants = Counter(filesystem_key(item.identity) for item in assigned if item.filename)
+    wants.update(filesystem_key(policy.identity(name)) for _, name in wanting)
     claiming = _Claiming(
         _Naming(policy, on_collision, getattr(policy, "max_bytes", 0)),
         existing=_on_shelf(output_dir, policy),
         unopened=unopened,
+        contested={key for key, count in wants.items() if count > 1},
     )
     for item in assigned:
         if item.filename:
             claiming.claims.take(item.identity, 1, item.identity, item.filename)
             claiming.holders[filesystem_key(item.identity)] = item.filename
 
-    wanting = sorted(
-        ((source, name) for source, name in copies if name is not None),
-        key=lambda entry: entry[0],
-    )
     # A copy whose name is on the shelf claims first, as a package does, and
     # before it one whose own bytes are that file: two PDFs of one name have
     # no identifier to tell them apart, and the first in sorted order took the
@@ -121,22 +125,27 @@ class _Claiming:
     existing: dict[str, Path]
     #: Files not to open, because opening them downloads them.
     unopened: Collection[Path]
+    #: Filesystem keys more than one book of the pass wants.
+    contested: set[str] = field(default_factory=set)
     claims: Claims = field(default_factory=Claims)
     #: The name that took each filesystem key.
     holders: dict[str, str] = field(default_factory=dict)
+    #: Each copy's identifier, once read.
+    read: dict[Path, str | None] = field(default_factory=dict)
 
     def owns(self, source: Path, name: str, policy: NamingPolicy) -> bool:
         """
-        Report whether the shelf's file under *name* can be *source*'s copy.
+        Report whether the shelf's file under *name* is *source*'s copy.
 
         :param source: The file to copy.
         :param name: The name it wants.
         :param policy: The naming policy in force.
 
-        :return: True if a file is there and is *source*'s size.
+        :return: True if a file is there and :meth:`_own` says it is its.
         """
-        found = self.existing.get(filesystem_key(policy.identity(name)))
-        return found is not None and _same_size(source, found)
+        key = filesystem_key(policy.identity(name))
+        found = self.existing.get(key)
+        return found is not None and self._own(source, found, key)[0]
 
     def name(self, source: Path, name: str, group: str) -> Assignment:
         """
@@ -150,14 +159,16 @@ class _Claiming:
         """
         key = filesystem_key(group)
         found = self.existing.get(key)
-        if found is not None and key in self.holders and _same_size(source, found):
-            # Copied before the book now holding the name arrived: the copy
-            # keeps its file, whatever the mode, and that book moves on
-            # (placing.place) or is a collision. Settled only in _lost, this
-            # never ran under --on-collision suffix, where a free " (n)"
-            # always exists: the copy was written again under one and its
-            # file listed as an orphan.
-            return Assignment(source, found.name, group)
+        if found is not None and key in self.holders:
+            own, identifier = self._own(source, found, key)
+            if own:
+                # Copied before the book now holding the name arrived: the
+                # copy keeps its file, whatever the mode, and that book moves
+                # on (placing.place) or is a collision. Settled only in _lost,
+                # this never ran under --on-collision suffix, where a free
+                # " (n)" always exists: the copy was written again under one
+                # and its file listed as an orphan.
+                return Assignment(source, found.name, group, identifier=identifier)
         taken = _claim(self.claims, name, group, setup=self.setup)
         if taken is None:
             return self._lost(source, group)
@@ -168,9 +179,11 @@ class _Claiming:
             source,
             filename,
             key,
+            # Read where the file there may be another book's, so the plan
+            # can tell (placing.place).
             identifier=(
-                self._identifier(source)
-                if found is not None and not _same_size(source, found)
+                self._own(source, found, filesystem_key(key))[1]
+                if found is not None
                 else None
             ),
             # Positional, from the name it wanted: a copy has no digest of its
@@ -191,12 +204,8 @@ class _Claiming:
         found = self.existing.get(key)
         identifier = None
         if found is not None:
-            if _same_size(source, found):
-                return Assignment(source, found.name, group)
-            # Read only where there is a file to compare, so a rerun that loses
-            # the same name opens nothing it did not open before.
-            identifier = self._identifier(source)
-            if identifier is not None and identifier_on_shelf(found) == identifier:
+            own, identifier = self._own(source, found, key)
+            if own:
                 return Assignment(source, found.name, group, identifier=identifier)
         return Assignment(
             source,
@@ -207,9 +216,42 @@ class _Claiming:
             identifier=identifier,
         )
 
+    def _own(self, source: Path, found: Path, key: str) -> tuple[bool, str | None]:
+        """
+        Decide whether *found* is *source*'s copy, which is written byte for byte.
+
+        Its size says so while no other book of the pass wants the name: a
+        stat each, which downloads nothing, so a rerun over a shelf of copies
+        opens none of them. Where another book wants it too, two different
+        zipped books of one size told apart by nothing else, and the one
+        added later was never copied; there the identifiers decide. They
+        decide too for a file of another size, which may be the copy's own
+        from before Apple rewrote the book. A PDF has none, and its size is
+        all there is.
+
+        :param source: The file to copy.
+        :param found: The file on the shelf under the name it wants.
+        :param key: That name's filesystem key.
+
+        :return: Whether it is, and *source*'s identifier when it was read.
+        """
+        same = _same_size(source, found)
+        if same and key not in self.contested:
+            return True, None
+        identifier = self._identifier(source)
+        if identifier is not None:
+            holder = identifier_on_shelf(found)
+            if holder is not None:
+                return holder == identifier, identifier
+        return same, identifier
+
     def _identifier(self, source: Path) -> str | None:
         """Read a file's identifier, unless opening it would download it."""
-        return None if source in self.unopened else _copy_identifier(source)
+        if source not in self.read:
+            self.read[source] = (
+                None if source in self.unopened else _copy_identifier(source)
+            )
+        return self.read[source]
 
 
 def _on_shelf(output_dir: Path | None, policy: NamingPolicy) -> dict[str, Path]:
@@ -270,12 +312,7 @@ def _copy_identifier(source: Path) -> str | None:
 
 
 def _same_size(source: Path, found: Path) -> bool:
-    """
-    Whether *found* can be *source*'s copy, which is written byte for byte.
-
-    A stat each, which downloads nothing, so a rerun over a shelf of copies
-    opens none of them to know they are there.
-    """
+    """Whether *found* is *source*'s size: a stat each, which downloads nothing."""
     try:
         return source.stat().st_size == found.stat().st_size
     except OSError:  # pragma: no cover - racing removal
