@@ -42,7 +42,7 @@ class TestAdviceThatWorks:
         advice = capsys.readouterr().out
         # The stem, not the filename: that is what --match takes, and the
         # advice has to be runnable as printed.
-        assert "--match Book1 --force" in advice
+        assert "--match=Book1 --force" in advice
 
     def test_force_warns_when_the_cap_will_cut_it_short(
         self, tmp_path, output_dir, capsys
@@ -164,6 +164,75 @@ class TestVerifyAdviceRepairsTheBook:
         assert " -s " not in command
         run.main(shlex.split(command)[1:])
         assert run.main(["-o", str(output_dir), "--verify", "-q"]) == 0
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            "Bad\x1bName.epub",
+            "Tab\tTitle.epub",
+            # What os.walk hands back for a name that is not UTF-8.
+            "Bad\udcff name.epub",
+            "-30-.epub",
+            "--help.epub",
+        ],
+    )
+    def test_a_name_display_escapes_still_gets_a_working_command(
+        self, tmp_path, output_dir, capsys, title
+    ):
+        # The pattern was the name escaped for display, which --match reads
+        # literally: 'Bad\x1bName' matched nothing. And "--match -30-" made
+        # argparse read the pattern as a flag and exit 2.
+        library = tmp_path / "lib"
+        for name in (title, "Other.epub"):
+            self._book(library, name)
+        base, advice = self._damage_and_verify(library, output_dir, title, capsys)
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        capsys.readouterr()
+        run.main(shlex.split(command)[1:])
+
+        assert "Exported 1 epub file(s)" in capsys.readouterr().out
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_a_masked_name_that_selects_two_books_is_moved_aside(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Each control character becomes "?", which matches the other too.
+        library = tmp_path / "lib"
+        for name in ("Bad\x1bName.epub", "Bad\x1cName.epub"):
+            self._book(library, name)
+        _, advice = self._damage_and_verify(
+            library, output_dir, "Bad\x1bName.epub", capsys
+        )
+
+        assert "--match" not in advice
+        assert "\n  Bad\\x1bName.epub\n" in advice
+
+    def test_a_shelf_named_like_a_flag_is_still_the_shelf(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        # Typed as "-o=-shelf"; printed as "-o -shelf", -shelf reads as a flag.
+        monkeypatch.chdir(tmp_path)
+        library = tmp_path / "lib"
+        self._book(library, "Dune.epub")
+        base = ["-s", str(library), "-o=-shelf"]
+        run.main([*base, "-q"])
+        (tmp_path / "-shelf" / "Dune.epub").write_bytes(b"CORRUPTED")
+        capsys.readouterr()
+        assert run.main([*base, "--verify", "-q"]) == 7
+        advice = capsys.readouterr().out
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        run.main(shlex.split(command)[1:])
+        assert run.main([*base, "--verify", "-q"]) == 0
 
     def test_a_book_copied_through_is_moved_aside_not_forced(
         self, tmp_path, output_dir, capsys

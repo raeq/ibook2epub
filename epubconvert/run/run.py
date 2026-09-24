@@ -258,9 +258,10 @@ def _run_verify(args: argparse.Namespace) -> int:
 
     checked, damaged, broken = verify_output(args.output_dir, epubcheck=args.epubcheck)
     if not checked:
-        print(f"No archives found in {args.output_dir}.")
+        print(f"No archives found in {printable(str(args.output_dir))}.")
         return 0
-    print(f"Verified {checked} archive(s) in {args.output_dir}: {damaged} damaged.")
+    shelf = printable(str(args.output_dir))
+    print(f"Verified {checked} archive(s) in {shelf}: {damaged} damaged.")
     if damaged:
         _advise_repair(args, broken)
     return exits.DAMAGED if damaged else exits.SUCCESS
@@ -294,23 +295,27 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
     patterns = {name: _repair_pattern(name, packages) for name in broken}
     forced = [name for name in broken if patterns[name] is not None]
     aside = [name for name in broken if patterns[name] is None]
-    # Through printable as well as shlex.quote: quoting makes a name one shell
-    # word, and does nothing about the ESC and CR that rewrite the line.
+    # Quoting makes a name one shell word, and does nothing about the ESC and
+    # CR that rewrite the line: a path or a name is escaped with printable,
+    # and a pattern holds "?" for each such character instead, since --match
+    # would read the escape literally (see _repair_pattern).
     if forced:
         print("Re-export each damaged book, for example:")
         shelf = _shelf_flags(args)
         for name in forced[:3]:
-            quoted = printable(shlex.quote(patterns[name] or ""))
-            print(f"  ibook2epub --match {quoted} --force {shelf}")
+            # Joined to the flag, so a name that starts with a dash is not
+            # read as one.
+            quoted = shlex.quote(patterns[name] or "")
+            print(f"  ibook2epub --match={quoted} --force {shelf}")
         if len(forced) > 3:
             print(f"  ...and {len(forced) - 3} more")
         # --verify refuses them, so it cannot know what the shelf was named by.
         print("  (add the --name-by/-p/--on-collision flags you export with)")
     if aside:
         print(
-            f"Move each of these out of {args.output_dir} and rerun as before: "
-            "no package in the library has its name, so --force cannot reach "
-            "it, and a run puts back a book missing from the shelf."
+            f"Move each of these out of {printable(str(args.output_dir))} and "
+            "rerun as before: --force cannot single it out, and a run puts "
+            "back a book missing from the shelf."
         )
         for name in aside[:3]:
             print(f"  {printable(name)}")
@@ -331,8 +336,20 @@ def _shelf_flags(args: argparse.Namespace) -> str:
     :return: ``-s`` when the library was given rather than discovered, and
         ``-o`` always, each quoted as one shell word and escaped for display.
     """
-    flags = [] if args.source_auto else ["-s", str(args.source_dir)]
-    return printable(shlex.join([*flags, "-o", str(args.output_dir)]))
+    flags = [] if args.source_auto else ["-s", _as_word(args.source_dir)]
+    return printable(shlex.join([*flags, "-o", _as_word(args.output_dir)]))
+
+
+def _as_word(path: Path) -> str:
+    """
+    Spell a path so that argparse cannot take it for a flag.
+
+    :param path: A path as the user gave it.
+
+    :return: The path, led by ``./`` when it would otherwise start with a dash.
+    """
+    text = str(path)
+    return f"./{text}" if text.startswith("-") else text
 
 
 def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
@@ -343,21 +360,29 @@ def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
     :param packages: Every package in the library.
 
     :return: The plainest pattern that selects them and nothing else, or None
-        when no package has that name.
+        when no package has that name, or none can be printed that does.
     """
     wanted = {package for package in packages if package.name.lower() == name.lower()}
     if not wanted:
         return None
     stem, suffix = Path(name).stem, Path(name).suffix
     # The stem reads best but matches anywhere, so "Plain" finds Complain too.
-    # The escaped name is anchored only if escaping gave it a bracket.
-    for pattern in (stem, glob.escape(name)):
-        chosen = {p for p in packages if matches_pattern(p.name, pattern)}
+    # The escaped name is anchored only if escaping gave it a bracket. The
+    # bracketed dot makes the last a glob, which matches the whole name.
+    for pattern in (
+        stem,
+        glob.escape(name),
+        f"{glob.escape(stem)}[.]{suffix[1:]}",
+    ):
+        # What the advice prints is escaped for display, and --match reads
+        # "\x1b" as four characters: a character printable would escape
+        # becomes "?", which makes the pattern a glob, and is then checked
+        # like any other, since "?" matches more than that one character.
+        masked = "".join(char if printable(char) == char else "?" for char in pattern)
+        chosen = {p for p in packages if matches_pattern(p.name, masked)}
         if chosen == wanted:
-            return pattern
-    # The bracketed dot makes it a glob, which matches the whole name, and
-    # every other character stands for itself: this selects exactly *wanted*.
-    return f"{glob.escape(stem)}[.]{suffix[1:]}"
+            return masked
+    return None
 
 
 def _plan_options(args: argparse.Namespace) -> PlanOptions:
