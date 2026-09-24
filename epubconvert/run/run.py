@@ -414,7 +414,11 @@ def _run_export(
                 "Interrupted; %d book(s) exported before stopping.", report.exported
             )
 
-    return report, max(0, pending_before - report.exported), assigned
+    # A dry run exports nothing, so what it would export is what it takes
+    # off: counting only exports said "-m 0 -d" would leave every book it
+    # had just listed.
+    done = report.planned if args.dry_run else report.exported
+    return report, max(0, pending_before - done), assigned
 
 
 def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:

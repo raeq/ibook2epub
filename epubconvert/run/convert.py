@@ -711,7 +711,9 @@ def format_summary(
         summary += _clauses(report, failures=False)
         summary += ")."
         if remaining:
-            summary += f" {remaining} remaining."
+            # The same advice a real run gives. A bare count left out that
+            # the cap was what held these back.
+            summary += _remaining_hint(report, remaining)
         return summary
 
     summary = (

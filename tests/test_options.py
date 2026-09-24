@@ -202,6 +202,26 @@ class TestRemainingCount:
         # after the test, so the output path itself contains "remaining".
         assert "rerun to continue" not in capsys.readouterr().out
 
+    def test_a_dry_run_does_not_count_what_it_would_export_as_left(
+        self, small_library, output_dir, capsys
+    ):
+        # What remained was the pending count less the books exported, and a
+        # dry run exports none: "-m 0 -d" said all three books remained in
+        # the same line that said it would export them.
+        argv = ["-s", str(small_library), "-o", str(output_dir), "-d"]
+
+        run.main([*argv, "-m", "0"])
+        everything = capsys.readouterr().out.strip().splitlines()[-1]
+        run.main([*argv, "-m", "1"])
+        capped = capsys.readouterr().out.strip().splitlines()[-1]
+
+        assert "would export 3" in everything
+        assert "remaining" not in everything.rpartition(")")[2]
+        assert capped.endswith(
+            "2 remaining. 2 held back by --max-export-files: rerun to continue, "
+            "or pass -m 0 to convert everything."
+        )
+
 
 class TestExportCapProgress:
     def test_reruns_under_a_cap_keep_making_progress(self, tmp_path, output_dir):
