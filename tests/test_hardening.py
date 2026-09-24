@@ -30,7 +30,7 @@ from epubconvert.run import convert, run
 from epubconvert.utils import contained
 from epubconvert.utils.app_logger import logger
 from epubconvert.utils.display import printable
-from tests.conftest import make_package, needs_permissions
+from tests.conftest import make_metadata_package, make_package, needs_permissions
 
 
 @pytest.fixture(name="records")
@@ -221,6 +221,64 @@ class TestAMemberThatIsNotAFileIsNotOpened:
 
         assert isinstance(raised, validate.ValidationError)
         assert "could not read" in str(raised)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="this platform has no FIFOs")
+class TestVerifyChecksOnlyFiles:
+    """
+    --verify reads back whatever in the output directory is named ``*.epub``.
+    A FIFO of that name froze it for ever, and a directory of that name was
+    reported damaged, failing the run with advice to --force.
+    """
+
+    def test_a_fifo_is_refused_not_waited_on(self, tmp_path):
+        fifo = tmp_path / "Piped.epub"
+        os.mkfifo(fifo)
+
+        problems = _within(5, fifo, lambda: validate.validate_archive(fifo))
+
+        assert problems == ["not a regular file"]
+
+    def test_a_directory_is_refused(self, tmp_path):
+        (tmp_path / "Folder.epub").mkdir()
+
+        assert validate.validate_archive(tmp_path / "Folder.epub") == [
+            "not a regular file"
+        ]
+
+    def test_only_the_files_on_the_shelf_are_verified(self, tmp_path):
+        shelf = tmp_path / "out"
+        shelf.mkdir()
+        _sound_epub(shelf / "Good.epub")
+        os.mkfifo(shelf / "Piped.epub")
+        (shelf / "Folder.epub").mkdir()
+
+        verified = _within(
+            5, shelf / "Piped.epub", lambda: inspect_output.verify_output(shelf)
+        )
+
+        assert verified == (1, 0, [])
+
+    def test_a_directory_named_like_an_archive_does_not_fail_the_run(
+        self, tmp_path, output_dir, capsys
+    ):
+        _sound_epub(output_dir / "Good.epub")
+        (output_dir / "Folder.epub").mkdir()
+        source_dir = tmp_path / "lib"
+        source_dir.mkdir()
+
+        code = run.main(
+            ["-s", str(source_dir), "-o", str(output_dir), "--verify", "-q"]
+        )
+
+        assert code == 0
+        assert "0 damaged" in capsys.readouterr().out
+
+
+def _sound_epub(path: Path) -> Path:
+    package = make_metadata_package(path.parent / "src", path.name, title="Good")
+    archive.zip_package(package, path)
+    return path
 
 
 class TestAMemberThatGrowsWhileReadIsStillBounded:

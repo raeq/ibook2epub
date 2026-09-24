@@ -27,7 +27,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import unquote, urldefrag
+from urllib.parse import unquote
 from xml.etree import ElementTree
 from xml.parsers import expat
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
@@ -117,10 +117,7 @@ def usable_identifier(package: Package | None) -> str | None:
 
 
 #: A UUID, whatever case it is written in.
-_UUID = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
+_UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 #: The prefixes publishers put in front of the value itself. ``urn:`` scheme
 #: names are case-insensitive by RFC 8141, and this library holds both
@@ -223,11 +220,9 @@ ISBN13_PREFIXES = ("978", "979")
 
 def _is_isbn13(digits: str) -> bool:
     """Whether *digits* is a book's EAN-13: 978 or 979, and a valid check digit."""
-    if len(digits) != 13 or not _ascii_digits(digits):
+    if len(digits) != 13 or not digits.startswith(ISBN13_PREFIXES):
         return False
-    if not digits.startswith(ISBN13_PREFIXES):
-        return False
-    return _isbn13_sum(digits) % 10 == 0
+    return _ascii_digits(digits) and _isbn13_sum(digits) % 10 == 0
 
 
 def _is_isbn10(digits: str) -> bool:
@@ -255,12 +250,9 @@ def isbn10_of(isbn13: str | None) -> str | None:
         thirteen ASCII digits: a prefix test alone made ``"978"`` into ``"0"``
         and raised ValueError on ``"978abc..."``.
     """
-    if (
-        isbn13 is None
-        or len(isbn13) != 13
-        or not _ascii_digits(isbn13)
-        or not isbn13.startswith("978")
-    ):
+    if isbn13 is None or len(isbn13) != 13 or not isbn13.startswith("978"):
+        return None
+    if not _ascii_digits(isbn13):
         return None
     body = isbn13[3:12]
     check = (11 - _isbn10_sum(body) % 11) % 11
@@ -602,8 +594,8 @@ def _resolve(base: str, href: str) -> str:
 
     :return: The archive path the href points at.
     """
-    target, _ = urldefrag(href)
-    target = unquote(target.partition("?")[0])
+    # By hand: urldefrag parses the URL, and raised ValueError for " //[x".
+    target = unquote(href.partition("#")[0].partition("?")[0])
     if not target:
         return target
     directory = posixpath.dirname(base)
@@ -636,7 +628,10 @@ def _package(members: _Members) -> Package:
     :raises ValidationError: If the package document is missing or unparsable.
     """
     opf_path = _opf_path(members)
-    return _package_from_root(_element(members, opf_path), opf_path)
+    try:
+        return _package_from_root(_element(members, opf_path), opf_path)
+    except ValueError as exc:  # Every reader catches ValidationError, not this.
+        raise ValidationError(f"unreadable package: {printable(str(exc))}") from exc
 
 
 def _canonical_identifier(root: ElementTree.Element) -> str | None:
@@ -799,6 +794,8 @@ def validate_archive(path: Path) -> list[str]:
     problems: list[str] = []
 
     try:
+        if not stat.S_ISREG(path.stat().st_mode):  # Opening a FIFO waits for ever.
+            return ["not a regular file"]
         with ZipFile(path) as archive:
             names = archive.namelist()
             members = set(names)
@@ -967,6 +964,7 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
     executable = shutil.which(EPUBCHECK)
     if executable is None:
         return ["epubcheck is not on PATH"]
+    name = printable(path.name)
 
     try:
         completed = subprocess.run(  # noqa: S603 - fixed executable, no shell
@@ -983,7 +981,7 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
         # --verify count a sound archive as damaged.
         logger.warning(
             "epubcheck could not check %s, so it was not checked: %s",
-            printable(path.name),
+            name,
             exc,
         )
         return []
@@ -995,6 +993,7 @@ def run_epubcheck(path: Path, timeout: int = 120) -> list[str]:
     # to stderr, which hid every diagnostic on stdout when only one was read.
     # FATAL is epubcheck's most severe level, and was dropped with the rest.
     output = f"{completed.stderr}\n{completed.stdout}".splitlines()
-    errors = [line.strip() for line in output if _EPUBCHECK_FAILURE.search(line)]
-    logger.debug("epubcheck exited %d for %s", completed.returncode, path.name)
+    failing = [line for line in output if _EPUBCHECK_FAILURE.search(line)]
+    errors = [printable(line.strip()) for line in failing]  # they name its members
+    logger.debug("epubcheck exited %d for %s", completed.returncode, name)
     return errors[:10] or [f"epubcheck failed with exit code {completed.returncode}"]

@@ -243,7 +243,11 @@ def verify_output(
         names of the damaged ones so a caller can name them in its advice.
     """
     options = ValidationOptions(enabled=True, epubcheck=epubcheck)
-    archives = sorted(output_dir.glob(f"*{PACKAGE_SUFFIX}"))
+    # Files only, as the planner reads the shelf: a directory of this name was
+    # reported damaged, and a FIFO froze the whole check.
+    archives = sorted(
+        found for found in output_dir.glob(f"*{PACKAGE_SUFFIX}") if found.is_file()
+    )
     damaged = 0
     broken: list[str] = []
 

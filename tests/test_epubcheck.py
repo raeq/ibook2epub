@@ -13,6 +13,7 @@ what the tool says.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import logging
 import subprocess
 
 from epubconvert.collect import validate
@@ -213,3 +214,35 @@ class TestRunningEpubcheck:
         assert options["timeout"] == 7
         assert options["check"] is False
         assert options["capture_output"] is True
+
+
+class TestEpubcheckOutputIsEscaped:
+    """
+    epubcheck names the book's own members and files in what it reports, and
+    those lines reach the terminal through the failure log and --verify.
+    """
+
+    def test_a_control_character_in_a_problem_line_is_escaped(
+        self, tmp_path, monkeypatch
+    ):
+        stderr = "ERROR(PKG-009): Book.epub/\x1b[2K\x9bch1.xhtml: not allowed\n"
+        TestRunningEpubcheck._installed(  # pylint: disable=protected-access
+            monkeypatch, _Completed(returncode=1, stderr=stderr)
+        )
+
+        assert validate.run_epubcheck(tmp_path / "Book.epub") == [
+            "ERROR(PKG-009): Book.epub/\\x1b[2K\\x9bch1.xhtml: not allowed"
+        ]
+
+    def test_the_archive_is_named_escaped_in_the_log(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        TestRunningEpubcheck._installed(  # pylint: disable=protected-access
+            monkeypatch, _Completed(returncode=1, stderr="ERROR(RSC-005): bad\n")
+        )
+        caplog.set_level(logging.DEBUG, logger="epubconvert")
+
+        validate.run_epubcheck(tmp_path / "\x1b[2KBook.epub")
+
+        assert "epubcheck exited 1 for \\x1b[2KBook.epub" in caplog.text
+        assert "\x1b" not in caplog.text
