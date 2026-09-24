@@ -20,6 +20,7 @@ import os
 import socket
 import threading
 import time
+import unicodedata
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -455,10 +456,15 @@ def matches_pattern(name: str, pattern: str) -> bool:
 
     :return: True when :func:`filter_packages` would keep the package.
     """
-    needle = pattern.lower()
+    # Both composed first: a name that has lived on HFS+ is stored decomposed
+    # and a pattern is typed composed, so "--match café" found nothing. Only
+    # lowered after that, as matching always was, rather than case-folded as
+    # filesystem_key is: folding turns "ß" into "ss" and would change what a
+    # bracket expression such as "[ß]" means.
+    needle = unicodedata.normalize("NFC", pattern).lower()
     if not any(char in needle for char in "*?["):
         needle = f"*{needle}*"
-    return fnmatch.fnmatch(name.lower(), needle)
+    return fnmatch.fnmatch(unicodedata.normalize("NFC", name).lower(), needle)
 
 
 def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]:
@@ -467,7 +473,8 @@ def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]
 
     A pattern with no glob metacharacter matches anywhere in the name, so
     ``--match hobbit`` finds ``The Hobbit.epub``. Anything else is treated as
-    a glob against the whole name. Matching is case-insensitive.
+    a glob against the whole name. Matching is case-insensitive, and blind to
+    whether an accent is stored composed or decomposed.
 
     :param packages: Discovered package directories.
     :param pattern: The user's pattern, or None to keep everything.

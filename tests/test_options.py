@@ -5,6 +5,7 @@
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -60,6 +61,17 @@ class TestMatch:
         packages = collect_package_dirs(small_library)
 
         assert len(convert.filter_packages(packages, "HOBBIT")) == 2
+
+    @pytest.mark.parametrize(
+        "pattern", ["café", "cafe\u0301", "CAFÉ", "caf? society.epub"]
+    )
+    def test_a_decomposed_name_answers_a_composed_pattern(self, tmp_path, pattern):
+        # A name that has lived on HFS+ is stored decomposed, and --match is
+        # typed composed: "--match café" matched nothing.
+        decomposed = unicodedata.normalize("NFD", "Café Society.epub")
+        package = tmp_path / decomposed
+
+        assert convert.filter_packages([package], pattern) == [package]
 
     def test_glob_is_anchored(self, small_library):
         packages = collect_package_dirs(small_library)
