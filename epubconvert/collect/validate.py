@@ -841,22 +841,23 @@ def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:
 
     if not names:
         return ["archive is empty"]
-    if names[0] != MIMETYPE_NAME:
-        problems.append(f"first member is {names[0]!r}, not 'mimetype'")
+    # First by position in the file, never by the central directory's order:
+    # that index is written last, in whatever order the writer chose. OCF
+    # requires mimetype *physically* first, since a reader identifies an epub
+    # by the bytes at offset 0. Judged by the index, an archive listing
+    # mimetype first while storing it later passed, and a sound one storing it
+    # first but listing it later was reported damaged. zipfile reports offsets
+    # from the start of the file, so bytes prepended to it are caught too.
+    first = min(archive.infolist(), key=lambda member: member.header_offset)
+    if first.filename != MIMETYPE_NAME:
+        problems.append(f"first member is {first.filename!r}, not 'mimetype'")
         if MIMETYPE_NAME not in names:
             return problems
 
     info = archive.getinfo(MIMETYPE_NAME)
-    # The order above is the central directory's, an index written last in
-    # whatever order the writer chose. OCF requires the member *physically*
-    # first, since a reader identifies an epub by the bytes at offset 0, and
-    # an archive indexing mimetype first while storing it later passed.
-    # zipfile reports the offset from the start of the file, so bytes
-    # prepended to the archive are caught here too.
-    if names[0] == MIMETYPE_NAME and info.header_offset != 0:
+    if first.filename == MIMETYPE_NAME and info.header_offset != 0:
         problems.append(
-            f"mimetype is listed first but stored at byte {info.header_offset}, "
-            "not first"
+            f"mimetype is stored at byte {info.header_offset}, not first in the file"
         )
     if info.compress_type != ZIP_STORED:
         problems.append("mimetype is compressed; it must be stored")

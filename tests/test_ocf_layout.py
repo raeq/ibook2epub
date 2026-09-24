@@ -57,6 +57,25 @@ class TestMimetypeIsPhysicallyFirst:
 
         assert any("mimetype" in problem and "first" in problem for problem in problems)
 
+    def test_mimetype_stored_first_but_indexed_later_is_first(self, tmp_path: Path):
+        # The other half of the same mistake: the check asked the index which
+        # member came first, so a sound archive whose writer happened to list
+        # mimetype later in its central directory was reported damaged.
+        path = tmp_path / "IndexedLater.epub"
+        with ZipFile(path, "w") as archive:
+            archive.writestr(
+                ZipInfo("mimetype"), "application/epub+zip", compress_type=ZIP_STORED
+            )
+            for name, body in MEMBERS.items():
+                if name != "mimetype":
+                    archive.writestr(name, body)
+            archive.filelist.sort(key=lambda info: info.filename == "mimetype")
+        with ZipFile(path) as archive:
+            assert archive.namelist()[-1] == "mimetype"
+            assert archive.getinfo("mimetype").header_offset == 0
+
+        assert validate.validate_archive(path) == []
+
     def test_an_archive_written_properly_still_passes(self, tmp_path: Path):
         assert validate.validate_archive(write_epub(tmp_path / "Good.epub")) == []
 
