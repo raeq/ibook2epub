@@ -15,8 +15,41 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `run/run.py` hands the `--verify` advice to `run/repair.py` and the
   pre-flight checks to `run/preflight.py`; the summary line moves from
   `run/convert.py` to `run/summary.py`.
+- `run/planning.py` hands the listing and the report's tallies to
+  `run/reporting.py`, and the orphan check to `run/orphans.py`.
 
 ### Fixed
+
+- A package added beside a zipped book already copied, when either declares
+  no usable identifier, is no longer placed at the copy's file: under
+  `--on-collision suffix` it gets a numbered name of its own, under `skip` it
+  is a collision. `--force`, `--refresh` and `-ae -ar` no longer write over
+  the copy, and `--list`, the orphan list and `-ao` agree.
+
+- A copy is taken for its own bytes only when its size and modification time
+  both match. A file matched by size alone is judged by the identifiers
+  first, so a same-size book replacing a deleted one is copied or reported,
+  not skipped.
+
+- `--skip-incomplete` now opens no evicted book anywhere it is given:
+  - An evicted package beside a zipped book of its name is reported exported
+    from its own archive, which is no longer listed as an orphan.
+  - An evicted zipped book under a deleted book's name is reported not
+    downloaded ("cannot tell whether <file> is its copy") rather than copied;
+    under `--no-copy-through` the deleted book's archive stays an orphan, and
+    the reason says why.
+  - An evicted numbered book's numbered and marked files are not listed as
+    orphans; without the flag its identifier is still read to keep its
+    number.
+  - Under `--name-by author-title` an evicted package is reported not
+    downloaded, with a warning that it could not be named.
+  - `-ao`, `-ad` and `-ae -ar` place, compare and read highlights without
+    opening one; a vault says a book's highlights wait on its download
+    rather than calling it a lost collision.
+
+- A rerun with nothing to do reads a package's document once rather than
+  three times when a zipped book wants its name, and no longer opens a
+  zipped book that lost its name to a package.
 
 - A library or shelf behind a directory the run may not search (Full Disk
   Access on macOS) ends with an exit code instead of a traceback: exit 8
