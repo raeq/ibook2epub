@@ -88,9 +88,11 @@ SIDECAR_SUFFIX = ".md.new"
 #: out, as ``_`` and ``=`` already were. A table's delimiter row may lead with
 #: ``-`` or with an alignment colon, and ``:-- | --:`` under a note's first
 #: line once went unescaped and put its ``**Note:**`` label in a table header;
-#: the row is matched by its whole shape, cells and pipes. A link label
-#: may continue onto the next line, so an unfinished one counts. ``>`` opens a
-#: quote whatever follows it.
+#: the row is matched by its whole shape, cells and pipes. A one-column
+#: row needs no pipe at all when it carries an alignment colon -- ``:---``,
+#: ``---:``, ``:-:`` -- and under ``see also |`` it made a table as well. A
+#: link label may continue onto the next line, so an unfinished one counts.
+#: ``>`` opens a quote whatever follows it.
 #:
 #: Indentation is up to three spaces and nothing else. A fourth column, or a
 #: tab, opens an indented code block (``code``); a line led by any other white
@@ -111,7 +113,8 @@ BLOCK_OPENERS = re.compile(
               | \*(?=(?:[ \t]*\*){2}[ \t*]*$)  # thematic break
               | -(?=(?:[ \t]*-){2}[ \t-]*$)    # thematic break
               | -(?=-*[ \t]*$)               # setext underline
-              | (?=:?-+:?[ \t]*\|(?:[ \t]*:?-+:?[ \t]*\|)*(?:[ \t]*:?-+:?)?[ \t]*$)
+              | (?=:?-+:?[ \t]*\|(?:[ \t]*:?-+:?[ \t]*\|)*(?:[ \t]*:?-+:?)?[ \t]*$
+                  | :-+:?[ \t]*$ | -+:[ \t]*$)
                 [-:]                         # table delimiter row, no pipe first
               | \|                           # table row
               | `(?=``) | ~(?=~~)            # code fence

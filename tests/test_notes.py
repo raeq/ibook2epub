@@ -417,6 +417,12 @@ class TestEscaping:
             pytest.param(":-- | --:", "\\:-- | --:", id="aligned delimiter row"),
             pytest.param("  :-: | :-:", "  \\:-: | :-:", id="indented delimiter row"),
             pytest.param(":- |", "\\:- |", id="one-cell delimiter row"),
+            pytest.param(":---", "\\:---", id="one-column left delimiter row"),
+            pytest.param("---:", "\\---:", id="one-column right delimiter row"),
+            pytest.param(":-:", "\\:-:", id="one-column centre delimiter row"),
+            pytest.param(":-", "\\:-", id="shortest left delimiter row"),
+            pytest.param("-:", "\\-:", id="shortest right delimiter row"),
+            pytest.param("  :-- \t", "  \\:-- \t", id="indented one-column row"),
             pytest.param("1.", "1\\.", id="empty ordered item"),
             pytest.param("123456789) x", "123456789\\) x", id="nine-digit number"),
         ],
@@ -496,7 +502,15 @@ class TestATableDelimiterRow:
 
         assert "\n\\:-- | --:\n" in body
 
-    @pytest.mark.parametrize("line", [":-) smile", ": a colon", "::", ":-"])
+    @pytest.mark.parametrize("row", [":---", "---:", ":-:"])
+    def test_one_of_one_column_without_a_pipe_does_not_either(self, row: str):
+        # GFM takes "see also |" over ":---" for a one-column table, and the
+        # row was matched only with a pipe in it.
+        body = notes.body([_annotation(note=f"see also |\n{row}")])
+
+        assert f"\n\\{row}\n" in body
+
+    @pytest.mark.parametrize("line", [":-) smile", ": a colon", "::", "-: x", ":-: x"])
     def test_a_colon_that_leads_no_delimiter_row_is_left_alone(self, line):
         assert notes._escape(line) == line
 
