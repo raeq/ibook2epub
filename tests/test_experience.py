@@ -17,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -277,6 +278,31 @@ class TestVerifyAdviceRepairsTheBook:
         assert "\n  Dune (2).epub\n" in advice
         (output_dir / "Dune (2).epub").unlink()
         run.main([*base, *flags, "-q"])
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_a_decomposed_name_on_the_shelf_is_still_its_book(
+        self, tmp_path, output_dir, capsys
+    ):
+        # HFS+ hands a name back decomposed, and the library's is composed.
+        # The package was looked for with lower() alone, so the book was
+        # "no package's name" and sent to be moved aside, though --match
+        # composes both sides and would have found it.
+        library = tmp_path / "lib"
+        self._book(library, "Café.epub")
+        base = ["-s", str(library), "-o", str(output_dir)]
+        run.main([*base, "-q"])
+        decomposed = output_dir / unicodedata.normalize("NFD", "Café.epub")
+        (output_dir / "Café.epub").rename(decomposed)
+        decomposed.write_bytes(b"CORRUPTED")
+        capsys.readouterr()
+        assert run.main([*base, "--verify", "-q"]) == 7
+
+        [command] = [
+            line.strip()
+            for line in capsys.readouterr().out.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        run.main(shlex.split(command)[1:])
         assert run.main([*base, "--verify", "-q"]) == 0
 
     @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")

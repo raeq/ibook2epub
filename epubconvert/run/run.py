@@ -19,6 +19,7 @@ import os
 import shlex
 import stat
 import sys
+import unicodedata
 from collections.abc import Sequence
 from contextlib import nullcontext
 from pathlib import Path
@@ -403,7 +404,14 @@ def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
     :return: The plainest pattern that selects them and nothing else, or None
         when no package has that name, or none can be printed that does.
     """
-    wanted = {package for package in packages if package.name.lower() == name.lower()}
+    # Composed on both sides, as --match reads them: a shelf on HFS+ hands a
+    # name back decomposed, and lower() alone found no package for it.
+    key = unicodedata.normalize("NFC", name).lower()
+    wanted = {
+        package
+        for package in packages
+        if unicodedata.normalize("NFC", package.name).lower() == key
+    }
     if not wanted:
         return None
     stem, suffix = Path(name).stem, Path(name).suffix
