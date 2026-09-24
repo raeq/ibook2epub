@@ -12,6 +12,7 @@ believing either cost.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 
 import io
+import json
 import struct
 import tracemalloc
 import warnings
@@ -210,6 +211,43 @@ class TestARefreshInflatesNothingWhole:
         assert archive.replace_annotations(target, [{"id": "mine"}]) is True
         with ZipFile(target) as reading:
             assert reading.read(EMBEDDED_PATH).startswith(b"{")
+
+    def test_a_set_too_large_to_be_equal_is_replaced_unparsed(self, tmp_path):
+        # Within the cap, but json.loads built a dict per "{}": the 64 MiB
+        # the cap allows cost 1.6 GiB to compare against one annotation.
+        held = '{"annotations": [' + "{}, " * (128 * 1024) + "{}]}"
+        target = write_epub(tmp_path / "Book.epub", {**MEMBERS, EMBEDDED_PATH: held})
+
+        with _allocations() as peak:
+            rewritten = archive.replace_annotations(target, [{"id": "mine"}])
+
+        assert peak() < PEAK
+        assert rewritten is True
+        with ZipFile(target) as reading:
+            assert json.loads(reading.read(EMBEDDED_PATH))["annotations"] == [
+                {"id": "mine"}
+            ]
+
+    def test_a_set_this_tool_wrote_is_current_without_being_parsed(
+        self, tmp_path, monkeypatch
+    ):
+        target = write_epub(tmp_path / "Book.epub")
+        archive.replace_annotations(target, [{"id": "a"}])
+        before = target.read_bytes()
+        monkeypatch.setattr(json, "loads", pytest.fail)
+
+        assert archive.replace_annotations(target, [{"id": "a"}]) is False
+        assert target.read_bytes() == before
+
+    def test_an_equal_set_written_another_way_is_still_current(self, tmp_path):
+        # Only the annotations are compared: an older release's generator, or
+        # other spacing, is no reason to rewrite every book on the shelf.
+        held = json.dumps({"generator": {"version": "0"}, "annotations": [{"id": "a"}]})
+        target = write_epub(tmp_path / "Book.epub", {**MEMBERS, EMBEDDED_PATH: held})
+        before = target.read_bytes()
+
+        assert archive.replace_annotations(target, [{"id": "a"}]) is False
+        assert target.read_bytes() == before
 
     @pytest.mark.parametrize(
         "member", [EMBEDDED_PATH, "OEBPS/text/chapter1.xhtml"], ids=["held", "other"]
