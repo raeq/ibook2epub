@@ -149,7 +149,9 @@ def _check_source(args: argparse.Namespace) -> int | None:
         # Asked of stat rather than Path.is_dir, which raises everything
         # but "absent": a library in a directory the run may not search --
         # behind Full Disk Access, on macOS -- was a traceback and exit 1.
-        found = stat.S_ISDIR(args.source_dir.stat().st_mode)
+        # os.stat, not Path.stat, which on 3.10 and 3.14 is its own binding.
+        mode = os.stat(args.source_dir).st_mode  # noqa: PTH116
+        found = stat.S_ISDIR(mode)
     except (FileNotFoundError, NotADirectoryError):
         found = False
     except OSError as exc:
