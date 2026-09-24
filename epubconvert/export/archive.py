@@ -813,10 +813,11 @@ def replace_annotations(
             repeated = repeated_entries(reading)
             if repeated is not None:
                 raise ArchiveInvalidError(target_archive.name, [repeated])
-            names = reading.namelist()
+            # By the names OCF reads, which that check has just found unique.
+            found = {member_name(info): info for info in reading.infolist()}
             held = (
-                read_member(reading, reading.getinfo(EMBEDDED_PATH), MAX_EMBEDDED_BYTES)
-                if EMBEDDED_PATH in names
+                read_member(reading, found[EMBEDDED_PATH], MAX_EMBEDDED_BYTES)
+                if EMBEDDED_PATH in found
                 else None
             )
 
@@ -833,9 +834,7 @@ def replace_annotations(
             if room is not None and not room():
                 raise NoRoomError(target_archive.name)
 
-            members = [
-                info for info in reading.infolist() if info.filename != EMBEDDED_PATH
-            ]
+            members = [info for name, info in found.items() if name != EMBEDDED_PATH]
             handle, temporary = tempfile.mkstemp(
                 dir=target_archive.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
             )
@@ -848,10 +847,7 @@ def replace_annotations(
 
         # Replaced once the original is closed rather than while it is still
         # being read, which a platform that locks open files refuses.
-        assert_is_a_book(
-            target_archive.name,
-            {info.filename for info in members} | {EMBEDDED_PATH},
-        )
+        assert_is_a_book(target_archive.name, set(found) | {EMBEDDED_PATH})
         partial.replace(target_archive)
     except BaseException:
         if partial is not None:

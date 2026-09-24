@@ -19,14 +19,16 @@ nothing depends on a ``zip`` binary being installed.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import ast
+import warnings
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
+from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
 from epubconvert.collect import annotations
-from epubconvert.collect.package import member_name
-from epubconvert.collect.validate import validate_archive
+from epubconvert.collect.package import member_name, read_archive_package
+from epubconvert.collect.validate import ArchiveInvalidError, validate_archive
 from epubconvert.export import archive as shelf
 from epubconvert.run import annotating, run
 from epubconvert.utils import exits
@@ -62,29 +64,41 @@ BOOK = {
 }
 
 
-def unflagged(path: Path, members: dict[str, str]) -> Path:
+def unflagged(
+    path: Path,
+    members: dict[str, str] | list[tuple[str, str]],
+    *,
+    method: int = ZIP_DEFLATED,
+    only: int | None = None,
+) -> Path:
     """
     Write an archive whose member names are UTF-8 but not flagged as such.
 
     zipfile flags every name past ASCII, so the flag is cleared afterwards, in
     each local header and in each central directory entry: Info-ZIP leaves it
     clear in both, and zipfile refuses an archive whose two disagree.
+
+    :param members: Names and contents, in order; a list may repeat a name.
+    :param method: How every member but ``mimetype`` is compressed.
+    :param only: The position of the one entry to clear, or None for all.
     """
-    with ZipFile(path, "w") as writing:
-        for name, text in members.items():
-            method = ZIP_STORED if name == "mimetype" else ZIP_DEFLATED
-            writing.writestr(name, text, compress_type=method)
+    listed = list(members.items()) if isinstance(members, dict) else members
+    with warnings.catch_warnings(), ZipFile(path, "w") as writing:
+        warnings.simplefilter("ignore")  # "Duplicate name", when one is meant
+        for name, text in listed:
+            chosen = ZIP_STORED if name == "mimetype" else method
+            writing.writestr(name, text, compress_type=chosen)
     raw = bytearray(path.read_bytes())
     with ZipFile(path) as reading:
         entries = reading.infolist()
-    # Bit 11 of the flags is bit 3 of their second byte: offset 7 of a local
-    # header, 9 of a directory entry.
-    for info in entries:
-        raw[info.header_offset + 7] &= ~0x08 & 0xFF
     end = raw.rindex(b"PK\x05\x06")
     offset = int.from_bytes(raw[end + 16 : end + 20], "little")
-    for _ in entries:
-        raw[offset + 9] &= ~0x08 & 0xFF
+    for position, info in enumerate(entries):
+        # Bit 11 of the flags is bit 3 of their second byte: offset 7 of a
+        # local header, 9 of a directory entry.
+        if only is None or position == only:
+            raw[info.header_offset + 7] &= ~0x08 & 0xFF
+            raw[offset + 9] &= ~0x08 & 0xFF
         lengths = (raw[offset + 28 : offset + 30], raw[offset + 30 : offset + 32])
         comment = raw[offset + 32 : offset + 34]
         offset += 46 + sum(int.from_bytes(n, "little") for n in (*lengths, comment))
@@ -165,3 +179,130 @@ class TestARefreshKeepsTheRealName:
         assert CHAPTER in names(book)
         assert annotations.EMBEDDED_PATH in names(book)
         assert validate_archive(book) == []
+
+
+#: A note to refresh a book with.
+NOTE: dict[str, object] = {
+    "id": "u1",
+    "text": "x",
+    "book": {"title": "T", "source": "B.epub"},
+}
+
+
+class TestRuleEveryReaderKnowsAMemberByItsUTF8Name:
+    """
+    A member is named by ``member_name``, wherever an archive is read.
+
+    Sites: ``validate_archive``'s names, and through them the manifest,
+    duplicate and case-fold checks; ``_check_mimetype``; ``_first_corrupt``;
+    ``_check_methods``; ``repeated_entries``; ``open_member``'s refusal;
+    ``_ArchiveMembers``, which every read of a package document goes through;
+    and ``replace_annotations``.
+    """
+
+    def test_no_reader_asks_zipfile_for_a_name(self):
+        # zipfile's own name for a member is its cp437 reading when the flag
+        # is clear, so a lookup by name, a listing of names or a ZipInfo's
+        # filename is a reader this rule missed. Derived, so a new one fails.
+        offenders = []
+        for path in sorted(Path("epubconvert").rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            reads_archives = "from zipfile import" in text
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Attribute):
+                    continue
+                if node.attr in _ASKED_BY_NAME:
+                    offenders.append(f"{path}:{node.lineno} {node.attr}")
+                if node.attr != "filename" or not reads_archives:
+                    continue
+                # An OSError's filename, in archive._shown, is a path on disk.
+                if _inside(tree, node, "_shown") or _inside(tree, node, "member_name"):
+                    continue
+                offenders.append(f"{path}:{node.lineno} filename")
+
+        assert offenders == [], f"name a member through member_name: {offenders}"
+
+    def test_verify_finds_every_manifest_item(self, tmp_path):
+        assert validate_archive(unflagged(tmp_path / "Book.epub", BOOK)) == []
+
+    def test_a_package_document_named_past_ascii_is_found(self, tmp_path):
+        book = {
+            name.replace("OEBPS/", "本/"): text.replace("OEBPS/", "本/")
+            for name, text in BOOK.items()
+        }
+        path = unflagged(tmp_path / "Book.epub", book)
+
+        package = read_archive_package(path)
+
+        assert package.opf_path == "本/content.opf"
+        assert package.manifest == {"c1": "本/第1章.xhtml"}
+
+    def test_a_name_flagged_once_and_once_not_is_a_duplicate(self, tmp_path):
+        # The same bytes twice, which zipfile reads two ways. OCF sees one name.
+        listed = [*BOOK.items(), (CHAPTER, "again")]
+        path = unflagged(tmp_path / "Book.epub", listed, only=len(listed) - 1)
+
+        problems = validate_archive(path)
+
+        assert f"member name appears more than once: {CHAPTER}" in problems
+
+    def test_names_differing_by_case_are_found_on_the_real_names(self, tmp_path):
+        listed = [*BOOK.items(), ("OEBPS/Ä.xhtml", "x"), ("OEBPS/ä.xhtml", "y")]
+        path = unflagged(tmp_path / "Book.epub", listed, only=len(listed) - 1)
+
+        problems = validate_archive(path)
+
+        assert any("differ only by case" in problem for problem in problems)
+
+    def test_the_first_member_is_named_as_it_is(self, tmp_path):
+        listed = [(CHAPTER, BOOK[CHAPTER]), *list(BOOK.items())[:-1]]
+        path = unflagged(tmp_path / "Book.epub", listed)
+
+        problems = validate_archive(path)
+
+        assert f"first member is {CHAPTER!r}, not 'mimetype'" in problems
+
+    def test_a_corrupt_member_is_named_as_it_is(self, tmp_path):
+        path = unflagged(tmp_path / "Book.epub", BOOK, method=ZIP_STORED)
+        raw = path.read_bytes()
+        at = raw.rindex(b"<p>x</p>")  # the chapter's text, stored
+        path.write_bytes(raw[:at] + b"<p>y</p>" + raw[at + 8 :])
+
+        assert f"corrupt member: {CHAPTER}" in validate_archive(path)
+
+    def test_a_member_in_a_forbidden_method_is_named_as_it_is(self, tmp_path):
+        path = unflagged(tmp_path / "Book.epub", BOOK, method=ZIP_BZIP2)
+
+        problems = validate_archive(path)
+
+        assert any(problem.endswith(f": {CHAPTER}") for problem in problems)
+
+    def test_a_refresh_refuses_a_name_listed_twice(self, tmp_path):
+        # Rebuilt, both would be written under the one real name.
+        listed = [*BOOK.items(), (CHAPTER, "again")]
+        path = unflagged(tmp_path / "Book.epub", listed, only=len(listed) - 1)
+
+        with pytest.raises(ArchiveInvalidError, match="more than once"):
+            shelf.replace_annotations(path, [NOTE])
+
+    def test_a_refresh_names_a_member_it_may_not_inflate(self, tmp_path):
+        # The chapter straight after mimetype, so it is the first refused.
+        first, *rest = BOOK.items()
+        listed = [first, (CHAPTER, BOOK[CHAPTER]), *rest[:-1]]
+        path = unflagged(tmp_path / "Book.epub", listed, method=ZIP_BZIP2)
+
+        with pytest.raises(NotImplementedError, match=CHAPTER):
+            shelf.replace_annotations(path, [NOTE])
+
+
+#: What asks zipfile for a member by its own reading of the name.
+_ASKED_BY_NAME = frozenset({"namelist", "getinfo", "NameToInfo"})
+
+
+def _inside(tree: ast.Module, node: ast.AST, function: str) -> bool:
+    """Whether *node* lies within the named function of *tree*."""
+    for candidate in ast.walk(tree):
+        if isinstance(candidate, ast.FunctionDef) and candidate.name == function:
+            return any(child is node for child in ast.walk(candidate))
+    return False

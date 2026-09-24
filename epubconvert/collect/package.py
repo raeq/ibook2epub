@@ -171,7 +171,7 @@ def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:
     method = disallowed_method(info)
     if method is not None:
         raise NotImplementedError(
-            f"{printable(info.filename)} is compressed with {method}, "
+            f"{printable(member_name(info))} is compressed with {method}, "
             "which an epub may not use"
         )
     return archive.open(info)
@@ -201,7 +201,9 @@ def repeated_entries(archive: ZipFile) -> str | None:
     entries = archive.infolist()
     if len({info.header_offset for info in entries}) < len(entries):
         return SHARED_HEADER
-    counted = Counter(info.filename for info in entries)
+    # By the name OCF reads, as every other reader does: the same bytes flagged
+    # UTF-8 once and once not are one name, which zipfile reads two ways.
+    counted = Counter(member_name(info) for info in entries)
     repeated = sorted(name for name, times in counted.items() if times > 1)
     if repeated:
         shown = ", ".join(printable(name) for name in repeated[:5])
@@ -253,6 +255,9 @@ class _ArchiveMembers:  # pylint: disable=too-few-public-methods
 
     def __init__(self, archive: ZipFile) -> None:
         self.archive = archive
+        # Looked up by the name the book uses, not zipfile's: a package
+        # document at 本/content.opf, unflagged, was otherwise missing.
+        self.infos = {member_name(info): info for info in archive.infolist()}
 
     def read(self, name: str) -> bytes:
         """
@@ -262,10 +267,9 @@ class _ArchiveMembers:  # pylint: disable=too-few-public-methods
         inflated, and the read is bounded as well, because that declaration
         is the book's own claim about itself.
         """
-        try:
-            info = self.archive.getinfo(name)
-        except KeyError as exc:
-            raise ValidationError(f"missing {name}") from exc
+        info = self.infos.get(name)
+        if info is None:
+            raise ValidationError(f"missing {name}")
 
         method = disallowed_method(info)
         if method is not None:
