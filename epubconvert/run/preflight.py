@@ -11,6 +11,7 @@ still decides when to check.
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import stat
 from pathlib import Path
@@ -23,6 +24,10 @@ from ..utils.app_logger import logger
 from ..utils.defaults import SOURCE_CANDIDATES
 from ..utils.display import printable
 from .convert import LOCK_NAME, lock_file_refusal
+
+#: What stat fails with when nothing is at the end of a path lexists found:
+#: a dangling link, a file partway along, or a loop. Anything else refuses.
+_NOT_THERE = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP})
 
 
 def _file_in_the_way(output_dir: Path) -> Path | None:
@@ -40,12 +45,20 @@ def _file_in_the_way(output_dir: Path) -> Path | None:
         otherwise None.
     """
     nearest = _nearest_existing(output_dir)
+    if nearest is None:
+        return None
     try:
-        return None if nearest is None or nearest.is_dir() else nearest
-    except OSError:
+        # os.stat, not Path.is_dir: on 3.14 that answers False to a refusal,
+        # and a link into a directory the run may not search was "a symlink
+        # to no directory".
+        mode = os.stat(nearest).st_mode  # noqa: PTH116
+    except OSError as exc:
+        if exc.errno in _NOT_THERE:
+            return nearest
         # A link into a directory the run may not search: whether it is one
         # cannot be told, and the probe that reads the shelf says why.
         return None
+    return None if stat.S_ISDIR(mode) else nearest
 
 
 def _nearest_existing(output_dir: Path) -> Path | None:

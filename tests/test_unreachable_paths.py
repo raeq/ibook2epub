@@ -121,6 +121,34 @@ class TestAShelfItMayNotSearch:
         assert code == exits.NO_OUTPUT
         assert f"Cannot read output directory {link}" in capsys.readouterr().err
 
+    def test_through_a_symlink_on_every_python(self, tmp_path, monkeypatch, capsys):
+        # Path.is_dir on 3.14 answers False to a refusal rather than raising,
+        # so a link into a directory the run may not search was called "a
+        # symlink to no directory". The link itself stays readable here.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        link = tmp_path / "link"
+        link.symlink_to(tmp_path / "blocked" / "shelf")
+        through = (str(link), str(link) + os.sep)
+
+        def refusing(real: Callable[..., Any]) -> Callable[..., Any]:
+            def call(path, *args, **kwargs):
+                if isinstance(path, (str, os.PathLike)) and os.fspath(path).startswith(
+                    through
+                ):
+                    raise PermissionError(errno.EACCES, "Permission denied", path)
+                return real(path, *args, **kwargs)
+
+            return call
+
+        for name in ("stat", "scandir", "listdir"):
+            monkeypatch.setattr(os, name, refusing(getattr(os, name)))
+
+        code = run.main(["-s", str(library), "-o", str(link), "-d"])
+
+        assert code == exits.NO_OUTPUT
+        assert f"Cannot read output directory {link}" in capsys.readouterr().err
+
     def test_a_vault_named_against_it(self, tmp_path, monkeypatch, capsys):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
