@@ -429,6 +429,36 @@ class TestAFailedCopyIsCounted:
         assert code == 1
         assert "failed 1" in capsys.readouterr().out.strip().splitlines()[-1]
 
+    def test_a_shelf_that_cannot_say_what_it_holds_fails_the_copy(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Path.exists raises EIO on Python 3.10 and 3.11 -- a network share
+        # or a USB volume dropping mid-run -- and the copy worker let it
+        # escape: a traceback, exit 1 and no summary. Raised here on every
+        # Python, and only where the worker looks.
+        library = tmp_path / "lib"
+        library.mkdir()
+        for name in ("Good.pdf", "Lost.pdf"):
+            (library / name).write_bytes(b"%PDF-1.4\n")
+        exists = Path.exists
+
+        def dropping(path: Path, *args: object, **kwargs: object) -> bool:
+            if threading.current_thread().name.startswith("copy") and (
+                path == output_dir / "Lost.pdf"
+            ):
+                raise OSError(errno.EIO, "Input/output error", str(path))
+            return exists(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "exists", dropping)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0"])
+
+        out, err = capsys.readouterr()
+        assert code == 1
+        assert "1 copied" in out and "failed 1" in out
+        assert "Could not copy Lost.pdf" in err
+        assert (output_dir / "Good.pdf").exists()
+
     def test_a_failed_copy_is_not_blamed_on_a_held_back_book(
         self, tmp_path, output_dir, monkeypatch, capsys
     ):

@@ -63,7 +63,15 @@ def _copy_and_record(
         PDFs went on being copied onto an SD card already below it.
     """
     for source, target in group:
-        if target.exists():
+        try:
+            there = target.exists()
+        except OSError as exc:
+            # Raised on 3.10 and 3.11 for an EIO -- a share or a USB volume
+            # dropping mid-run -- and it escaped the worker: a traceback, exit
+            # 1 and no summary. A copy that cannot be made, as any other.
+            _count_failed(report, source, exc)
+            continue
+        if there:
             # Settled before the copy: a file under the name it was given is
             # its own copy (copynames.claim_copies), one holding another book
             # having made it a collision, or moved it on.
@@ -80,15 +88,42 @@ def _copy_and_record(
         try:
             copy_through(source, target)
         except OSError as exc:
-            # Counted, not only logged: a copy that failed silently left the
-            # run exiting 0 with a clean summary and the book not on the shelf.
-            with _REPORT_LOCK:
-                report.copies_failed += 1
-            logger.error("Could not copy %s: %s", printable(source.name), exc)
+            _count_failed(report, source, exc)
             continue
         with _REPORT_LOCK:
             report.copied += 1
         logger.info("Copied %s", printable(source.name))
+
+
+def _count_failed(report: Report, source: Path, exc: OSError) -> None:
+    """
+    Count and say a copy that could not be made.
+
+    Counted, not only logged: a copy that failed silently left the run
+    exiting 0 with a clean summary and the book not on the shelf.
+
+    :param report: Report to count it in.
+    :param source: The file that was not copied.
+    :param exc: Why.
+    """
+    with _REPORT_LOCK:
+        report.copies_failed += 1
+    logger.error("Could not copy %s: %s", printable(source.name), exc)
+
+
+def _on_shelf(target: Path) -> bool:
+    """
+    Whether a copy's name already holds a file, never raising.
+
+    :param target: Where the copy goes.
+
+    :return: True when something is there. One that cannot be told is taken
+        as not there: its copy is attempted, and fails as a copy.
+    """
+    try:
+        return target.exists()
+    except OSError:
+        return False
 
 
 @dataclass(frozen=True)
@@ -403,7 +438,7 @@ def copy_through_all(
     """
     groups = _group_copies(plan, output_dir, report)
     waiting = sum(
-        1 for group in groups for _source, target in group if not target.exists()
+        1 for group in groups for _source, target in group if not _on_shelf(target)
     )
     # Measured only when there is a copy to make, as the shelf is judged
     # (preflight.check_writable): a rerun with every file already copied was
