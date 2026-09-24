@@ -12,6 +12,7 @@ one.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import os
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -26,13 +27,24 @@ from tests.test_copy_through import _evict
 AUTHOR_TITLE = ["--name-by", "author-title"]
 
 
+def _is(file: object, watched: Path) -> bool:
+    """Whether what ZipFile was handed, a path or an open stream, is *watched*."""
+    try:
+        fileno = getattr(file, "fileno", None)
+        if fileno is not None:
+            return os.path.samestat(os.fstat(fileno()), watched.stat())
+        return Path(str(file)) == watched
+    except (OSError, ValueError):
+        return False
+
+
 def _opened(monkeypatch: pytest.MonkeyPatch, watched: Path) -> list[str]:
     """Record every time *watched* is opened as a zip, and still open it."""
     opened: list[str] = []
     original = ZipFile.__init__
 
     def counting(self, file, *args, **kwargs):
-        if Path(str(file)) == watched:
+        if _is(file, watched):
             opened.append(str(file))
         original(self, file, *args, **kwargs)
 
