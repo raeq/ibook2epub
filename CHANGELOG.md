@@ -20,6 +20,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Under `--on-collision suffix`, a book declaring no usable identifier no
+  longer keeps a numbered-looking file that declares one. A deleted
+  `Dune (1965)` left `Dune (1965).epub`, and an unidentified `Dune` added
+  since was reported exported from it and never written, and the deleted
+  book's archive was not listed as an orphan.
+
+- Under `--on-collision suffix`, two books whose names are one file on the
+  shelf -- two folders of one name, or a book renamed by case and a namesake
+  added under its old spelling -- now read their identifiers, and the book
+  the file declares keeps it. The newcomer was reported exported from the
+  other's archive and never written, the other was written again under a
+  number, and the next run wrote the newcomer too and left the second copy
+  an orphan.
+
 - A package added beside a zipped book already copied, when either declares
   no usable identifier, is no longer placed at the copy's file: under
   `--on-collision suffix` it gets a numbered name of its own, under `skip` it
