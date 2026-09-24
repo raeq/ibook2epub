@@ -175,3 +175,82 @@ class TestADoctypeWithoutASubsetStillParses:
         document = b'<?xml version="1.0"?><!DOCTYPE html><html/>'
 
         assert package_reader.parse_xml(document).tag == "html"
+
+
+def _peak(call) -> int:
+    """Trace allocations while *call* runs; return their peak."""
+    tracemalloc.start()
+    try:
+        call()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+def _refused(document: bytes, match: str) -> None:
+    with pytest.raises(package_reader.RefusedDocumentError, match=match):
+        package_reader.parse_xml(document)
+
+
+class TestTheTreeIsBounded:
+    """
+    The size cap bounds the bytes stored, not the tree built from them. A
+    16 KB book deflated to 16 MB of ``<a/>`` built 4M elements, 0.4 GB and
+    nearly 4 s a read, and one nesting 2M deep cost 0.6 GB; every read of the
+    book paid it again.
+    """
+
+    def test_too_many_elements_are_refused(self):
+        limit = package_reader.MAX_XML_ELEMENTS
+
+        _refused(b"<e>" + b"<a/>" * limit + b"</e>", "elements")
+
+    def test_as_many_as_the_limit_parse(self):
+        limit = package_reader.MAX_XML_ELEMENTS
+
+        root = package_reader.parse_xml(b"<e>" + b"<a/>" * (limit - 1) + b"</e>")
+
+        assert len(root) == limit - 1
+
+    def test_the_count_stops_the_parse_before_a_tree_is_built(self):
+        document = b"<e>" + b"<a/>" * (1024 * 1024) + b"</e>"
+
+        assert _peak(lambda: _refused(document, "elements")) < PEAK
+
+    def test_nesting_too_deep_is_refused(self):
+        depth = package_reader.MAX_XML_DEPTH + 1
+
+        _refused(b"<a>" * depth + b"</a>" * depth, "deep")
+
+    def test_nesting_as_deep_as_the_limit_parses(self):
+        depth = package_reader.MAX_XML_DEPTH
+
+        assert package_reader.parse_xml(b"<a>" * depth + b"</a>" * depth).tag == "a"
+
+    def test_a_package_document_is_refused_as_a_book(self, tmp_path):
+        items = "<item/>" * package_reader.MAX_XML_ELEMENTS
+
+        with pytest.raises(package_reader.ValidationError, match="c.opf holds more"):
+            package_reader.read_package_dir(_package(tmp_path, _opf("", items)))
+
+    def test_a_large_real_book_is_far_inside_the_limits(self, tmp_path):
+        # Shaped like a large illustrated reference book: 20,000 pages, each
+        # with an image, all in the spine -- 60,000 elements, several times
+        # the most any book in a 2,804-book library declares.
+        pages = 20_000
+        items = "".join(
+            f'<item id="p{n}" href="text/p{n}.xhtml" media-type='
+            f'"application/xhtml+xml"/><item id="i{n}" href="images/i{n}.jpg"'
+            ' media-type="image/jpeg"/>'
+            for n in range(pages)
+        )
+        spine = "".join(f'<itemref idref="p{n}"/>' for n in range(pages))
+        opf = _opf("", '<item id="t" href="t.xhtml"/>' + items).replace(
+            "<spine>", f"<spine>{spine}"
+        )
+
+        package = package_reader.read_package_dir(_package(tmp_path, opf))
+
+        assert len(package.manifest) == 2 * pages + 1
+        assert len(package.spine) == pages + 1
+        assert 3 * pages < package_reader.MAX_XML_ELEMENTS / 3

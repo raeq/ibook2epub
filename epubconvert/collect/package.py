@@ -52,10 +52,24 @@ OPF_NS = "http://www.idpf.org/2007/opf"
 DC_NS = "http://purl.org/dc/elements/1.1/"
 
 #: Cap on the *stored* size of XML read from an archive. This bounds the read,
-#: not the parse: ElementTree expands internal entities, so a small document
-#: can still expand to something far larger, and this limit does not prevent
-#: that. It exists to reject implausible files early, not as a memory bound.
+#: not the parse: 16 MiB of ``<a/>`` is 4M elements. What the parse may build
+#: is bounded by :data:`MAX_XML_ELEMENTS` and :data:`MAX_XML_DEPTH`, and by
+#: refusing an internal DTD subset, which could expand it further still.
 MAX_XML_BYTES = 16 * 1024 * 1024
+
+#: The most elements a document from a book may hold. A package document
+#: holds about two per member -- an ``<item>`` and, for text, an ``<itemref>``
+#: -- so this allows some 100,000 members. Measured: a book of 20,000
+#: illustrated pages, each in the spine, declares 60,000 elements and parses
+#: in 0.16 s and 30 MB; a package document at this limit, in 0.5 s and 92 MB.
+#: 16 MiB of empty elements, which the byte cap allows, cost 0.4 GB and 4 s
+#: on every read of the book.
+MAX_XML_ELEMENTS = 200_000
+
+#: The deepest a document from a book may nest. A package document nests
+#: three deep, ``container.xml`` three, ``encryption.xml`` five or six; one
+#: nesting 2M deep, in 14 KB stored, cost 0.6 GB to read.
+MAX_XML_DEPTH = 1_000
 
 #: What reading a damaged member can raise. A bad CRC is a BadZipFile, but a
 #: damaged compressed stream raises out of its decompressor instead: zlib.error
@@ -385,6 +399,10 @@ def _refusal(data: bytes) -> str | None:
     a decoy ``<!DOCTYPE`` -- because each had to re-derive where the declaration
     starts and ends. expat already knows, so it is asked.
 
+    The same pass counts the tree the parse would build, and refuses one of
+    more than :data:`MAX_XML_ELEMENTS` elements or nested deeper than
+    :data:`MAX_XML_DEPTH`, stopping as soon as either is passed.
+
     The parse stops at the start of the subset, before anything in it is
     declared. Parsed to the end, it expanded every reference it met before the
     answer was given, so the one check meant to spare the tool an expansion
@@ -399,6 +417,11 @@ def _refusal(data: bytes) -> str | None:
     """
     parser = expat.ParserCreate()
     parser.StartDoctypeDeclHandler = _doctype
+    budget = _Budget()
+    parser.StartElementHandler = budget.start
+    parser.EndElementHandler = budget.end
+    # A list is cheaper to build than a dict, and neither is looked at.
+    parser.ordered_attributes = True
     try:
         parser.Parse(data, True)
     except _RefusedError as refused:
@@ -412,6 +435,35 @@ def _refusal(data: bytes) -> str | None:
 
 class _RefusedError(Exception):
     """Raised out of expat to stop a parse at what refuses the document."""
+
+
+class _Budget:
+    """Counts the elements a document opens, and how deep they nest."""
+
+    def __init__(self) -> None:
+        self.elements = 0
+        self.depth = 0
+
+    def start(self, _name: str, _attributes: list[str]) -> None:
+        """
+        Count an element opened.
+
+        :raises _RefusedError: If it is one too many, or one too deep.
+        """
+        self.elements += 1
+        self.depth += 1
+        if self.elements > MAX_XML_ELEMENTS:
+            raise _RefusedError(
+                f"holds more than {MAX_XML_ELEMENTS} elements, which is not allowed"
+            )
+        if self.depth > MAX_XML_DEPTH:
+            raise _RefusedError(
+                f"nests elements more than {MAX_XML_DEPTH} deep, which is not allowed"
+            )
+
+    def end(self, _name: str) -> None:
+        """Count an element closed."""
+        self.depth -= 1
 
 
 def _doctype(
