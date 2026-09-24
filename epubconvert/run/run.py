@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 from ..collect.annotations import STDOUT
-from ..collect.annotations import index_by_book as index_annotations
 from ..collect.validate import (
     ValidationOptions,
     epubcheck_available,
@@ -31,6 +30,7 @@ from ..export.archive import (
     collect_copyable,
     collect_package_dirs,
     count_ignored,
+    index_by_package,
 )
 from ..export.detached import vault_of
 from ..export.inspect_output import verify_output
@@ -352,7 +352,7 @@ def _run_export(
         validation=ValidationOptions(enabled=args.validate, epubcheck=args.epubcheck),
         plan=_plan_options(args),
         annotations=(
-            index_annotations(found)
+            index_by_package(found, packages)
             if found is not None and args.annotations_embedded and not args.dry_run
             else None
         ),

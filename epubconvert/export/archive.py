@@ -17,9 +17,10 @@ import stat
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
+from typing import Any
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
-from ..collect.annotations import EMBEDDED_PATH, embedded_json
+from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
 from ..collect.validate import ArchiveInvalidError, ValidationOptions
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
@@ -622,6 +623,47 @@ def _members(source_dir: Path) -> list[Path]:
 
     found.sort()
     return found
+
+
+def index_by_package(
+    found: list[dict[str, Any]], packages: Sequence[Path], *, quiet: bool = False
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Index annotations by book, leaving out any whose book cannot be told apart.
+
+    An annotation records its book's package *name*, not its path, because the
+    path runs through the reader's home directory. Two directories with the
+    same name in different places are therefore indistinguishable to
+    :func:`~epubconvert.collect.annotations.for_book`, and matching by name gave
+    each of them the other's highlights. Only the ``-ar`` refresh checked: the
+    conversion, a vault of notes and the stranded-highlight warning each built
+    an index of their own and gave one highlight to both books. Every one of
+    them builds it here now.
+
+    :param found: Every annotation collected.
+    :param packages: Every package the run knows about, which is the only
+        place the paths are known.
+    :param quiet: Leave the warning to a caller that has already given it.
+
+    :return: What :func:`~epubconvert.collect.annotations.index_by_book`
+        builds, less every name more than one package answers to.
+    """
+    index = index_by_book(found)
+    seen: dict[str, Path] = {}
+    ambiguous: set[str] = set()
+    for package in packages:
+        if seen.setdefault(package.name, package) != package:
+            ambiguous.add(package.name)
+    for name in sorted(ambiguous & index.keys()):
+        dropped = index.pop(name)
+        if not quiet:
+            logger.warning(
+                "Skipped %d annotation(s) for %s: more than one package directory "
+                "has that name, so which book they belong to cannot be told apart.",
+                len(dropped),
+                printable(name),
+            )
+    return index
 
 
 def _same_annotations(

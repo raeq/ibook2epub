@@ -30,13 +30,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from ..collect.annotations import for_book, index_by_book
+from ..collect.annotations import for_book
 from ..collect.validate import isbn13_of
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import collapse, printable
 from ..utils.policy import Assignment
-from .archive import write_atomically
+from .archive import index_by_package, write_atomically
 from .naming import (
     MAX_FILENAME_BYTES,
     disambiguator,
@@ -526,7 +526,7 @@ def write_vault(
         logger.critical("Could not create %s: %s", printable(str(directory)), exc)
         return exits.NO_OUTPUT
 
-    index = index_by_book(found)
+    index = index_by_package(found, [item.package for item in named])
     tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
     for item in named:
         if not item.filename:

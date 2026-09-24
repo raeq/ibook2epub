@@ -17,10 +17,13 @@ from typing import Any
 from ..collect.annotations import STDOUT
 from ..collect.annotations import collect as collect_annotations
 from ..collect.annotations import for_book as annotations_for_book
-from ..collect.annotations import index_by_book as index_annotations
 from ..collect.coredata import ContainerUnavailableError
 from ..collect.validate import UNREADABLE_MEMBER, ArchiveInvalidError
-from ..export.archive import collect_package_dirs, replace_annotations
+from ..export.archive import (
+    collect_package_dirs,
+    index_by_package,
+    replace_annotations,
+)
 from ..export.detached import library_export, library_refusal, vault_of, write_export
 from ..utils import exits
 from ..utils.app_logger import logger
@@ -126,7 +129,9 @@ def _warn_about_stranded(
     :param named: The names the export used, which is the only place that knows
         what each book's archive would be called.
     """
-    index = index_annotations(found)
+    # Quiet: the conversion before this read the same annotations against
+    # the same library and has already said which it could not place.
+    index = index_by_package(found, [item.package for item in named], quiet=True)
     stranded_books: list[str] = []
     stranded = 0
     for item in named:
@@ -296,8 +301,11 @@ def _embed_in_shelf(
         return exits.NO_OUTPUT
 
     assignments = list(named) if named is not None else _named(args, policy)
-    index = index_annotations(found)
-    ambiguous = _ambiguous_names(assignments)
+    # Quiet after a conversion, which embedded from the same index and has
+    # already said which annotations it could not place.
+    index = index_by_package(
+        found, [item.package for item in assignments], quiet=converted
+    )
 
     changed = 0
     progress = progress_for(len(assignments), 1)
@@ -312,14 +320,6 @@ def _embed_in_shelf(
                 marker = progress.tick()
                 target = args.output_dir / item.filename if item.filename else None
                 if target is None or not target.is_file():
-                    continue
-                if item.package.name in ambiguous:
-                    logger.warning(
-                        "Skipped annotations for %s: more than one package "
-                        "directory has that name, so which book they belong to "
-                        "cannot be told apart.",
-                        printable(item.package.name),
-                    )
                     continue
                 mine = annotations_for_book(item.package.name, index)
                 if not mine:
@@ -350,31 +350,6 @@ def _embed_in_shelf(
     else:
         logger.info("Refreshed annotations in %d book(s); converted nothing.", changed)
     return exits.SUCCESS
-
-
-def _ambiguous_names(assignments: Sequence[Assignment]) -> set[str]:
-    """
-    Find package names that more than one directory answers to.
-
-    An annotation records its book's package *name*, not its path, because the
-    path runs through the reader's home directory. Two directories with the
-    same name in different places are therefore indistinguishable to
-    :func:`~epubconvert.collect.annotations.for_book`, and embedding by name gave each
-    of them the other's highlights. This is the only place that knows every
-    path, so it is the place that settles it.
-
-    :param assignments: Every book this run knows about.
-
-    :return: The names that are not unique.
-    """
-    seen: dict[str, Path] = {}
-    ambiguous: set[str] = set()
-    for item in assignments:
-        name = item.package.name
-        if name in seen and seen[name] != item.package:
-            ambiguous.add(name)
-        seen.setdefault(name, item.package)
-    return ambiguous
 
 
 def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:

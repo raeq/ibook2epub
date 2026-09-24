@@ -614,9 +614,11 @@ def for_book(
     the library directory, not Apple's database.
 
     Two package directories with the same name in different subdirectories
-    therefore look alike here. That ambiguity is settled by the caller, which
-    is the only place that knows every package path; see
-    :func:`~epubconvert.run.annotating._ambiguous_names`.
+    therefore look alike here, and this cannot tell which of them an
+    annotation belongs to. So the rule is that an index handed to it holds
+    no name more than one package answers to: such annotations go to
+    neither book. Only a caller that knows every package path can apply
+    that, which is why this module does not.
 
     :param source: The package directory name, e.g. ``Leviathan Wakes.epub``.
     :param index: What :func:`index_by_book` built.
