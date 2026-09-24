@@ -70,6 +70,12 @@ class TestVerifyAdviceRepairsTheBook:
     finds nothing, and the copy is skipped because its name is taken.
     """
 
+    @pytest.fixture(autouse=True)
+    def _no_home_shelf(self, tmp_path, monkeypatch):
+        # Advice that forgets -o writes to the default shelf: keep that one
+        # in the test's own directory, never the real ~/Books.
+        monkeypatch.setattr(cli, "DEFAULT_OUTPUT", tmp_path / "default shelf")
+
     @staticmethod
     def _damage_and_verify(
         library: Path,
@@ -109,10 +115,55 @@ class TestVerifyAdviceRepairsTheBook:
             if line.strip().startswith("ibook2epub ")
         ]
         capsys.readouterr()
-        run.main([*shlex.split(command)[1:], *base[:4], "-q"])
+        # Exactly as printed: the run is told nothing the advice left out.
+        run.main(shlex.split(command)[1:])
 
         assert "Exported 1 epub file(s)" in capsys.readouterr().out
         assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_the_printed_command_names_the_shelf_and_the_library(
+        self, tmp_path, capsys
+    ):
+        # It named neither: run as printed it looked for the library in its
+        # default home and exited 4, and given -s it wrote a fresh copy to
+        # ~/Books while the damaged file stayed where it was.
+        library = tmp_path / "my lib"
+        output_dir = tmp_path / "Kindle books"
+        self._book(library, "Dune.epub")
+        base, advice = self._damage_and_verify(library, output_dir, "Dune.epub", capsys)
+
+        [command] = [
+            line.strip()
+            for line in advice.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        assert f"-o {shlex.quote(str(output_dir))}" in command
+        assert f"-s {shlex.quote(str(library))}" in command
+        # --verify refuses the naming flags, so it cannot know them.
+        assert "--name-by/-p/--on-collision" in advice
+        run.main(shlex.split(command)[1:])
+        assert run.main([*base, "--verify", "-q"]) == 0
+
+    def test_a_discovered_library_is_left_to_discovery(
+        self, tmp_path, capsys, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        self._book(library, "Dune.epub")
+        monkeypatch.setattr("epubconvert.run.cli.discover_source", lambda: library)
+        output_dir = tmp_path / "out"
+        run.main(["-o", str(output_dir), "-q"])
+        (output_dir / "Dune.epub").write_bytes(b"CORRUPTED")
+        capsys.readouterr()
+        run.main(["-o", str(output_dir), "--verify", "-q"])
+
+        [command] = [
+            line.strip()
+            for line in capsys.readouterr().out.splitlines()
+            if line.strip().startswith("ibook2epub ")
+        ]
+        assert " -s " not in command
+        run.main(shlex.split(command)[1:])
+        assert run.main(["-o", str(output_dir), "--verify", "-q"]) == 0
 
     def test_a_book_copied_through_is_moved_aside_not_forced(
         self, tmp_path, output_dir, capsys

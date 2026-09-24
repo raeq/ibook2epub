@@ -298,11 +298,14 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
     # word, and does nothing about the ESC and CR that rewrite the line.
     if forced:
         print("Re-export each damaged book, for example:")
+        shelf = _shelf_flags(args)
         for name in forced[:3]:
             quoted = printable(shlex.quote(patterns[name] or ""))
-            print(f"  ibook2epub --match {quoted} --force")
+            print(f"  ibook2epub --match {quoted} --force {shelf}")
         if len(forced) > 3:
             print(f"  ...and {len(forced) - 3} more")
+        # --verify refuses them, so it cannot know what the shelf was named by.
+        print("  (add the --name-by/-p/--on-collision flags you export with)")
     if aside:
         print(
             f"Move each of these out of {args.output_dir} and rerun as before: "
@@ -313,6 +316,23 @@ def _advise_repair(args: argparse.Namespace, broken: Sequence[str]) -> None:
             print(f"  {printable(name)}")
         if len(aside) > 3:
             print(f"  ...and {len(aside) - 3} more")
+
+
+def _shelf_flags(args: argparse.Namespace) -> str:
+    """
+    Spell out the shelf and the library a repair command has to name.
+
+    The advice named neither. Run as printed, it looked for the library in
+    its default home and exited 4; given ``-s`` it wrote a fresh copy to
+    ``~/Books`` and left the damaged file where it was.
+
+    :param args: Parsed command line arguments.
+
+    :return: ``-s`` when the library was given rather than discovered, and
+        ``-o`` always, each quoted as one shell word and escaped for display.
+    """
+    flags = [] if args.source_auto else ["-s", str(args.source_dir)]
+    return printable(shlex.join([*flags, "-o", str(args.output_dir)]))
 
 
 def _repair_pattern(name: str, packages: Sequence[Path]) -> str | None:
