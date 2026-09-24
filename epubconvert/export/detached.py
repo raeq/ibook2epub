@@ -158,7 +158,7 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
     # refused like any other file that cannot be read back, before anything
     # is written. Searched for rather than encoded to find out: a bare
     # .encode() is what the surrogate-safe naming rule forbids.
-    if LONE_SURROGATE.search(json.dumps(loaded, ensure_ascii=False)):
+    if _holds_lone_surrogate(loaded):
         raise ContainerUnavailableError(
             f"{target.name} is already there and holds a lone surrogate, which "
             "is not valid Unicode; move it aside rather than have this "
@@ -214,6 +214,33 @@ MAX_EXPORT_BYTES = 256 * 1024 * 1024
 #: A surrogate code point on its own. A paired ``😀`` escape decodes
 #: to one astral character, so only an unpaired half is left to match.
 LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _holds_lone_surrogate(document: object) -> bool:
+    """
+    Report whether any key or string in a parsed document is a lone surrogate.
+
+    Searched where it lies rather than serialised back to one string first: an
+    export may be up to :data:`MAX_EXPORT_BYTES`, and a second full-size copy
+    only to search it doubled the peak. Iterative, so nesting depth costs
+    nothing on the stack.
+
+    :param document: What :func:`json.loads` returned.
+
+    :return: True if a surrogate code point stands on its own anywhere.
+    """
+    pending: list[object] = [document]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if LONE_SURROGATE.search(item):
+                return True
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False
 
 
 def vault_of(args: argparse.Namespace) -> Path | None:

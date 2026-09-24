@@ -122,7 +122,7 @@ BLOCK_OPENERS = re.compile(
 #: What stands in for a column of indentation. CommonMark counts only spaces
 #: and tabs as indentation, so a no-break space keeps an indented line where
 #: the reader put it without opening a code block.
-INDENT = " "
+INDENT = "\u00a0"
 
 #: CommonMark's tab stop, for turning a tab into columns.
 TAB_WIDTH = 4
