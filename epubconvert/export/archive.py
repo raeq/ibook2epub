@@ -309,6 +309,26 @@ def _set_level(member: ZipInfo, level: int) -> None:
     setattr(member, "_compresslevel", level)  # noqa: B010
 
 
+def _size_ahead(member: ZipInfo, size: int) -> None:
+    """
+    Tell zipfile how large a member will be before it is streamed in.
+
+    ``ZipFile.open(info, "w")`` chooses between 32-bit and ZIP64 headers from
+    ``info.file_size`` *before* a byte is written, and a fresh ZipInfo says 0.
+    So every member was given 32-bit headers, and the first one past 2 GiB --
+    a long audiobook track, a video -- raised RuntimeError when it closed: the
+    book could never be exported. The size recorded here is only that
+    decision's input; zipfile overwrites it with the count it actually wrote.
+
+    Below zipfile's threshold (5% under 2 GiB) the decision comes out as it
+    did with 0, so every ordinary book keeps its bytes.
+
+    :param member: The entry about to be opened for writing.
+    :param size: The source file's size in bytes.
+    """
+    member.file_size = size
+
+
 def level_of(member: ZipInfo) -> int | None:
     """
     Report the deflate level recorded on a member.
@@ -440,13 +460,11 @@ def zip_package(
                     # shelf, so a fresh export and a refresh agree.
                     logger.trace("Replaced by this run's annotations: %s", arcname)
                     continue
-                with (
-                    open_contained(path) as source,
-                    archive.open(
-                        entry(arcname, compression_for(arcname)), "w"
-                    ) as target,
-                ):
-                    shutil.copyfileobj(source, target)
+                with open_contained(path) as source:
+                    member = entry(arcname, compression_for(arcname))
+                    _size_ahead(member, os.fstat(source.fileno()).st_size)
+                    with archive.open(member, "w") as target:
+                        shutil.copyfileobj(source, target)
                 stored.add(arcname)
                 file_count += 1
 

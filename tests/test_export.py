@@ -10,8 +10,9 @@ import hashlib
 import json
 import os
 import stat
+import zipfile
 from pathlib import Path
-from zipfile import ZIP_STORED, ZipFile
+from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
@@ -92,6 +93,65 @@ class TestDeterministicArchives:
         with ZipFile(target) as archive:
             for info in archive.infolist():
                 assert (info.external_attr >> 16) & 0o044
+
+
+class TestAMemberPastTheZip64Limit:
+    """
+    A member over 2 GiB needs ZIP64 headers, and zipfile decides whether to
+    write them from the size it is told *before* the member is written. The
+    limit is lowered here rather than a 2 GiB file written.
+    """
+
+    LIMIT = 4096
+
+    @staticmethod
+    def _package(library: Path) -> Path:
+        package = make_package(library, "Big.epub")
+        (package / "OEBPS" / "video.mp4").write_bytes(os.urandom(3 * 4096))
+        return package
+
+    def test_a_member_past_the_limit_is_exported(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        # Regression: every member was opened from a ZipInfo whose file_size
+        # was 0, so zipfile wrote 32-bit headers and raised RuntimeError at
+        # the first member past 2 GiB. The book could never be exported.
+        monkeypatch.setattr(zipfile, "ZIP64_LIMIT", self.LIMIT)
+        package = self._package(tmp_path / "lib")
+        target = output_dir / "Big.epub"
+
+        zip_package(package, target)
+
+        with ZipFile(target) as archive:
+            assert (
+                archive.read("OEBPS/video.mp4")
+                == (package / "OEBPS" / "video.mp4").read_bytes()
+            )
+            assert archive.testzip() is None
+
+    def test_sizing_members_ahead_changes_no_byte_of_an_ordinary_book(
+        self, library, output_dir, monkeypatch
+    ):
+        # Re-exports must stay byte-identical across versions too, so the fix
+        # above may only change books that need ZIP64. The comparison is with
+        # every member opened unsized, which is how archives were written
+        # before it.
+        package = library / "Book One.epub"
+        sized = output_dir / "sized.epub"
+        zip_package(package, sized)
+
+        real_open = ZipFile.open
+
+        def unsized(self, name, mode="r", **kwargs):
+            if mode == "w" and isinstance(name, ZipInfo):
+                name.file_size = 0
+            return real_open(self, name, mode, **kwargs)
+
+        monkeypatch.setattr(ZipFile, "open", unsized)
+        before = output_dir / "unsized.epub"
+        zip_package(package, before)
+
+        assert sized.read_bytes() == before.read_bytes()
 
 
 class TestAPackageCarryingItsOwnAnnotations:
