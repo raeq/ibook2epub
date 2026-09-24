@@ -457,9 +457,33 @@ def _element(members: _Members, name: str) -> ElementTree.Element:
     if _declares_entities(data):
         raise ValidationError(f"{name} declares XML entities, which are not allowed")
     try:
-        return ElementTree.fromstring(data)
+        return parse_xml(data)
     except ElementTree.ParseError as exc:
         raise ValidationError(f"{name} is not valid XML: {exc}") from exc
+
+
+def parse_xml(data: bytes) -> ElementTree.Element:
+    """
+    Parse a document from a book, however it is refused.
+
+    A malformed document raises ParseError, but expat refuses a declared
+    multi-byte encoding -- Shift_JIS, EUC-JP, UTF-32 -- with ValueError, and
+    Python an encoding it does not know with LookupError. Callers caught
+    ParseError alone, so one Japanese book's ``encoding="Shift_JIS"`` ended the
+    whole run. Every reader of a book's XML parses through here, so there is
+    one exception to catch.
+
+    :param data: The raw bytes of the document.
+
+    :return: The root element.
+
+    :raises ElementTree.ParseError: If the document cannot be parsed, for
+        whatever reason.
+    """
+    try:
+        return ElementTree.fromstring(data)
+    except (ValueError, LookupError) as exc:
+        raise ElementTree.ParseError(f"unreadable encoding: {exc}") from exc
 
 
 def _declares_entities(data: bytes) -> bool:
@@ -494,7 +518,9 @@ def _declares_entities(data: bytes) -> bool:
     parser.EntityDeclHandler = lambda *_args: declared.append(1)
     try:
         parser.Parse(data, True)
-    except expat.ExpatError:
+    except (expat.ExpatError, ValueError, LookupError):
+        # An encoding expat refuses is malformed for this purpose too, and
+        # raised LookupError from here, ahead of the parse that reports it.
         return False
     return bool(declared)
 

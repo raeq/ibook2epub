@@ -49,6 +49,16 @@ def records_fixture():
         logger.removeHandler(handler)
 
 
+#: Encodings expat will not parse: multi-byte ones, which it refuses with
+#: ValueError, and a name Python does not know, which raises LookupError.
+UNPARSABLE_ENCODINGS = ["Shift_JIS", "EUC-JP", "UTF-32", "x-no-such-encoding"]
+
+
+def _declaring(encoding: str, body: str) -> bytes:
+    """An XML document whose declaration names *encoding*."""
+    return f'<?xml version="1.0" encoding="{encoding}"?>{body}'.encode("ascii")
+
+
 class TestDrmDetectionFailsClosed:
     """An encryption declaration we cannot interpret means protected."""
 
@@ -71,6 +81,35 @@ class TestDrmDetectionFailsClosed:
 
         assert protected
         assert reason
+
+    @pytest.mark.parametrize("encoding", UNPARSABLE_ENCODINGS)
+    def test_an_encoding_the_parser_refuses_is_protected(self, tmp_path, encoding):
+        # expat raises ValueError for a multi-byte encoding and LookupError for
+        # an unknown one, neither a ParseError, so the whole run died in
+        # planning over one Japanese book's encryption.xml.
+        package = make_package(tmp_path / "lib", "Declared.epub")
+        (package / "META-INF" / "encryption.xml").write_bytes(
+            _declaring(encoding, "<encryption/>")
+        )
+
+        protected, reason = source.has_drm(package)
+
+        assert protected
+        assert reason
+
+
+class TestAnEncodingThePackageReaderRefusesCostsOneBook:
+    @pytest.mark.parametrize("encoding", UNPARSABLE_ENCODINGS)
+    def test_a_container_in_such_an_encoding_is_unreadable(self, tmp_path, encoding):
+        # planning._metadata_of catches ValidationError and OSError, so under
+        # --name-by author-title the ValueError ended the run.
+        package = make_package(tmp_path / "lib", "Declared.epub")
+        (package / "META-INF" / "container.xml").write_bytes(
+            _declaring(encoding, "<container/>")
+        )
+
+        with pytest.raises(validate.ValidationError, match="not valid XML"):
+            validate.read_package_dir(package)
 
 
 class TestUntrustedXmlIsBounded:

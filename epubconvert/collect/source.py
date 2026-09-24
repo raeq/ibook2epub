@@ -22,6 +22,7 @@ from xml.etree import ElementTree
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained, resolve
 from ..utils.display import printable
+from .validate import parse_xml
 
 ENCRYPTION_PATH = "META-INF/encryption.xml"
 SINF_PATH = "META-INF/sinf.xml"
@@ -109,7 +110,10 @@ def encryption_algorithms(package: Path) -> set[str]:
         raise UnreadableEncryptionError(f"could not read {ENCRYPTION_PATH}") from exc
 
     try:
-        root = ElementTree.fromstring(data)
+        # Through parse_xml, which turns a refused encoding into a ParseError:
+        # expat raised ValueError or LookupError for one, and the whole run
+        # died in planning. It fails closed like any malformed document.
+        root = parse_xml(data)
     except ElementTree.ParseError as exc:
         raise UnreadableEncryptionError(f"{ENCRYPTION_PATH} is not valid XML") from exc
 
