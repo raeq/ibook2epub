@@ -80,12 +80,52 @@ SIDECAR_SUFFIX = ".md.new"
 #: concern and short enough to read.
 DIGEST_LENGTH = 16
 
-#: Characters that open a block element at the start of a line. A ``> `` prefix
-#: does not neutralise them: inside a blockquote they still open a heading, a
-#: list or a nested quote. An ordered list is numbered in ASCII digits
-#: (CommonMark 5.2); ``\d`` also matches digits in other scripts, which open
-#: nothing, so the backslash in front of them showed in the note.
-BLOCK_OPENERS = re.compile(r"^(\s*)(?:([#>+*-])|([0-9]+)([.)]))")
+#: What opens a block element at the start of a line. A ``> `` prefix does not
+#: neutralise it: inside a blockquote it still opens a heading, a list or a
+#: nested quote. A note's continuation lines have no prefix at all, and only
+#: ``# > + * -`` and list numbers were caught, so an unclosed fence or
+#: ``<!--`` in a note swallowed every highlight after it, ``===`` turned the
+#: line above into a heading, and a link reference definition vanished.
+#:
+#: Each opener is matched as CommonMark (4.1-4.9) and GFM tables define it, not
+#: by its first character, because every backslash shows in Obsidian's source
+#: view and an escaped ``[[`` is no longer a link: ``~~struck~~``,
+#: ``_emphasis_`` and ``<3`` open nothing and are left alone. A link label may
+#: continue onto the next line, so an unfinished one counts.
+#:
+#: Indentation is up to three spaces and nothing else. A fourth column, or a
+#: tab, opens an indented code block (``code``); a line led by any other white
+#: space opens nothing, and escaping behind one showed the backslash. An
+#: ordered list is numbered in ASCII digits (CommonMark 5.2); ``\d`` also
+#: matches digits in other scripts, which open nothing.
+BLOCK_OPENERS = re.compile(
+    r"""
+    ^(?:
+        (?P<code>(?:\ {0,3}\t|\ {4})[ \t]*)(?=[^ \t])   # indented code
+      | (?P<indent>\ {0,3})
+        (?:
+            (?P<mark>
+                [#>+*|-]                    # heading, quote, list, rule, table
+              | `(?=``) | ~(?=~~)            # code fence
+              | <(?=[A-Za-z/!?])            # HTML block, either marker included
+              | =(?==*[ \t]*$)              # setext underline
+              | _(?=(?:[ \t]*_){2}[ \t_]*$)  # thematic break
+              | \[(?=(?:[^\[\]\\]|\\.)*(?:\]:|\\?$))  # link reference definition
+            )
+          | (?P<number>[0-9]+)(?P<delimiter>[.)])  # ordered list
+        )
+    )
+    """,
+    re.VERBOSE,
+)
+
+#: What stands in for a column of indentation. CommonMark counts only spaces
+#: and tabs as indentation, so a no-break space keeps an indented line where
+#: the reader put it without opening a code block.
+INDENT = " "
+
+#: CommonMark's tab stop, for turning a tab into columns.
+TAB_WIDTH = 4
 
 #: Frontmatter keys this tool owns, which are safe to emit bare because no book
 #: supplies them.
@@ -115,8 +155,10 @@ def _escape(line: str) -> str:
 
 
 def _escape_opener(match: re.Match[str]) -> str:
-    """Escape the punctuation that makes a block opener: ``\\#``, ``1\\.``."""
-    indent, mark, number, delimiter = match.groups()
+    """Neutralise one block opener: ``\\#``, ``1\\.``, or indentation as text."""
+    code, indent, mark, number, delimiter = match.groups()
+    if code is not None:
+        return INDENT * len(code.expandtabs(TAB_WIDTH))
     if mark is not None:
         return f"{indent}\\{mark}"
     return f"{indent}{number}\\{delimiter}"

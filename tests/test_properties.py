@@ -125,7 +125,10 @@ def test_escaping_an_escaped_line_changes_nothing(line):
 
 
 @given(
-    st.sampled_from(["# ", "> ", "- ", "+ ", "* ", "1. ", "12) ", "  3. "]),
+    st.sampled_from(
+        ["# ", "> ", "- ", "+ ", "* ", "1. ", "12) ", "  3. "]
+        + ["```", "~~~", "<!--", "<div", "| ", "[x]: "]
+    ),
     st.text(),
 )
 def test_the_backslash_goes_on_the_openers_punctuation(opener, rest):
@@ -134,7 +137,25 @@ def test_the_backslash_goes_on_the_openers_punctuation(opener, rest):
     escaped = notes._escape(opener + rest)
 
     backslash = escaped.index("\\")
-    assert escaped[backslash + 1] in "#>+-*.)"
+    assert escaped[backslash + 1] in "#>+-*.)`~<|["
+
+
+@given(
+    st.text(alphabet=" \t", min_size=1),
+    st.text(alphabet=st.characters(exclude_characters="\n\r"), min_size=1).filter(
+        lambda s: s[0] not in " \t"
+    ),
+)
+def test_indentation_that_opens_code_is_kept_as_columns_of_text(lead, rest):
+    # Four columns open an indented code block; a no-break space is text, so
+    # the line stays where the reader put it and opens nothing.
+    columns = len(lead.expandtabs(notes.TAB_WIDTH))
+    escaped = notes._escape(lead + rest)
+
+    if columns >= 4:
+        assert escaped == notes.INDENT * columns + rest
+    else:
+        assert escaped.startswith(lead)
 
 
 # ------------------------------------------------------------------------ ISBN

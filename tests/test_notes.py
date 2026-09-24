@@ -285,6 +285,82 @@ class TestEscaping:
     def test_digits_that_open_no_list_are_left_alone(self, line):
         assert notes._escape(line) == line
 
+    @pytest.mark.parametrize(
+        ("line", "escaped"),
+        [
+            pytest.param("```", "\\```", id="backtick fence"),
+            pytest.param("~~~ python", "\\~~~ python", id="tilde fence"),
+            pytest.param("<!-- aside", "\\<!-- aside", id="html comment"),
+            pytest.param("<pre>", "\\<pre>", id="html block"),
+            pytest.param("===", "\\===", id="setext underline"),
+            pytest.param("___", "\\___", id="thematic break"),
+            pytest.param(
+                "[x]: https://example.com",
+                "\\[x]: https://example.com",
+                id="link reference definition",
+            ),
+            pytest.param(
+                "[an unfinished label",
+                "\\[an unfinished label",
+                id="label continued on the next line",
+            ),
+            pytest.param("| a | b |", "\\| a | b |", id="table row"),
+            pytest.param("  ```", "  \\```", id="indented fence"),
+        ],
+    )
+    def test_a_line_that_would_swallow_what_follows_is_escaped(self, line, escaped):
+        # Only # > + * - and list numbers were escaped. A note's continuation
+        # lines sit at the top level, so an unclosed fence or "<!--" hid every
+        # highlight after it, "===" turned the line above into a heading, and
+        # a link reference definition vanished from the note.
+        assert notes._escape(line) == escaped
+
+    @pytest.mark.parametrize(
+        ("line", "escaped"),
+        [
+            ("    code", "\u00a0" * 4 + "code"),
+            ("\tcode", "\u00a0" * 4 + "code"),
+            ("  \t  code", "\u00a0" * 6 + "code"),
+            ("        # deep", "\u00a0" * 8 + "# deep"),
+        ],
+    )
+    def test_an_indented_line_keeps_its_indent_as_text(self, line, escaped):
+        # Four columns of indentation open a code block. CommonMark counts
+        # only spaces and tabs as indentation, so a no-break space keeps the
+        # line where the reader put it without opening anything.
+        assert notes._escape(line) == escaped
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "``inline code`` first",
+            "~~struck~~ through",
+            "<3 this chapter",
+            "= a sum",
+            "_emphasis_ first",
+            "[[Another note]] links here",
+            "[a link](https://example.com) first",
+            "   three spaces",
+            "    ",
+            "\u3000# ideographic space",
+        ],
+    )
+    def test_a_line_that_opens_nothing_is_left_alone(self, line):
+        # Every backslash shows in Obsidian's source view, and an escaped
+        # "[[" is no longer a link. Only a line that opens a block is touched.
+        assert notes._escape(line) == line
+
+    def test_a_note_that_opens_a_fence_leaves_the_next_highlight_quoted(self):
+        body = notes.body(
+            [
+                _annotation(id="a", note="mine\n```\nunclosed"),
+                _annotation(id="b", text="the next highlight"),
+            ]
+        )
+
+        assert "\n```" not in body
+        assert "> the next highlight" in body
+
     def test_the_note_reader_accepts_trailing_space_after_its_marker(self):
         # The pattern holds the white space an editor may leave, so the reader
         # and the escaper agree on what a marker is without each stripping it.
