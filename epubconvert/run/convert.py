@@ -616,13 +616,15 @@ def _read_lock_holder(handle: TextIO) -> str:
     :param handle: The open lock file.
 
     :return: A short description, or a fallback when nothing is readable.
+        Escaped for display: it is read back from the output directory, so
+        anyone who can write there decides what it says.
     """
     try:
         handle.seek(0)
         details = handle.read().strip()
     except OSError:  # pragma: no cover - unreadable lock file
         return "holder unknown"
-    return details or "holder unknown"
+    return printable(details) if details else "holder unknown"
 
 
 def cap_exports(

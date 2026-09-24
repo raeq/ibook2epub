@@ -353,6 +353,23 @@ class TestLockDiagnostics:
 
         assert f"pid={os.getpid()}" in str(excinfo.value)
 
+    def test_the_holder_is_quoted_escaped(self, output_dir):
+        # Read back from the output directory, so anyone who can write there
+        # decides what a refused run prints: it was printed raw.
+        pytest.importorskip("fcntl", reason="advisory locking needs fcntl")
+        with convert.output_lock(output_dir):
+            (output_dir / convert.LOCK_NAME).write_text(
+                "pid=\x1b[2Kforged host=\x9b31mX\n", encoding="utf-8"
+            )
+            with (
+                pytest.raises(convert.OutputLockedError) as excinfo,
+                convert.output_lock(output_dir),
+            ):
+                pass
+
+        assert "forged" in str(excinfo.value)
+        assert not {"\x1b", "\x9b"} & set(str(excinfo.value))
+
     def test_a_stale_lock_file_does_not_block(self, output_dir):
         # flock is released by the kernel when the holder dies, so a lock file
         # left behind by a killed run is inert. No PID liveness check needed.
