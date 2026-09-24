@@ -15,6 +15,33 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A note written before notes were tagged goes only to the one book holding
+  every highlight in it: two editions sharing a passage no longer hand one
+  edition's note to the other, and a note two books match equally goes to
+  neither (it is reported, or numbered past under `--on-collision suffix`).
+
+- A note nothing claims is no longer adopted by whichever namesake comes
+  first. Notes record a digest of their book's file (`src=`), so a book
+  removed from Books and added again keeps its note even beside a namesake,
+  and under `--on-collision suffix` takes back its numbered note instead of
+  starting a fresh one.
+
+- A note whose frontmatter identifier Obsidian or a YAML linter rewrote
+  (unquoted, single-quoted, escaped, or another ISBN/UUID spelling) is no
+  longer taken for another edition's note.
+
+- A book's tagged note stays its own on runs where the book has no
+  highlights, so a namesake's outcome no longer depends on that.
+
+- When a book's note name changes (after adopting `--name-by author-title`,
+  say), its note is moved to the new name with everything the reader wrote,
+  and only onto a name that is still free; if it cannot be moved the run names
+  the old file and exits 1 instead of starting a second note.
+
+- A re-imported book whose note was adopted under different letter case has
+  its highlights written into that note, and an older note whose `# `/`## `
+  heading an editor trimmed is still recognised.
+
 - A book whose container, package document or encryption.xml declares a DTD
   internal subset is refused: an `<!ATTLIST>` default was copied onto every
   element it named, so a 1.6 KB book reached 2.9 GB and `--verify` and
