@@ -359,7 +359,6 @@ def kept_numbers(
     """
     index = numbered_names(shelf, policy)
     sharing = Counter(filesystem_key(policy.identity(book.base)) for book in books)
-    wanted = set(sharing)
     directory = getattr(shelf, "directory", None)
     kept: dict[int, str] = {}
 
@@ -368,7 +367,7 @@ def kept_numbers(
             (number, found)
             for number, found in index.get(filesystem_key(policy.identity(name)), [])
             if found not in kept.values()
-            and (number == 1 or filesystem_key(policy.identity(found)) not in wanted)
+            and (number == 1 or filesystem_key(policy.identity(found)) not in sharing)
         )
 
     for position, book in enumerate(books):
@@ -381,26 +380,49 @@ def kept_numbers(
             all(n == 1 for n, _ in numbers) and not marked_forms and not shared
         ):
             continue
-        identifier = book.identifier
-        unknown = identifier is None and book.unread in unopened
-        if identifier is None and book.unread and not unknown:
-            identifier = source_identifier(book.unread)
-        if identifier is not None:
-            found = [
-                name
-                for _, name in [*numbers, *marked_forms]
-                if identifier_on_shelf(directory / name) == identifier
-            ]
-            if found:
-                kept[position] = found[0]
-        elif (
-            book.alone
-            and len(numbers) == 1
-            and numbers[0][0] > 1
-            and (unknown or identifier_on_shelf(directory / numbers[0][1]) is None)
-        ):
-            kept[position] = numbers[0][1]
+        keeps = _keeps(book, (numbers, marked_forms), directory, unopened)
+        if keeps is not None:
+            kept[position] = keeps
     return kept
+
+
+def _keeps(
+    book: Wanting,
+    forms: tuple[list[tuple[int, str]], list[tuple[int, str]]],
+    directory: Path,
+    unopened: Container[Path],
+) -> str | None:
+    """
+    Name the file on the shelf that *book* keeps, of those its name has.
+
+    :param book: The package in question.
+    :param forms: The numbered files of its name and those of its marked
+        name, each lowest first.
+    :param directory: The shelf.
+    :param unopened: The books not to open for their identifier.
+
+    :return: The file it keeps, or None.
+    """
+    numbers, marked_forms = forms
+    identifier = book.identifier
+    unknown = identifier is None and book.unread in unopened
+    if identifier is None and book.unread and not unknown:
+        identifier = source_identifier(book.unread)
+    if identifier is not None:
+        found = [
+            name
+            for _, name in [*numbers, *marked_forms]
+            if identifier_on_shelf(directory / name) == identifier
+        ]
+        return found[0] if found else None
+    if (
+        book.alone
+        and len(numbers) == 1
+        and numbers[0][0] > 1
+        and (unknown or identifier_on_shelf(directory / numbers[0][1]) is None)
+    ):
+        return numbers[0][1]
+    return None
 
 
 def claim_order(candidates: Sequence[str], shelf: Collection[str]) -> list[int]:
