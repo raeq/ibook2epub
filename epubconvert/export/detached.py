@@ -32,7 +32,7 @@ from ..collect.library import collect as collect_library
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.contained import is_free
-from ..utils.display import printable
+from ..utils.display import printable, printable_json
 from ..utils.policy import Assignment, NamingPolicy
 from . import catalogue, notes
 from .archive import write_atomically
@@ -84,10 +84,10 @@ def _write_detached(found: list[dict[str, Any]], destination: str) -> int:
     :return: A process exit code.
     """
     if destination == STDOUT:
-        _emit(
-            json.dumps(build_annotation_document(found), indent=2, ensure_ascii=False)
-            + "\n"
-        )
+        # Escaped for the terminal, decoding to the same document; a file
+        # keeps the exact characters. A C1 CSI in a highlight steered it.
+        document = build_annotation_document(found)
+        _emit(printable_json(json.dumps(document, indent=2, ensure_ascii=False)) + "\n")
         return exits.SUCCESS
 
     target = Path(destination)
@@ -388,7 +388,9 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
         found, args.library_format, unknown_shelf=args.unknown_shelf
     )
     if target is None:
-        _emit(text)
+        # The CSV escapes as it renders; the JSON is escaped here, for the
+        # terminal only, as the annotation export is.
+        _emit(printable_json(text) if args.library_format == "json" else text)
         return exits.SUCCESS
     try:
         write_atomically(target, text)

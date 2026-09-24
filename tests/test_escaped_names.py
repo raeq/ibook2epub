@@ -14,17 +14,18 @@ is skipped. Each goes through ``display.printable`` on its way out.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import json
 import logging
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
 import pytest
 
-from epubconvert.collect import annotations, validate
+from epubconvert.collect import annotations, library, validate
 from epubconvert.export import inspect_output
 from epubconvert.run import run
 from tests.conftest import CONTAINER, make_metadata_package
-from tests.test_annotations import highlight, make_databases
+from tests.test_annotations import highlight, library_row, make_databases
 
 #: What a hostile book hides in its names: erase the line, return to its start.
 ERASE = "\x1b[2K\r"
@@ -268,3 +269,67 @@ class TestASkippedAnnotationIsNamedEscaped:
 
         assert "Skipped an unreadable annotation" in caplog.text
         _assert_escaped(caplog.text)
+
+
+#: A C1 control sequence: CSI, then "clear the screen". json.dumps escapes C0
+#: but, with ensure_ascii=False, writes C1 through as it is.
+CLEAR = "\x9b2J"
+
+
+class TestJsonOnStandardOutputIsPrintable:
+    """
+    The CSV route escaped a hostile title and the JSON routes to standard
+    output did not, so ``-ao -`` and ``--library-export - --library-format
+    json`` put a raw CSI on the terminal. A file keeps the exact bytes: only
+    what goes to the terminal is escaped, and it decodes to the same thing.
+    """
+
+    def _databases(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        make_databases(
+            tmp_path / "container",
+            rows=[highlight(text=f"Beware{CLEAR}")],
+            books=[library_row(title=f"Evil{CLEAR}Title", path="/x/Evil.epub")],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+        monkeypatch.setattr(
+            "epubconvert.export.detached.collect_library",
+            lambda **_: library.collect(tmp_path / "container"),
+        )
+
+    def test_the_annotation_export_is_escaped_and_decodes_the_same(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._databases(monkeypatch, tmp_path)
+
+        code = run.main(["-s", str(tmp_path), "-ao", "-", "-q"])
+
+        out = capsys.readouterr().out
+        assert code == 0
+        _assert_escaped(out)
+        assert json.loads(out)["annotations"][0]["text"] == f"Beware{CLEAR}"
+
+    def test_the_library_export_is_escaped_and_decodes_the_same(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._databases(monkeypatch, tmp_path)
+
+        code = run.main(
+            ["-s", str(tmp_path), "--library-export", "-"]
+            + ["--library-format", "json", "-q"]
+        )
+
+        out = capsys.readouterr().out
+        assert code == 0
+        _assert_escaped(out)
+        assert json.loads(out)["books"][0]["title"] == f"Evil{CLEAR}Title"
+
+    def test_a_file_keeps_the_exact_characters(self, tmp_path, monkeypatch):
+        self._databases(monkeypatch, tmp_path)
+        target = tmp_path / "highlights.json"
+
+        run.main(["-s", str(tmp_path), "-ao", str(target), "-q"])
+
+        assert f"Beware{CLEAR}" in target.read_text(encoding="utf-8")
