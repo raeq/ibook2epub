@@ -126,21 +126,36 @@ def encryption_algorithms(package: Path) -> set[str]:
     # Counting blocks and algorithms as two flat totals only caught the case
     # where *no* block anywhere named one: a book with one font-obfuscation
     # block and one silent block passed as unprotected.
+    #
+    # One pass over the tree. Each block used to search its own subtree, so
+    # nested blocks cost the square of their depth: 8,000 levels took 2.6s,
+    # and a file at MAX_ENCRYPTION_BYTES about 50s, per book on every run. A
+    # method still counts for every block around it, as it did then: it marks
+    # the innermost open block, and a block that closes named marks the one
+    # enclosing it.
     algorithms: set[str] = set()
-    for block in root.iter():
-        if block.tag.rpartition("}")[2] != ENCRYPTED_DATA:
+    named: list[bool] = []
+    # An element to enter, or None to close the innermost open block.
+    pending: list[ElementTree.Element | None] = [root]
+    while pending:
+        element = pending.pop()
+        if element is None:
+            if not named.pop():
+                raise UnreadableEncryptionError(
+                    f"{ENCRYPTION_PATH} declares encryption but names no algorithm"
+                )
+            if named:
+                named[-1] = True
             continue
-        named = {
-            method.get("Algorithm")
-            for method in block.iter()
-            if method.tag.rpartition("}")[2] == ENCRYPTION_METHOD
-            and method.get("Algorithm")
-        }
-        if not named:
-            raise UnreadableEncryptionError(
-                f"{ENCRYPTION_PATH} declares encryption but names no algorithm"
-            )
-        algorithms |= {name for name in named if name}
+        local = element.tag.rpartition("}")[2]
+        algorithm = element.get("Algorithm")
+        if local == ENCRYPTION_METHOD and algorithm and named:
+            algorithms.add(algorithm)
+            named[-1] = True
+        if local == ENCRYPTED_DATA:
+            named.append(False)
+            pending.append(None)
+        pending.extend(reversed(element))
     return algorithms
 
 

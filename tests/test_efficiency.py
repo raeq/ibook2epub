@@ -14,6 +14,7 @@ really be written.
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
@@ -22,6 +23,11 @@ from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
 from epubconvert.run import convert, planning, run
 from tests.conftest import make_metadata_package, make_package
+
+#: Font obfuscation, which is not protection, and a key-transport algorithm,
+#: which is.
+FONTS = "http://www.idpf.org/2008/embedding"
+RSA = "http://www.w3.org/2001/04/xmlenc#rsa-1_5"
 
 
 class TestCompressionLevelIsActuallyApplied:
@@ -290,3 +296,65 @@ class TestThePackageDocumentIsReadOnce:
         )
 
         assert "orphan" not in capsys.readouterr().out
+
+
+def _nested_blocks(levels: int, algorithm: str = FONTS) -> bytes:
+    """An encryption.xml of EncryptedData blocks nested *levels* deep."""
+    return (
+        b"<encryption>"
+        + b"<EncryptedData>" * levels
+        + f'<EncryptionMethod Algorithm="{algorithm}"/>'.encode("ascii")
+        + b"</EncryptedData>" * levels
+        + b"</encryption>"
+    )
+
+
+class TestEncryptionIsReadInOnePass:
+    """
+    Every EncryptedData block searched its whole subtree for a method, so
+    nested blocks cost the square of their depth: 8,000 levels took 2.6s, and
+    a file at the 1 MiB cap about 50s -- per book, on every run, before the
+    book was even judged.
+    """
+
+    def test_deep_nesting_costs_linear_time(self, tmp_path):
+        package = tmp_path / "Nested.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "encryption.xml").write_bytes(_nested_blocks(12000))
+
+        started = time.perf_counter()
+        found = source.encryption_algorithms(package)
+        elapsed = time.perf_counter() - started
+
+        assert found == {FONTS}
+        # Linear is a few milliseconds; quadratic was seconds here.
+        assert elapsed < 1.0
+
+    def test_a_method_deeper_in_a_block_still_names_its_algorithm(self, tmp_path):
+        # The walk changed, not the rule: a method anywhere inside a block
+        # still counts for it, so a protecting algorithm cannot hide below a
+        # font-obfuscation one.
+        package = tmp_path / "Deep.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "encryption.xml").write_bytes(
+            b"<encryption><EncryptedData>"
+            + f'<EncryptionMethod Algorithm="{FONTS}"/>'.encode("ascii")
+            + b"<KeyInfo><EncryptedKey>"
+            + f'<EncryptionMethod Algorithm="{RSA}"/>'.encode("ascii")
+            + b"</EncryptedKey></KeyInfo></EncryptedData></encryption>"
+        )
+
+        assert source.has_drm(package)[0]
+
+    def test_a_nested_block_naming_nothing_still_fails_closed(self, tmp_path):
+        package = tmp_path / "Silent.epub"
+        (package / "META-INF").mkdir(parents=True)
+        (package / "META-INF" / "encryption.xml").write_bytes(
+            b"<encryption><EncryptedData>"
+            + f'<EncryptionMethod Algorithm="{FONTS}"/>'.encode("ascii")
+            + b"</EncryptedData><EncryptedData><EncryptedData/>"
+            + f'<EncryptionMethod Algorithm="{FONTS}"/>'.encode("ascii")
+            + b"</EncryptedData></encryption>"
+        )
+
+        assert source.has_drm(package)[0]
