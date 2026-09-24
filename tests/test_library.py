@@ -724,6 +724,39 @@ class TestItFailsSafely:
         assert len(found) == 1
         assert "year" not in found[0]
 
+    def test_text_that_is_not_utf8_costs_that_value_not_the_catalogue(self, tmp_path):
+        # SQLite stores whatever bytes it is handed as TEXT, and sqlite3
+        # decoded them strictly: one such value raised mid-fetch, and the
+        # whole query -- every book -- was reported as an unreadable database.
+        make_databases(tmp_path, books=[library_row(), library_row(asset="ASSET2")])
+        database = next(tmp_path.rglob("BKLibrary*.sqlite"))
+        with open_for_writing(database) as connection:
+            connection.execute(
+                "UPDATE ZBKLIBRARYASSET SET ZAUTHOR = CAST(x'4cff' AS TEXT)"
+                " WHERE ZASSETID = 'ASSET2'"
+            )
+
+        found = library.collect(tmp_path)
+
+        assert sorted(book["title"] for book in found) == ["Leviathan Wakes"] * 2
+        assert {book.get("author") for book in found} == {
+            "James S. A. Corey",
+            "L\ufffd",
+        }
+
+    def test_text_that_is_not_utf8_costs_that_value_not_the_highlights(self, tmp_path):
+        make_databases(tmp_path, rows=[highlight(), highlight(uuid="U2")])
+        database = next(tmp_path.rglob("AEAnnotation*.sqlite"))
+        with open_for_writing(database) as connection:
+            connection.execute(
+                "UPDATE ZAEANNOTATION SET ZANNOTATIONNOTE = CAST(x'ff' AS TEXT)"
+                " WHERE ZANNOTATIONUUID = 'U2'"
+            )
+
+        found = annotations.collect(tmp_path)
+
+        assert sorted(item["id"] for item in found) == ["U1", "U2"]
+
     def test_reading_does_not_write_to_the_database(self, tmp_path):
         make_databases(tmp_path)
         database = next(tmp_path.rglob("BKLibrary*.sqlite"))

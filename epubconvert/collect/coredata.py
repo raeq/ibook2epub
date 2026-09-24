@@ -184,6 +184,22 @@ def newest(directory: Path, prefix: str) -> Path | None:
     return max(dated, key=lambda pair: pair[0])[1]
 
 
+def _lenient_text(value: bytes) -> str:
+    """
+    Decode a TEXT value, replacing what is not UTF-8 rather than refusing it.
+
+    SQLite stores whatever bytes it is handed as TEXT, and sqlite3's own
+    decoding is strict. One such value raised mid-fetch, which failed the
+    whole query: every highlight, or every book in the catalogue, lost to a
+    single malformed note. Replaced here, it costs at most that value.
+
+    :param value: The stored bytes.
+
+    :return: The text, with U+FFFD for each byte that is not UTF-8.
+    """
+    return value.decode("utf-8", errors="replace")
+
+
 def rows(database: Path, query: str) -> list[sqlite3.Row]:
     """
     Run one query against a database, without writing to it.
@@ -208,6 +224,7 @@ def rows(database: Path, query: str) -> list[sqlite3.Row]:
         raise ContainerUnavailableError(f"could not open {database.name}") from exc
     try:
         connection.row_factory = sqlite3.Row
+        connection.text_factory = _lenient_text
         return list(connection.execute(query))
     except sqlite3.Error as exc:
         # A schema change in a Books update lands here rather than as a

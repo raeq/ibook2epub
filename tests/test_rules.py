@@ -322,6 +322,11 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
                     continue
                 if path.name == "naming.py" and _inside(tree, node, "truncate_bytes"):
                     continue
+                # Not a name: the text Apple's databases hold, decoded with
+                # errors="replace", so it cannot raise the way this rule is
+                # about. Named here so it is the one other decode, not a gap.
+                if path.name == "coredata.py" and _inside(tree, node, "_lenient_text"):
+                    continue
                 offenders.append(f"{path}:{node.lineno}")
 
         assert offenders == [], f"decode through truncate_bytes: {offenders}"
