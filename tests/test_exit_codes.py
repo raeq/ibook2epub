@@ -152,6 +152,20 @@ class TestEachFailureHasItsOwnCode:
 
         assert code == exits.NO_OUTPUT
 
+    @pytest.mark.parametrize("name", ["out", "already using"])
+    def test_an_unopenable_lock_file_is_not_a_held_lock(self, tmp_path, name):
+        # The code was chosen by looking for "already using" in the message,
+        # and the message quotes the output path: a directory named for the
+        # phrase turned "fix the path" into "retry in an hour".
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        output_dir = tmp_path / name
+        (output_dir / convert.LOCK_NAME).mkdir(parents=True)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        assert code == exits.NO_OUTPUT
+
 
 @pytest.fixture(name="refused")
 def _refused(tmp_path):

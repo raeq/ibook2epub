@@ -927,7 +927,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report, remaining, named = _run_export(args, policy, found)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
-        return exits.LOCKED if "already using" in str(exc) else exits.NO_OUTPUT
+        return exc.exit_code
 
     # After the books are on the shelf, so annotations reach them by the same
     # path --annotations-refresh uses. A dry run writes nothing, here included.

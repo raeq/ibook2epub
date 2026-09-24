@@ -101,7 +101,30 @@ class OutputLockedError(RuntimeError):
     Two causes: another run already holds the lock, or the lock file itself
     could not be opened -- a read-only output directory gets past ``main``'s
     ``mkdir(exist_ok=True)`` and fails here.
+
+    Which one is carried as :attr:`contended` rather than left in the prose.
+    ``main`` used to look for "already using" in the message, which quotes the
+    output path, so a directory named for the phrase turned an unopenable lock
+    file into a held lock and "fix the path" into "retry later".
     """
+
+    def __init__(self, message: str, *, contended: bool) -> None:
+        super().__init__(message)
+        #: True when another run holds the lock; False when this one could not
+        #: open the lock file at all.
+        self.contended = contended
+
+    @property
+    def exit_code(self) -> int:
+        """
+        What a run ends with when this is why it could not proceed.
+
+        Carried by the error, as
+        :class:`~epubconvert.collect.coredata.ContainerUnavailableError`
+        carries its own, so every route that takes the lock maps it the same
+        way.
+        """
+        return exits.LOCKED if self.contended else exits.NO_OUTPUT
 
 
 @dataclass
@@ -679,9 +702,10 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
             handle.seek(0)
     except OSError as exc:
         # A read-only output directory got past main's mkdir(exist_ok=True) and
-        # died here with a raw traceback. main already turns this into a clean
-        # exit 5.
-        raise OutputLockedError(f"cannot lock {output_dir}: {exc}") from exc
+        # died here with a raw traceback. main turns this into a clean exit 5.
+        raise OutputLockedError(
+            f"cannot lock {output_dir}: {exc}", contended=False
+        ) from exc
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -702,7 +726,8 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
                 return
             raise OutputLockedError(
                 f"another ibook2epub run is already using {output_dir} "
-                f"({_read_lock_holder(handle)})"
+                f"({_read_lock_holder(handle)})",
+                contended=True,
             ) from exc
 
         # The PID is recorded for diagnostics only. It is deliberately NOT
