@@ -355,6 +355,11 @@ class TestAReportIgnoresNoTypedFlag:
             ["--min-free", "1"],
             ["--no-copy-through"],
             ["--no-shuffle"],
+            # It names nothing: it opens whatever *.epub the shelf holds.
+            ["-p"],
+            ["--portable-names", "romanize"],
+            ["--name-by", "author-title"],
+            ["--on-collision", "suffix"],
         ],
     )
     def test_verify_refuses_what_it_never_consults(self, other):

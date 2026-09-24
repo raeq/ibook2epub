@@ -73,12 +73,20 @@ REFRESH_WRITES = frozenset({"min_free"})
 #: rather than honoured: its help, and every other use of it, names books in
 #: the library to *convert*, and under a metadata naming policy an archive on
 #: the shelf is not called what its package is. ``--force`` re-exports, and
-#: this converts nothing.
+#: this converts nothing. Nor does it name anything: it opens whatever
+#: ``*.epub`` the shelf holds, so the naming flags went by unused, and
+#: ``--portable-names romanize`` without its extra even stopped a verify
+#: with exit 6 over a policy it never applied.
 VERIFY_IGNORES = tuple(
     (held, spelled)
     for held, spelled in CONVERSION_ONLY
     if held not in ("list_only", "verify", "epubcheck", "validate")
-) + (("force", "--force"),)
+) + (
+    ("force", "--force"),
+    ("portable_names", "--portable-names"),
+    ("name_by", "--name-by"),
+    ("on_collision", "--on-collision"),
+)
 
 #: What ``--list`` never consults. It renders the plan, so what shapes a
 #: book's status -- ``--match``, ``--force``, ``--refresh``,

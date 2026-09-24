@@ -26,8 +26,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   where a book's note should go, so that book's highlights were saved
   nowhere; the file is still left alone.
 
-- `--verify` refuses the conversion flags it never consults, `--match` and
-  `--force` included, and `--list` refuses `--covers`, `--validate`,
+- `--verify` refuses the conversion and naming flags it never consults --
+  `--match`, `--force`, `--portable-names`, `--name-by`, `--on-collision` --
+  and `--list` refuses `--covers`, `--validate`,
   `--epubcheck`, `-m`, `--min-free` and `--no-shuffle`.
 
 - The README no longer says every run exits 8 without Full Disk Access:
