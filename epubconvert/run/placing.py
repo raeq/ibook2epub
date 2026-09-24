@@ -12,7 +12,7 @@ marked name.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -129,6 +129,39 @@ def _foreign_to(
     if clash is None:
         return None
     return foreign(clash.path, clash.identity, identity, identifier)
+
+
+def settled(
+    assigned: Sequence[Assignment], output_dir: Path, policy: NamingPolicy
+) -> list[Assignment]:
+    """
+    Rename each assignment to where :func:`place` puts it.
+
+    For what reads a book's name rather than its archive: a vault note is named
+    after the book's file on the shelf, and a file copied through is written
+    where the plan places it. A note named from the assignment followed a book
+    that had moved on to its marked name back to the plain one -- another
+    book's note.
+
+    :param assigned: Names, in the order the plan gives them.
+    :param output_dir: Directory holding exported files.
+    :param policy: The naming policy the names came from.
+
+    :return: Each assignment, renamed, or with no name and the reason.
+    """
+    shelf = read_shelf(output_dir, policy, assigned)
+    result = []
+    for item in assigned:
+        filename, _clash, reason = place(item, shelf)
+        if filename == item.filename:
+            result.append(item)
+        elif filename:
+            result.append(
+                replace(item, filename=filename, identity=policy.identity(filename))
+            )
+        else:
+            result.append(replace(item, filename="", reason=reason))
+    return result
 
 
 def placed(

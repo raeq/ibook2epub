@@ -67,9 +67,12 @@ from .convert import (
     output_lock,
     sweep_partials,
 )
-from .copying import CopyPlan, copy_through_all, plan_copies
+from .copying import CopyPlan, copy_through_all, placed_copies, plan_copies
+from .copynames import Names, claim_copies
+from .placing import settled
 from .planning import (
-    CollisionMode,
+    COLLISION,
+    Decision,
     PlanOptions,
     assign_names,
     find_orphans,
@@ -115,12 +118,13 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
 
 
 def _shared_names(
+    args: argparse.Namespace,
     discovered: Sequence[Path],
     policy: NamingPolicy,
-    on_collision: CollisionMode,
-) -> list[Assignment]:
+    copies: CopyPlan,
+) -> tuple[Names, CopyPlan]:
     """
-    Name every package in the library once, for every caller.
+    Name every package and every file copied through once, for every caller.
 
     Always the whole library, never the subset ``--match`` selected. Naming
     the subset gave a matched book a different name from the one a full run
@@ -133,13 +137,32 @@ def _shared_names(
     metadata policy, and planning and orphan detection each named their own
     set: on a real 2,805-book library, 5,610 reads for one listing.
 
+    The copies take their names in the same pass, after the packages
+    (:func:`~epubconvert.run.copynames.claim_copies`), and are placed on the
+    shelf as the plan places a book, so the copy writes where the plan and
+    the orphan check expect it.
+
+    :param args: Parsed command line arguments.
     :param discovered: Every package in the library.
     :param policy: The naming policy in force.
-    :param on_collision: The collision mode in force.
+    :param copies: The files to take along, with the names they want.
 
-    :return: The assignment of every package in the library.
+    :return: Every name, and the copy plan under the names it is written to.
     """
-    return assign_names(discovered, policy, on_collision)
+    names = claim_copies(
+        assign_names(discovered, policy, args.on_collision),
+        copies.named,
+        policy,
+        args.on_collision,
+        output_dir=args.output_dir,
+        unopened=copies.evicted,
+    )
+    if not names.copies:
+        return names, copies
+    placed = settled([*names.packages, *names.copies], args.output_dir, policy)[
+        len(names.packages) :
+    ]
+    return Names(names.packages, placed), placed_copies(copies, placed)
 
 
 def _plan_copies(args: argparse.Namespace, policy: NamingPolicy) -> CopyPlan:
@@ -181,12 +204,16 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     :return: A process exit code.
     """
     discovered = collect_package_dirs(args.source_dir)
-    copies = _plan_copies(args, policy)
     packages = filter_packages(discovered, args.match)
-    shared = _shared_names(discovered, policy, args.on_collision)
+    shared, copies = _shared_names(args, discovered, policy, _plan_copies(args, policy))
+    everything = [*shared.packages, *shared.copies]
     decisions = plan_exports(
-        packages, args.output_dir, policy, _plan_options(args), assigned=shared
+        packages, args.output_dir, policy, _plan_options(args), assigned=everything
     )
+    # The copies that lost their name, as the run reports them.
+    decisions += [
+        Decision(source, COLLISION, reason=reason) for source, reason in copies.lost
+    ]
     # Orphans come from the whole library, not this run's filtered subset:
     # --match narrows a run, not the shelf. Files copied through claim their
     # names too, or the shelf would report what this run just put there.
@@ -196,12 +223,11 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=copies.claimed,
-            assigned=shared,
+            assigned=everything,
         )
     )
     print(render_listing(decisions + orphans, args.as_json))
-    ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
+    ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
     if ignored and not args.as_json:
         print(f"{ignored} ignored (not books)")
     return 0
@@ -344,19 +370,19 @@ def _survey(
         logger.warning("No matching *.epub packages found under %s", args.source_dir)
 
     copies = _plan_copies(args, policy)
-    report.ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
-    shared = _shared_names(discovered, policy, args.on_collision)
+    report.ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
+    shared, copies = _shared_names(args, discovered, policy, copies)
+    everything = [*shared.packages, *shared.copies]
     report.orphaned = len(
         find_orphans(
             args.output_dir,
             policy,
             discovered,
             args.on_collision,
-            claimed_extra=copies.claimed,
-            assigned=shared,
+            assigned=everything,
         )
     )
-    return packages, copies, shared
+    return packages, copies, everything
 
 
 def _run_export(
@@ -505,7 +531,7 @@ def _copyable(args: argparse.Namespace, copies: CopyPlan) -> list[Path]:
     """
     if args.no_copy_through:
         return collect_copyable(args.source_dir)
-    return [source for source, _name in copies.named]
+    return copies.sources
 
 
 def _selected(

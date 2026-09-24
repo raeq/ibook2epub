@@ -178,3 +178,11 @@ What the configurations that fail show:
 
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.
+
+The model names packages only. Files copied through -- PDFs and books that
+arrived already zipped -- are not modelled: they take their names in the same
+claim pass, after every package (`copynames.claim_copies`), and are placed on
+the shelf by the same `placing.place`, so a copy loses a name to a package
+rather than landing first under it. What the model does not check is that
+ordering, nor a copy's own positional suffix under `--on-collision suffix`;
+`tests/test_copy_claims.py` replays those against the CLI.

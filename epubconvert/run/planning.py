@@ -387,7 +387,6 @@ def find_orphans(
     packages: Sequence[Path],
     on_collision: CollisionMode = SKIP,
     *,
-    claimed_extra: Sequence[str] = (),
     assigned: Sequence[Assignment] | None = None,
 ) -> list[Path]:
     """
@@ -425,15 +424,17 @@ def find_orphans(
     :param packages: **Every** package in the library, not the subset this run
         is looking at -- ``--match`` narrows a run, not the shelf.
     :param on_collision: The collision mode, so suffixed names are recognised.
-    :param claimed_extra: Names claimed by something other than a package,
-        such as a file copied through verbatim.
+    :param assigned: The names already given, when the caller has them, the
+        files copied through included
+        (:func:`~epubconvert.run.copynames.claim_copies`): a copy claims
+        the file it is placed at, as a package does.
 
     :return: Archives no book accounts for, sorted by path.
     """
     if assigned is None:
         assigned = assign_names(packages, policy, on_collision)
     shelf = read_shelf(output_dir, policy, assigned)
-    claimed = {filesystem_key(policy.identity(name)) for name in claimed_extra}
+    claimed: set[str] = set()
     for item in assigned:
         clash = place(item, shelf).clash
         if clash is not None:

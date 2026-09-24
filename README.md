@@ -614,6 +614,14 @@ One thing the marker cannot fix: a book *entering* a collision gains its marker,
 which is a rename. That happens once, when the second copy shows up, instead of
 every time the group changes.
 
+A PDF or an already-zipped book that is copied rather than converted competes
+for its name too, after every package: a package `a/Book.epub/` and a zipped
+`b/Book.epub` want one file, and the package gets it. The copy is reported as a
+name collision, or under `--on-collision suffix` is copied as `Book (2).epub`;
+a copy has no digest marker, so it is always numbered. A copy already on the
+shelf before the package arrived keeps its file, and the package is reported as
+a collision rather than as exported from the other book's file.
+
 ### Taking your highlights with you
 
 Apple keeps your highlights and notes in its own database, not in the books. So
