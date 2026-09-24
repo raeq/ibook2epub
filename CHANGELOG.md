@@ -15,6 +15,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A FIFO named `*.epub` in the library no longer hangs `--name-by
+  author-title` runs, `--list` and `-d` included, or fails every passthrough
+  run: it is skipped with a warning, and an archive's metadata, and
+  `--verify`'s check, read only a regular file, judged on the descriptor
+  opened rather than a stat of the name.
+
+- `--validate` and `--verify` no longer inflate a member once for every time
+  the central directory lists it; they report "members share a local header
+  (possible zip bomb)" and skip the content checks. An annotation refresh
+  refuses to rebuild such an archive and counts it as failed, where on Python
+  3.13 it rewrote a 4 MiB book as 800 MiB.
+
+- An annotation refresh no longer parses an embedded set far larger than the
+  one it would write, which cost up to about 1.6 GiB within the 64 MiB cap; a
+  set this tool wrote is recognised as current without being parsed.
+
+- `--validate` and `--verify` report member names that differ only by case or
+  Unicode normalization, which OCF forbids and case-insensitive filesystems
+  merge into one file.
+
+- The check that refuses XML entity declarations stops at the first
+  declaration, instead of expanding the document's entity references first.
+
 - Under `--on-collision suffix`, a zipped book copied before a package of its
   name was added is no longer copied again as "Book (2).epub" and listed as
   an orphan: it keeps its file, and the package is written as "Book (2).epub".
