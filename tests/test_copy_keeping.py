@@ -12,15 +12,24 @@ book, a copy and a package of one book, or two files of one size.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import json
 import os
 from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
 
+from epubconvert.export.naming import disambiguator
 from epubconvert.run import run
-from tests.conftest import make_metadata_package
-from tests.test_copy_claims import SUFFIX, identifier_of, listing, shelf, zipped_book
+from tests.conftest import make_metadata_package, remove_tree
+from tests.test_copy_claims import (
+    SUFFIX,
+    identifier_of,
+    listing,
+    shelf,
+    zipped,
+    zipped_book,
+)
 
 DUNE = "urn:isbn:9780441013593"
 
@@ -285,3 +294,48 @@ class TestACopyMadeBeforeCopiesKeptTheirTime:
         assert " copied" not in ran.out
         assert "collision" not in ran.out
         assert "orphan" not in ran.out
+
+
+class TestAPackageZippedInPlaceKeepsItsMarkedArchive:
+    """
+    Two editions of one title, in suffix mode, took digest-marked names. One
+    was then zipped in place, so it is a file copied through, which has no
+    digest and wants the plain name: its archive under the marked name was
+    nobody's, and under ``--no-copy-through``, where it is its only archive,
+    it was listed as an orphan.
+    """
+
+    FLAGS = ["--name-by", "author-title", "--on-collision", "suffix"]
+
+    def test_the_copy_claims_it(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        for folder in ("a", "b"):
+            make_metadata_package(
+                library / folder,
+                "Dune.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=f"urn:uuid:{folder}",
+            )
+        argv = ["-s", str(library), "-o", str(output_dir), *self.FLAGS]
+        run.main([*argv, "-m", "0", "-q"])
+        package = library / "b" / "Dune.epub"
+        staged = zipped(package, tmp_path / "Dune.epub")
+        remove_tree(package)
+        staged.replace(package)
+        marked = f"Frank Herbert - Dune [{disambiguator('urn:uuid:b')}].epub"
+        capsys.readouterr()
+
+        run.main([*argv, "--list", "--json", "--no-copy-through"])
+        without = json.loads(capsys.readouterr().out)
+        run.main([*argv, "--list", "--json"])
+        rows = json.loads(capsys.readouterr().out)
+
+        assert marked not in {
+            Path(row["target"]).name for row in without if row["status"] == "orphan"
+        }
+        assert [
+            (row["status"], Path(row["target"]).name)
+            for row in rows
+            if row["source"] == str(package)
+        ] == [("copied", marked)]

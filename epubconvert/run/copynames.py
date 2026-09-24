@@ -17,7 +17,7 @@ from typing import NamedTuple
 
 from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package
-from ..export.naming import filesystem_key
+from ..export.naming import DISAMBIGUATOR_CHARS, disambiguator, filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from .claims import Claims, claim_order, lost_to, shelf_files, shelf_names
 from .holders import identifier_on_shelf
@@ -26,6 +26,13 @@ from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
 #: A name numbered by claims.suffixed, as a filesystem key: its stem, the
 #: number, and the extension.
 _NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
+
+#: A name marked by planning._stable_base, numbered or not, as a filesystem
+#: key: its stem, the digest, and the extension.
+_MARKED = re.compile(
+    rf"(?P<stem>.*) \[(?P<digest>[0-9a-f]{{{DISAMBIGUATOR_CHARS}}})\]"
+    r"(?: \(\d+\))?(?P<extension>\.[^.]*)?"
+)
 
 
 class Names(NamedTuple):
@@ -130,6 +137,9 @@ class _Claiming:
     read: dict[Path, str | None] = field(default_factory=dict)
     #: The shelf's files by the key of their name less any " (n)", with n.
     numbered: dict[str, list[tuple[int, Path]]] = field(default_factory=dict)
+    #: The shelf's files by the key of their name less any digest marker and
+    #: " (n)", with the digest.
+    marked: dict[str, list[tuple[str, Path]]] = field(default_factory=dict)
     #: The package given each name in the pass, by filesystem key.
     packaged: dict[str, Assignment] = field(default_factory=dict)
     #: The shelf's files a copy has kept as its own, each by one copy only.
@@ -146,6 +156,9 @@ class _Claiming:
                 plain = numbered["stem"] + (numbered["extension"] or "")
                 position = int(numbered["position"])
                 self.numbered.setdefault(plain, []).append((position, found))
+            if marked := _MARKED.fullmatch(key):
+                plain = marked["stem"] + (marked["extension"] or "")
+                self.marked.setdefault(plain, []).append((marked["digest"], found))
 
     def settle(
         self, wanting: Sequence[tuple[Path, str]], order: Sequence[int]
@@ -192,7 +205,8 @@ class _Claiming:
         " (3)" by a package or an earlier copy arriving, found another
         book's file under the next free number, or none, and was copied
         again. formal/RerunPlanner.tla found it. Only the files under the
-        name's numbers are looked at, from an index of the shelf.
+        name's numbers are looked at, from an index of the shelf, and in
+        suffix mode those under its digest-marked forms (:meth:`_marked`).
 
         :param source: The file to copy.
         :param name: The name it wants.
@@ -220,6 +234,43 @@ class _Claiming:
             own, identifier = self._own(source, found, wanted, exact=exact)
             if own:
                 return found, policy.identity(found.name), identifier
+        if exact or self.setup.on_collision != SUFFIX:
+            return None
+        return self._marked(source, wanted)
+
+    def _marked(self, source: Path, wanted: str) -> tuple[Path, str, str] | None:
+        """
+        Find *source*'s archive under its name marked with its digest.
+
+        A package in a crowd takes a digest-marked name. Zipped in place, it
+        is a file copied through, which has no digest and wants the plain
+        name, so the archive it had was nobody's: under
+        ``--no-copy-through``, its only one, listed as an orphan. Its
+        identifier is read, and the archive's, only when a file of its name
+        marked with its digest is on the shelf. A name the marker had to be
+        cut short to fit is not found here.
+
+        :param source: The file to copy.
+        :param wanted: The filesystem key of the name it wants.
+
+        :return: The file, its identity and *source*'s identifier; None when
+            no such file holds *source*'s book.
+        """
+        candidates = self.marked.get(wanted)
+        if not candidates:
+            return None
+        identifier = self._identifier(source)
+        if identifier is None:
+            return None
+        digest = disambiguator(identifier)
+        for mark, found in sorted(candidates):
+            if (
+                mark == digest
+                and found not in self.taken
+                and not self._packages(source, found)
+                and identifier_on_shelf(found) == identifier
+            ):
+                return found, self.setup.policy.identity(found.name), identifier
         return None
 
     def keep(self, source: Path, name: str, exact: bool) -> Assignment | None:
