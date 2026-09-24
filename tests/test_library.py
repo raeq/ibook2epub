@@ -584,6 +584,11 @@ class TestTheCsvIsWhatGoodreadsWrites:
 
         assert row["Title"] == "Foo\\x1b]0;pwned\\x07 bar\\x00"
 
+    def test_a_right_to_left_mark_in_a_title_is_kept(self):
+        # Part of how a Hebrew or Arabic title is written, not a control: the
+        # file is imported elsewhere, and escaping it would corrupt the title.
+        assert self._one(title="שלום\u200f 2")["Title"] == "שלום\u200f 2"
+
     @pytest.mark.parametrize(
         ("isbn13", "isbn10"),
         [

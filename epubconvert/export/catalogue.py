@@ -223,9 +223,12 @@ def _cell(value: object) -> str:
 
     :return: The value on one line, with control characters escaped, and
         never a formula. A title is input, and with ``--library-export -`` a
-        cell goes straight to the terminal.
+        cell goes straight to the terminal. The bidi controls are kept: in a
+        Hebrew or Arabic title a right-to-left mark is part of the text, and
+        the file is imported elsewhere, where an escape would stay in the
+        title for good.
     """
-    return _defused(printable(collapse(value)))
+    return _defused(printable(collapse(value), keep_bidi=True))
 
 
 def _defused(text: str) -> str:
@@ -258,7 +261,7 @@ def _shelf_name(name: str) -> str:
 
     :return: The shelf name.
     """
-    return printable(collapse(name.replace(",", " ")))
+    return printable(collapse(name.replace(",", " ")), keep_bidi=True)
 
 
 def _quoted_number(digits: str | None) -> str:

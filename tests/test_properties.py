@@ -34,6 +34,11 @@ ANY_TEXT = st.text(alphabet=st.characters(codec=None, exclude_categories=()))
 #: The high half of the surrogate range.
 HIGH_SURROGATES = "".join(chr(code) for code in range(0xD800, 0xDC00))
 
+#: Unicode's bidirectional formatting characters, which reorder a line.
+BIDI_CONTROLS = frozenset(
+    "\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
+)
+
 #: Nine ASCII digits: the body every ISBN-10 and 978 ISBN-13 shares.
 BODY = st.text(alphabet="0123456789", min_size=9, max_size=9)
 
@@ -296,6 +301,7 @@ def test_a_printable_name_carries_no_control_character_or_surrogate(name):
         ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F or 0xD800 <= ord(c) <= 0xDFFF
         for c in shown
     )
+    assert not any(c in BIDI_CONTROLS for c in shown)
     # A surrogate that survives would make the log handler raise.
     shown.encode("utf-8")
 
@@ -320,4 +326,5 @@ def test_printable_json_decodes_to_the_same_text_and_prints_nothing_raw(name):
     assert not any(
         (ord(c) < 0x20 and c != "\n") or 0x7F <= ord(c) <= 0x9F for c in shown
     )
+    assert not any(c in BIDI_CONTROLS for c in shown)
     shown.encode("utf-8")
