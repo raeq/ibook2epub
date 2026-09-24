@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 from collections.abc import Collection, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ from .copying import plan_copies
 from .copynames import Names, claim_copies
 from .placing import placed, settled
 from .planning import assign_names
+from .preflight import ShelfUnwritableError, check_writable
 
 
 def gather_annotations(
@@ -609,28 +611,38 @@ def apply_annotations(
         if code not in (exits.SUCCESS, exits.FAILED):
             return code
 
-    if args.annotations_detached:
-        # Each note named after the file the book is placed at, as the
-        # conversion route names it: named from the assignment, an edition
-        # moved on to its marked name wrote into the other edition's note.
-        # Only a vault uses the names, as for -ao: a JSON or CSV file named
-        # and opened every zipped book for nothing, and --skip-incomplete is
-        # refused beside it, so an evicted one was downloaded to be named.
-        written = write_export(
-            args,
-            found,
-            args.annotations_detached,
-            (
-                _with_copies(args, policy, assignments, copyable, shelf=True)
-                if vault_of(args) is not None
-                else []
-            ),
-            copyable=copyable,
-        )
-        # A failed book outranks the destination's own error, the order a
-        # conversion run uses too: see afterwards.outcome.
-        return code if code != exits.SUCCESS else written
-    return code
+    # Guarded here rather than at the call sites. It was checked on the route
+    # through annotations_after_export and not on the -ar route, so
+    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
+    # read rather than before it: returning first, the dry run said the
+    # annotations "were read" having read nothing, and exited 0 where the
+    # real run was refused the container and exited 8. -ao -d reads first.
+    # After the shelf is judged too, which a dry run does as the run does.
+    if args.dry_run or not args.annotations_detached:
+        if args.dry_run:
+            logger.info("Dry run: annotations were read but nothing was written.")
+        return code
+
+    # Each note named after the file the book is placed at, as the
+    # conversion route names it: named from the assignment, an edition
+    # moved on to its marked name wrote into the other edition's note.
+    # Only a vault uses the names, as for -ao: a JSON or CSV file named
+    # and opened every zipped book for nothing, and --skip-incomplete is
+    # refused beside it, so an evicted one was downloaded to be named.
+    written = write_export(
+        args,
+        found,
+        args.annotations_detached,
+        (
+            _with_copies(args, policy, assignments, copyable, shelf=True)
+            if vault_of(args) is not None
+            else []
+        ),
+        copyable=copyable,
+    )
+    # A failed book outranks the destination's own error, the order a
+    # conversion run uses too: see afterwards.outcome.
+    return code if code != exits.SUCCESS else written
 
 
 def _before_writing(args: argparse.Namespace) -> int | None:
@@ -653,16 +665,6 @@ def _before_writing(args: argparse.Namespace) -> int | None:
             "Output directory does not exist: %s", printable(str(args.output_dir))
         )
         return exits.NO_OUTPUT
-
-    # Guarded here rather than at the call sites. It was checked on the route
-    # through annotations_after_export and not on the -ar route, so
-    # "--dry-run -ae -ar" rewrote every archive on the shelf. And after the
-    # read rather than before it: returning first, the dry run said the
-    # annotations "were read" having read nothing, and exited 0 where the
-    # real run was refused the container and exited 8. -ao -d reads first.
-    if args.dry_run:
-        logger.info("Dry run: annotations were read but nothing was written.")
-        return exits.SUCCESS
     return None
 
 
@@ -726,9 +728,15 @@ def _embed_in_shelf(
     # tell one of those from an abandoned one. Refused on this route, the
     # error escaped main -- which maps it only around the export -- as a
     # traceback and exit 1.
+    # A dry run takes no lock, as a conversion's does not, and writes nothing.
     tally = _Tally()
+    highlighted = {
+        item.package
+        for item in assignments
+        if annotations_for_book(item.package.name, index)
+    }
     try:
-        with output_lock(args.output_dir):
+        with nullcontext() if args.dry_run else output_lock(args.output_dir):
             # Read under the lock, and as before a write: a policy that names
             # from the folder reads the book's own identifier to compare --
             # only for the books with highlights, the ones rewritten.
@@ -737,14 +745,16 @@ def _embed_in_shelf(
                 args.output_dir,
                 policy,
                 writing=True,
-                only={
-                    item.package
-                    for item in assignments
-                    if annotations_for_book(item.package.name, index)
-                },
+                only=highlighted,
             )
+            # Before anything is rewritten, and in the dry run as well: a
+            # read-only shelf with a lock file that opened failed every book.
+            if any(places.get(package) is not None for package in highlighted):
+                check_writable(args.output_dir)
+            if args.dry_run:
+                return exits.SUCCESS
             _refresh_each(args, assignments, index, places, tally)
-    except OutputLockedError as exc:
+    except (OutputLockedError, ShelfUnwritableError) as exc:
         logger.critical("%s", exc)
         return exc.exit_code
     except KeyboardInterrupt:

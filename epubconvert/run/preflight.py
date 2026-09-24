@@ -259,3 +259,32 @@ def _unreadable(output_dir: Path) -> OSError | None:
     except OSError as exc:
         return exc
     return None
+
+
+class ShelfUnwritableError(RuntimeError):
+    """Raised when the plan has work for a shelf this run cannot write into."""
+
+    #: What a run ends with when this is why it could not proceed.
+    exit_code: int = exits.NO_OUTPUT
+
+
+def check_writable(output_dir: Path) -> None:
+    """
+    Refuse a shelf this run cannot write into, once it has work to write.
+
+    The check before the run judges the lock file when there is one, since
+    that is what the run opens, so a read-only shelf with a lock file that
+    still opened passed it: the dry run exited 0, and the real run failed
+    every book with EACCES and exited 1. The shelf itself is judged once
+    the plan says something will be written, by the dry run and the real run
+    alike; a shelf with nothing to do is still no one's business.
+
+    :param output_dir: The shelf. One not there yet is left to the check
+        before the run, which judged the directory it will be made in.
+
+    :raises ShelfUnwritableError: If it cannot be written into.
+    """
+    if os.path.isdir(output_dir) and not os.access(output_dir, os.W_OK | os.X_OK):  # noqa: PTH112
+        raise ShelfUnwritableError(
+            f"Cannot write into output directory {printable(str(output_dir))}"
+        )

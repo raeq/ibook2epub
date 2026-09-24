@@ -80,7 +80,7 @@ from .planning import (
     plan_exports,
     render_listing,
 )
-from .preflight import check_environment
+from .preflight import ShelfUnwritableError, check_environment, check_writable
 from .repair import run_verify
 
 
@@ -395,6 +395,11 @@ def _run_export(
             # makes that run's closing replace fail.
             if locked and not args.dry_run:
                 sweep_partials(args.output_dir)
+            # Judged once there is something to write, in the dry run too:
+            # see preflight.check_writable. Before the copies, which are
+            # written before the books are planned.
+            if _copies_pending(_to_copy(args, copies), args.output_dir):
+                check_writable(args.output_dir)
             copy_through_all(
                 _to_copy(args, copies),
                 args.output_dir,
@@ -418,6 +423,8 @@ def _run_export(
             # it held back from books that failed rather than infer it.
             report.held_back = pending_before - count_pending_decisions(selected)
             held = pending_packages(decisions) - pending_packages(selected)
+            if count_pending_decisions(selected):
+                check_writable(args.output_dir)
             asyncio.run(
                 export_planned(
                     selected,
@@ -457,6 +464,23 @@ def _run_export(
         ),
         copyable,
         held,
+    )
+
+
+def _copies_pending(copies: CopyPlan, output_dir: Path) -> bool:
+    """
+    Whether copying these files would write anything.
+
+    :param copies: The files this run copies.
+    :param output_dir: The shelf.
+
+    :return: True when a file that is to be copied is not on the shelf yet.
+    """
+    return any(
+        name is not None
+        and source not in copies.evicted
+        and not (output_dir / name).exists()
+        for source, name in copies.named
     )
 
 
@@ -567,7 +591,7 @@ def _run(args: argparse.Namespace) -> int:
 
     try:
         report, remaining, named, copyable, held = _run_export(args, policy, found)
-    except OutputLockedError as exc:
+    except (OutputLockedError, ShelfUnwritableError) as exc:
         logger.critical("%s", exc)
         return exc.exit_code
 
