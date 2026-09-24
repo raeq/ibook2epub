@@ -387,6 +387,10 @@ class TestEscaping:
             pytest.param("-- -", "\\-- -", id="spaced dash thematic break"),
             pytest.param("***", "\\***", id="star thematic break"),
             pytest.param("** *", "\\** *", id="spaced star thematic break"),
+            pytest.param("-- | --", "\\-- | --", id="delimiter row"),
+            pytest.param(":-- | --:", "\\:-- | --:", id="aligned delimiter row"),
+            pytest.param("  :-: | :-:", "  \\:-: | :-:", id="indented delimiter row"),
+            pytest.param(":- |", "\\:- |", id="one-cell delimiter row"),
             pytest.param("1.", "1\\.", id="empty ordered item"),
             pytest.param("123456789) x", "123456789\\) x", id="nine-digit number"),
         ],
@@ -452,6 +456,23 @@ class TestEscaping:
         body = notes.body([_annotation(chapter="Ch\nOne")])
 
         assert "## Ch One" in body
+
+
+class TestATableDelimiterRow:
+    """
+    GFM opens a table on a header line followed by a delimiter row, and a
+    note's first line follows "**Note:** " -- so the label is a header cell.
+    """
+
+    def test_one_led_by_a_colon_does_not_make_the_note_a_table(self):
+        # ":-- | --:" was not escaped, so the label ended up in a table header.
+        body = notes.body([_annotation(note="a | b\n:-- | --:")])
+
+        assert "\n\\:-- | --:\n" in body
+
+    @pytest.mark.parametrize("line", [":-) smile", ": a colon", "::", ":-"])
+    def test_a_colon_that_leads_no_delimiter_row_is_left_alone(self, line):
+        assert notes._escape(line) == line
 
 
 # ------------------------------------------------------------------ ownership

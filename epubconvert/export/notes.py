@@ -97,8 +97,11 @@ DIGEST_LENGTH = 16
 #: tag; ``2.5 million``, ``-5 degrees`` and ``+1 agreed`` showed a backslash.
 #: A heading's hashes, a bullet and a list number open a block only when white
 #: space or the end of the line follows them. ``*`` and ``-`` also open a
-#: thematic break, and ``-`` a setext underline and a table's delimiter row;
-#: each of those is spelled out, as ``_`` and ``=`` already were. A link label
+#: thematic break, and ``-`` a setext underline; each of those is spelled
+#: out, as ``_`` and ``=`` already were. A table's delimiter row may lead with
+#: ``-`` or with an alignment colon, and ``:-- | --:`` under a note's first
+#: line once went unescaped and put its ``**Note:**`` label in a table header;
+#: the row is matched by its whole shape, cells and pipes. A link label
 #: may continue onto the next line, so an unfinished one counts. ``>`` opens a
 #: quote whatever follows it.
 #:
@@ -121,8 +124,8 @@ BLOCK_OPENERS = re.compile(
               | \*(?=(?:[ \t]*\*){2}[ \t*]*$)  # thematic break
               | -(?=(?:[ \t]*-){2}[ \t-]*$)    # thematic break
               | -(?=-*[ \t]*$)               # setext underline
-              | -(?=-*:?[ \t]*\|(?:[ \t]*:?-+:?[ \t]*\|)*(?:[ \t]*:?-+:?)?[ \t]*$)
-                                             # table delimiter row, no pipe first
+              | (?=:?-+:?[ \t]*\|(?:[ \t]*:?-+:?[ \t]*\|)*(?:[ \t]*:?-+:?)?[ \t]*$)
+                [-:]                         # table delimiter row, no pipe first
               | \|                           # table row
               | `(?=``) | ~(?=~~)            # code fence
               | <(?=[A-Za-z/!?])            # HTML block, either marker included
