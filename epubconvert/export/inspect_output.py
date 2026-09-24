@@ -92,9 +92,9 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
     """
     try:
         described = read_package_dir(package)
-        if not described.cover_id:
-            return None
-        href = described.manifest.get(described.cover_id)
+        href = (
+            described.manifest.get(described.cover_id) if described.cover_id else None
+        )
         if not href:
             return None
         source = resolve(package, href, resolved_root=package.resolve())
@@ -106,32 +106,8 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
             )
             return None
 
-        # with_suffix() *replaces* the extension, so a cover href ending in
-        # ".epub" would resolve to the archive itself and overwrite the book
-        # with image bytes. Build the name from the stem instead, and refuse
-        # any path that is not a new file beside the archive.
-        #
-        # The suffix is the book's choice, so it is lower-cased and held to
-        # the image types a reader must support. Refusing only the exact
-        # archive name was case-sensitive: "cover.EPUB" wrote Book.EPUB beside
-        # Book.epub, one file on the case-insensitive volume the shelf is
-        # copied to, and any other suffix put a file of the book's choosing
-        # -- ".html", ".exe" -- into the output directory.
-        suffix = (Path(href).suffix or ".jpg").lower()
-        if suffix not in COVER_SUFFIXES:
-            logger.debug(
-                "Not writing cover for %s: %s is not an image suffix",
-                target_archive.name,
-                printable(suffix),
-            )
-            return None
-        cover = target_archive.parent / f"{target_archive.stem}{suffix}"
-        if not is_free(cover):
-            logger.debug(
-                "Not writing cover for %s: %s is taken",
-                target_archive.name,
-                cover.name,
-            )
+        cover = _cover_name(target_archive, href)
+        if cover is None:
             return None
 
         # Streamed rather than read whole: one copy per worker, and the pool
@@ -159,6 +135,45 @@ def extract_cover(package: Path, target_archive: Path) -> Path | None:
         logger.debug("No cover for %s: %s", printable(target_archive.name), exc)
         return None
 
+    return cover
+
+
+def _cover_name(target_archive: Path, href: str) -> Path | None:
+    """
+    Choose the name a cover is written under, beside its book.
+
+    :param target_archive: The exported epub file the cover sits beside.
+    :param href: The cover's href, out of the book's own manifest.
+
+    :return: A free name with an image suffix, or None if there is none.
+    """
+    # with_suffix() *replaces* the extension, so a cover href ending in
+    # ".epub" would resolve to the archive itself and overwrite the book
+    # with image bytes. Build the name from the stem instead, and refuse
+    # any path that is not a new file beside the archive.
+    #
+    # The suffix is the book's choice, so it is lower-cased and held to
+    # the image types a reader must support. Refusing only the exact
+    # archive name was case-sensitive: "cover.EPUB" wrote Book.EPUB beside
+    # Book.epub, one file on the case-insensitive volume the shelf is
+    # copied to, and any other suffix put a file of the book's choosing
+    # -- ".html", ".exe" -- into the output directory.
+    suffix = (Path(href).suffix or ".jpg").lower()
+    if suffix not in COVER_SUFFIXES:
+        logger.debug(
+            "Not writing cover for %s: %s is not an image suffix",
+            printable(target_archive.name),
+            printable(suffix),
+        )
+        return None
+    cover = target_archive.parent / f"{target_archive.stem}{suffix}"
+    if not is_free(cover):
+        logger.debug(
+            "Not writing cover for %s: %s is taken",
+            target_archive.name,
+            cover.name,
+        )
+        return None
     return cover
 
 

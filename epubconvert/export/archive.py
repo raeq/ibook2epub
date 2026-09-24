@@ -333,6 +333,21 @@ def _set_level(member: ZipInfo, level: int) -> None:
     setattr(member, "_compresslevel", level)  # noqa: B010
 
 
+def _store(archive: ZipFile, path: Path, arcname: str) -> None:
+    """
+    Stream one package file into the archive under a normalized entry.
+
+    :param archive: The archive being assembled.
+    :param path: The file to store, opened without following a symlink.
+    :param arcname: Its path inside the archive.
+    """
+    with open_contained(path) as source:
+        member = entry(arcname, compression_for(arcname))
+        _size_ahead(member, os.fstat(source.fileno()).st_size)
+        with archive.open(member, "w") as target:
+            shutil.copyfileobj(source, target)
+
+
 def _size_ahead(member: ZipInfo, size: int) -> None:
     """
     Tell zipfile how large a member will be before it is streamed in.
@@ -484,11 +499,7 @@ def zip_package(
                     # shelf, so a fresh export and a refresh agree.
                     logger.trace("Replaced by this run's annotations: %s", arcname)
                     continue
-                with open_contained(path) as source:
-                    member = entry(arcname, compression_for(arcname))
-                    _size_ahead(member, os.fstat(source.fileno()).st_size)
-                    with archive.open(member, "w") as target:
-                        shutil.copyfileobj(source, target)
+                _store(archive, path, arcname)
                 stored.add(arcname)
                 file_count += 1
 
