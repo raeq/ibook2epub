@@ -155,7 +155,7 @@ re-copying unchanged books, and lets you compare two exports by checksum.
 **Ctrl-C is a normal way to stop.** An interrupted run reports what it
 finished, exits `130`, and leaves every completed book intact — rerun to carry
 on. Books already being written are allowed to finish so their replace stays
-atomic; queued ones are dropped.
+atomic, even if Ctrl-C is pressed again while they do; queued ones are dropped.
 
 Only one run at a time may write to a given output directory. A second
 concurrent run exits `3` rather than duplicating work — useful when this is

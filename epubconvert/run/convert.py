@@ -46,6 +46,7 @@ from .planning import (
     plan_exports,
     record_decisions,
 )
+from .workers import WritingPool
 
 try:
     import fcntl
@@ -420,7 +421,7 @@ async def export_planned(
         return report
 
     progress = _Progress(len(pending), default_workers(max_workers))
-    pool = ThreadPoolExecutor(
+    pool = WritingPool(
         max_workers=default_workers(max_workers), thread_name_prefix="zip"
     )
     try:
@@ -443,12 +444,11 @@ async def export_planned(
                     report.failed += 1
                 logger.error("Export failed unexpectedly: %r", outcome)
     finally:
-        # cancel_futures drops books that have not started, so an interrupt
-        # does not wait for the whole queued backlog. wait=True still joins
-        # the handful already being written: they finish, replace atomically,
-        # and record themselves, which keeps the summary honest about what is
-        # on disk.
-        pool.shutdown(wait=True, cancel_futures=True)
+        # Books not started are dropped, so an interrupt does not wait for
+        # the queued backlog; the handful being written finish, replace
+        # atomically and record themselves, a second Ctrl-C notwithstanding,
+        # which keeps the summary honest about what is on disk.
+        pool.finish("book(s)")
 
     return report
 

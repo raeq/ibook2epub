@@ -37,6 +37,7 @@ from .planning import (
     copy_name_opens_file,
     copy_target_name,
 )
+from .workers import WritingPool
 
 
 def _copy_and_record(
@@ -376,7 +377,7 @@ def copy_through_all(
         logger.warning("Nothing copied: the volume is below --min-free.")
         report.aborted = True
         return
-    pool = ThreadPoolExecutor(
+    pool = WritingPool(
         max_workers=default_workers(max_workers), thread_name_prefix="copy"
     )
     try:
@@ -390,5 +391,6 @@ def copy_through_all(
             future.result()
     finally:
         # As for the exports: copies not yet started are dropped, and the ones
-        # in flight finish, replace atomically and record themselves.
-        pool.shutdown(wait=True, cancel_futures=True)
+        # in flight finish, replace atomically and record themselves, however
+        # often the wait for them is interrupted.
+        pool.finish("file(s)")
