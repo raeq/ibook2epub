@@ -422,6 +422,7 @@ def _claimed(
         policy,
         max_workers=args.workers,
         skip_incomplete=args.skip_incomplete,
+        copied=not args.no_copy_through,
     )
     return claim_copies(
         assignments,

@@ -102,7 +102,9 @@ class CopyPlan:
 
     #: Each file with its name, or None when it was left unnamed.
     named: tuple[tuple[Path, str | None], ...] = ()
-    #: Files ``--skip-incomplete`` leaves where they are.
+    #: Files iCloud has evicted that are left where they are, unopened:
+    #: under ``--skip-incomplete``, or ``--no-copy-through``, which copies
+    #: nothing.
     evicted: frozenset[Path] = frozenset()
     #: Files that lost the name they wanted to another book, with why. Set by
     #: :func:`placed_copies`; each is a collision, reported and counted.
@@ -128,6 +130,7 @@ def plan_copies(
     *,
     max_workers: int | None = None,
     skip_incomplete: bool = False,
+    copied: bool = True,
 ) -> CopyPlan:
     """
     Name each file for the shelf, in a pool, without opening an evicted one.
@@ -143,6 +146,10 @@ def plan_copies(
     :param max_workers: Size of the thread pool, as for
         :func:`~epubconvert.run.convert.export_planned`.
     :param skip_incomplete: Whether evicted files are to be left alone.
+    :param copied: Whether the run copies the files. Under
+        ``--no-copy-through`` it does not, so an evicted file is left alone
+        whatever ``--skip-incomplete`` says: every zipped book was opened to
+        be named, and so downloaded, for a copy that never happens.
 
     :return: The plan.
     """
@@ -150,7 +157,7 @@ def plan_copies(
         return CopyPlan()
     evicted = (
         frozenset(source for source in copyable if is_dataless(source))
-        if skip_incomplete
+        if skip_incomplete or not copied
         else frozenset()
     )
 

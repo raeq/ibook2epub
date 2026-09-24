@@ -203,6 +203,7 @@ def _plan_copies(args: argparse.Namespace, policy: NamingPolicy) -> CopyPlan:
         policy,
         max_workers=args.workers,
         skip_incomplete=args.skip_incomplete,
+        copied=not args.no_copy_through,
     )
     if plan.unnamed:
         logger.warning(
