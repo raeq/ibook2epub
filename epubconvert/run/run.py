@@ -617,6 +617,10 @@ def _run(args: argparse.Namespace) -> int:
     # Recorded in the log file only: the console already has it from the
     # print above, and logging it plainly printed every run's summary twice.
     app_logger.file_only(summary)
-    logger.debug("Run finished: %d exported, %d failed", report.exported, report.failed)
+    logger.debug(
+        "Run finished: %d exported, %d failed",
+        report.exported,
+        report.failed + report.copies_failed,
+    )
 
     return annotated if annotated is not None else exit_code(report)

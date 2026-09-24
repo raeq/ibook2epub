@@ -111,8 +111,10 @@ max-line-length = 100
 max-args = 8
 # Report and Package are counter bags and parsed-document holders: attributes
 # with no interactions between them, which is not the state this check exists
-# to bound.
-max-attributes = 14
+# to bound. Raised from 14 for Report's copies_failed, one more counter: the
+# alternative, a failed copy folded into the book failures, is the overlap
+# that made the summary call books the --min-free floor stopped "failed".
+max-attributes = 15
 
 [tool.ruff]
 target-version = "py310"
