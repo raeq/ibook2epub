@@ -24,7 +24,7 @@ import pytest
 from epubconvert.collect import source, validate
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
-from epubconvert.run import convert, holders, planning, run
+from epubconvert.run import claims, convert, holders, planning, run
 from tests.conftest import make_metadata_package, make_package
 
 #: Font obfuscation, which is not protection, and a key-transport algorithm,
@@ -153,7 +153,7 @@ class TestCollisionSearchDoesNotRescan:
 
         planning.assign_names(packages, Counting(), planning.SUFFIX)
 
-        assert calls["n"] < len(packages) * planning.MAX_SUFFIX
+        assert calls["n"] < len(packages) * claims.MAX_SUFFIX
 
 
 class TestVerifyChecksEveryArchive:

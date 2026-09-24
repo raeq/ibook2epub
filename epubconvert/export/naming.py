@@ -421,7 +421,7 @@ class PortableNaming:
         cleaned = cleaned.strip(" .") or "_"
         if not extension:
             # Clamped even here: the class declares max_bytes, and
-            # planning.suffixed trusts that declaration.
+            # claims.suffixed trusts that declaration.
             return truncate_bytes(cleaned, MAX_FILENAME_BYTES).rstrip(" .") or "_"
         budget = MAX_FILENAME_BYTES - len(encode_name(extension))
         if len(encode_name(cleaned)) > budget:

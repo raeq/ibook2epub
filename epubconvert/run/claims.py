@@ -2,7 +2,9 @@
 Which output names a run has spoken for, and what to say to a book that lost.
 
 The bookkeeping :func:`epubconvert.run.planning.assign_names` settles names
-with, kept apart from the rules it applies.
+with, kept apart from the rules it applies, and the candidates a name is
+tried as, which placing a book on the shelf tries too
+(:func:`epubconvert.run.placing.place`).
 """
 
 from __future__ import annotations
@@ -10,10 +12,60 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..collect.validate import usable_identifier
-from ..export.naming import filesystem_key
+from ..export.naming import encode_name, filesystem_key, split_extension, truncate_bytes
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..utils.opf import Package
+
+
+#: Highest ``" (n)"`` suffix the planner will try before giving up on a name.
+MAX_SUFFIX = 99
+
+
+def suffixed(filename: str, position: int, max_bytes: int) -> str:
+    """
+    Render the *position*-th candidate name for a filename.
+
+    The suffix is applied within the budget the naming policy declares.
+    Appending to a name already at that limit would push it over and the
+    export would fail at the closing rename with a filesystem error rather
+    than a name collision. A policy declaring no budget is left alone: its
+    names come from the source directory, and truncating one would break the
+    identity round trip that rerun safety depends on.
+
+    :param filename: The base filename.
+    :param position: 1 for the base name itself, 2 upwards for suffixes.
+    :param max_bytes: The policy's byte budget, or 0 for no clamping.
+
+    :return: The candidate filename.
+    """
+    if position == 1:
+        return filename
+    return marked(filename, f" ({position})", max_bytes)
+
+
+def marked(filename: str, marker: str, max_bytes: int) -> str:
+    """
+    Insert *marker* before the extension, within the policy's byte budget.
+
+    :param filename: The base filename.
+    :param marker: Text to insert, its own leading space included.
+    :param max_bytes: The policy's byte budget, or 0 for no clamping.
+
+    :return: The marked filename.
+    """
+    # The module's own splitter, not Path().suffix: pathlib treats ".epub" as
+    # extension-less, so the marker landed after it -- ".epub (2)" -- and no
+    # *.epub glob matches that.
+    stem_text, extension = split_extension(filename)
+    candidate = f"{stem_text}{marker}{extension}"
+    if not max_bytes or len(encode_name(candidate)) <= max_bytes:
+        return candidate
+
+    budget = max_bytes - len(encode_name(marker))
+    budget -= len(encode_name(extension))
+    stem_text = truncate_bytes(stem_text, max(budget, 1)).rstrip(" .") or "_"
+    return f"{stem_text}{marker}{extension}"
 
 
 class Claims:

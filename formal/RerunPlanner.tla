@@ -8,7 +8,8 @@
  * (CONTRIBUTING.md: "The output directory is the only record of completed
  * work"). This model checks what that inference gets right.
  *
- * Modelled from epubconvert/run/planning.py:
+ * Modelled from epubconvert/run/planning.py, with claims.py (the candidate
+ * names) and placing.py (where a book is on the shelf):
  *   assign_names / _wanted_names / _assign_one / _claim   naming, in sorted
  *       order, with collisions settled by suffix or by losing
  *   _stable_base / marked       a crowded book with a usable dc:identifier is
@@ -22,7 +23,7 @@
  *       A policy that names from the folder reads no package document, so
  *       _decide reads the source's identifier only for a book about to be
  *       written over an archive, and a book reported exported is not checked
- *   _place                      under suffix, a book whose name holds another
+ *   place                       under suffix, a book whose name holds another
  *       book moves on to the first position of its marked name that no other
  *       book of the run is named and no other book's archive holds
  * and epubconvert/run/run.py (_shared_names): every run names the whole
@@ -47,7 +48,7 @@ CONSTANTS
     VerifyHolder,  \* _decide_against_holder: the check that fixes the defects
     ReadsSources,  \* naming reads each package document (--name-by author-title);
                    \* otherwise the check runs only before a write
-    MoveOn         \* _place: under suffix, a book whose name holds another book
+    MoveOn         \* place: under suffix, a book whose name holds another book
                    \* moves on to its marked name
 
 Books == 1..N
@@ -164,7 +165,7 @@ Run(S, refresh, newer, done) ==
                                /\ first[b] # ""
                                /\ Foreign(b, first[b])}
         taken    == {whole[c] : c \in lib}
-        \* _place: the first position of b's marked name that no book of the
+        \* place: the first position of b's marked name that no book of the
         \* library is named and no other book's archive holds. first[b] is one of
         \* the names taken, and holds another book besides.
         moved    == [b \in moves |->

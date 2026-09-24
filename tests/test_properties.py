@@ -25,7 +25,7 @@ from hypothesis import strategies as st
 from epubconvert.collect import annotations, validate
 from epubconvert.export import notes
 from epubconvert.export.naming import encode_name, split_extension, truncate_bytes
-from epubconvert.run.planning import marked, suffixed
+from epubconvert.run.claims import marked, suffixed
 from epubconvert.utils.display import printable, printable_json
 
 #: Any code point Python can hold in a str, lone surrogates included.

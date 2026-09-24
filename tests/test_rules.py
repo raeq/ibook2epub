@@ -34,7 +34,7 @@ from epubconvert.export.naming import (
     StripNaming,
     truncate_bytes,
 )
-from epubconvert.run import convert, planning, run
+from epubconvert.run import claims, convert, planning, run
 from epubconvert.utils import contained, display
 from epubconvert.utils.opf import Package
 from tests.conftest import (
@@ -283,7 +283,7 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
     """Every byte-budget measurement survives an undecodable name.
 
     Sites: ``truncate_bytes``, ``strip_unsafe``, ``PortableNaming.filename``
-    and ``planning.suffixed`` -- the last had three plain encodes.
+    and ``claims.suffixed`` -- the last had three plain encodes.
     """
 
     def test_nothing_encodes_a_name_except_the_encoder(self):
@@ -338,7 +338,7 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
         assert StripNaming().filename(SURROGATE).endswith(".epub")
 
     def test_suffixed_survives(self):
-        assert planning.suffixed(SURROGATE, 2, naming.MAX_FILENAME_BYTES)
+        assert claims.suffixed(SURROGATE, 2, naming.MAX_FILENAME_BYTES)
 
     def test_truncate_bytes_survives_a_cut_through_a_surrogate(self):
         # The measurement survived an undecodable name; the *truncation* did
@@ -360,7 +360,7 @@ class TestRuleLengthUsesTheSurrogateSafeEncoder:
     def test_suffixed_survives_truncating_a_surrogate_name(self):
         long_name = "a\udcff" * 200 + ".epub"
 
-        assert planning.suffixed(long_name, 2, naming.MAX_FILENAME_BYTES)
+        assert claims.suffixed(long_name, 2, naming.MAX_FILENAME_BYTES)
 
     def test_a_metadata_name_survives_a_surrogate(self):
         package = Package(opf_path="c.opf", title="t\udcff" * 200, creator="a\udcff")

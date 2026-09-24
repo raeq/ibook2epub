@@ -29,7 +29,7 @@ from epubconvert.export.naming import (
     disambiguator,
     encode_name,
 )
-from epubconvert.run import planning, run
+from epubconvert.run import claims, planning, run
 from epubconvert.utils.opf import Package
 from tests.conftest import make_metadata_package, remove_tree
 
@@ -337,7 +337,7 @@ class TestMarkingANameAlreadyAtTheLimit:
     def test_the_marked_name_stays_within_the_budget(self):
         stem = "A" * (MAX_FILENAME_BYTES - len(".epub"))
 
-        marked = planning.marked(f"{stem}.epub", " [deadbeef]", MAX_FILENAME_BYTES)
+        marked = claims.marked(f"{stem}.epub", " [deadbeef]", MAX_FILENAME_BYTES)
 
         assert len(encode_name(marked)) <= MAX_FILENAME_BYTES
         assert marked.endswith(" [deadbeef].epub")
@@ -347,7 +347,7 @@ class TestMarkingANameAlreadyAtTheLimit:
         # that loses its extension is re-converted on every run for ever.
         marker = " [" + "x" * MAX_FILENAME_BYTES + "]"
 
-        marked = planning.marked("Book.epub", marker, MAX_FILENAME_BYTES)
+        marked = claims.marked("Book.epub", marker, MAX_FILENAME_BYTES)
 
         assert marked.endswith(".epub")
         assert marked.startswith("_ [") or marked.startswith("B")

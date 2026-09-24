@@ -14,7 +14,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Literal
 from zipfile import BadZipFile, ZipFile
 
 from ..collect.source import inspect_package
@@ -24,20 +24,15 @@ from ..collect.validate import (
     read_package_dir,
     usable_identifier,
 )
-from ..export.naming import (
-    disambiguator,
-    encode_name,
-    filesystem_key,
-    split_extension,
-    truncate_bytes,
-)
+from ..export.naming import disambiguator, filesystem_key
 from ..utils.app_logger import logger
 from ..utils.display import printable, printable_json
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
-from .claims import Claims, lost_to
-from .holders import foreign, holds_another_book, identifier_on_shelf
+from .claims import MAX_SUFFIX, Claims, lost_to, marked, suffixed
+from .holders import holds_another_book, identifier_on_shelf
+from .placing import Shelf, place, read_shelf
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle broken for typing only
     from .convert import Report
@@ -81,9 +76,6 @@ STATUSES: tuple[Status, ...] = (
     ORPHAN,
 )
 
-#: Highest ``" (n)"`` suffix the planner will try before giving up on a name.
-MAX_SUFFIX = 99
-
 
 @dataclass(frozen=True)
 class PlanOptions:
@@ -93,14 +85,6 @@ class PlanOptions:
     refresh: bool = False
     check_incomplete: bool = False
     on_collision: CollisionMode = SKIP
-
-
-@dataclass(frozen=True)
-class _Existing:
-    """An archive already in the output directory, and whose book it is."""
-
-    path: Path
-    identity: str
 
 
 @dataclass
@@ -127,52 +111,6 @@ class Decision:
         question is which book lost.
         """
         return (self.target or self.package).name
-
-
-def suffixed(filename: str, position: int, max_bytes: int) -> str:
-    """
-    Render the *position*-th candidate name for a filename.
-
-    The suffix is applied within the budget the naming policy declares.
-    Appending to a name already at that limit would push it over and the
-    export would fail at the closing rename with a filesystem error rather
-    than a name collision. A policy declaring no budget is left alone: its
-    names come from the source directory, and truncating one would break the
-    identity round trip that rerun safety depends on.
-
-    :param filename: The base filename.
-    :param position: 1 for the base name itself, 2 upwards for suffixes.
-    :param max_bytes: The policy's byte budget, or 0 for no clamping.
-
-    :return: The candidate filename.
-    """
-    if position == 1:
-        return filename
-    return marked(filename, f" ({position})", max_bytes)
-
-
-def marked(filename: str, marker: str, max_bytes: int) -> str:
-    """
-    Insert *marker* before the extension, within the policy's byte budget.
-
-    :param filename: The base filename.
-    :param marker: Text to insert, its own leading space included.
-    :param max_bytes: The policy's byte budget, or 0 for no clamping.
-
-    :return: The marked filename.
-    """
-    # The module's own splitter, not Path().suffix: pathlib treats ".epub" as
-    # extension-less, so the marker landed after it -- ".epub (2)" -- and no
-    # *.epub glob matches that.
-    stem_text, extension = split_extension(filename)
-    candidate = f"{stem_text}{marker}{extension}"
-    if not max_bytes or len(encode_name(candidate)) <= max_bytes:
-        return candidate
-
-    budget = max_bytes - len(encode_name(marker))
-    budget -= len(encode_name(extension))
-    stem_text = truncate_bytes(stem_text, max(budget, 1)).rstrip(" .") or "_"
-    return f"{stem_text}{marker}{extension}"
 
 
 def _metadata_of(package: Path, wanted: bool) -> Package | None:
@@ -375,7 +313,7 @@ def _assign_one(
         _named_without_author(metadata),
         _named_from_folder(metadata, setup.policy),
         usable_identifier(metadata),
-        # Where it goes if its name holds another book; see _place.
+        # Where it goes if its name holds another book; see placing.place.
         stable if setup.on_collision == SUFFIX and stable != name else None,
     )
 
@@ -468,7 +406,8 @@ def find_orphans(
     claimed hid the archive of a book deleted from the library, which can be
     its last copy. Under ``--name-by author-title`` that reads each claimed
     archive's identifier, as planning does (:mod:`epubconvert.run.holders`),
-    and a book that moved on to its marked name claims that file (:func:`_place`).
+    and a book that moved on to its marked name claims that file
+    (:func:`epubconvert.run.placing.place`).
 
     Yet a file under a name the plan gave a book, holding another book of the
     library, is that other book's. In skip mode the Ace edition, exported
@@ -493,10 +432,10 @@ def find_orphans(
     """
     if assigned is None:
         assigned = assign_names(packages, policy, on_collision)
-    shelf = _read_shelf(output_dir, policy, assigned)
+    shelf = read_shelf(output_dir, policy, assigned)
     claimed = {filesystem_key(policy.identity(name)) for name in claimed_extra}
     for item in assigned:
-        clash = _place(item, shelf).clash
+        clash = place(item, shelf).clash
         if clash is not None:
             claimed.add(filesystem_key(clash.identity))
 
@@ -522,105 +461,6 @@ def orphan_decisions(orphans: Sequence[Path]) -> list[Decision]:
         Decision(path, ORPHAN, path, reason="no book in the library claims this name")
         for path in orphans
     ]
-
-
-@dataclass
-class _Shelf:
-    """The archives already on the shelf, and the names a plan has spoken for."""
-
-    policy: NamingPolicy
-    #: Each archive, keyed as the filesystem sees its name.
-    existing: dict[str, _Existing]
-    #: Keys of every name the plan assigned, and of each name a book moved on
-    #: to, so no two books of one plan are placed at one file.
-    spoken: set[str]
-
-
-class _Place(NamedTuple):
-    """Where a book is recognised or written, or why it has nowhere."""
-
-    #: The name, or ``""`` when the book has none.
-    filename: str
-    #: The book's own archive under that name, if one is there.
-    clash: _Existing | None
-    #: Why the book has no name, when it has none.
-    reason: str | None
-
-
-def _read_shelf(
-    output_dir: Path, policy: NamingPolicy, assigned: Sequence[Assignment]
-) -> _Shelf:
-    """
-    Read the archives already on the shelf, for a plan to place books against.
-
-    :param output_dir: Directory holding exported files.
-    :param policy: Naming policy supplying identities.
-    :param assigned: The plan's names.
-
-    :return: The shelf, with every assigned name spoken for.
-    """
-    # Missing directories glob to nothing, which is what a dry run wants.
-    # Keyed through the same fold the name assignment uses. Folding one and
-    # not the other meant a book already exported under a different case was
-    # never recognised, and was re-exported on every run for ever.
-    existing = {
-        filesystem_key(policy.identity(found.name)): _Existing(
-            path=found, identity=policy.identity(found.name)
-        )
-        for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-        if found.is_file()
-    }
-    spoken = {filesystem_key(item.identity) for item in assigned if item.filename}
-    return _Shelf(policy, existing, spoken)
-
-
-def _place(assignment: Assignment, shelf: _Shelf) -> _Place:
-    """
-    Settle the file a book is recognised by or written to.
-
-    Its assigned name, unless the archive there is another book's
-    (:mod:`epubconvert.run.holders`). Under ``--on-collision suffix`` it then
-    moves on to the first position of its marked name that no book of this
-    plan is named and no other book's archive holds. It used to be a collision
-    on every run for ever -- a book alone in a run, or left alone by a deleted
-    edition, takes the plain name the other edition's archive has -- though
-    suffix mode exists to keep both. formal/RerunPlanner.tla found it. The
-    marker is a digest of the book's own identifier, so the next run finds it
-    in the same place, and the other archive is still never written over.
-
-    :param assignment: The book's assigned name, identity and identifier.
-    :param shelf: The shelf and the plan's names, updated in place.
-
-    :return: Where the book goes, or why it has nowhere.
-    """
-    if not assignment.filename:
-        return _Place("", None, assignment.reason)
-    clash = shelf.existing.get(filesystem_key(assignment.identity))
-    reason = _foreign_to(clash, assignment.identity, assignment.identifier)
-    if reason is None:
-        return _Place(assignment.filename, clash, None)
-    if assignment.marked:
-        budget = getattr(shelf.policy, "max_bytes", 0)
-        for position in range(1, MAX_SUFFIX + 1):
-            candidate = suffixed(assignment.marked, position, budget)
-            identity = shelf.policy.identity(candidate)
-            key = filesystem_key(identity)
-            clash = shelf.existing.get(key)
-            if key not in shelf.spoken and (
-                _foreign_to(clash, identity, assignment.identifier) is None
-            ):
-                shelf.spoken.add(key)
-                return _Place(candidate, clash, None)
-    return _Place("", None, reason)
-
-
-def _foreign_to(
-    clash: _Existing | None, identity: str, identifier: str | None
-) -> str | None:
-    """Say why *clash* is not this book's archive; None if free or its own."""
-    if clash is None:
-        return None
-    return foreign(clash.path, clash.identity, identity, identifier)
 
 
 def plan_exports(
@@ -653,7 +493,7 @@ def plan_exports(
     if assigned is None:
         assigned = assign_names(packages, policy, settings.on_collision)
     assignments = assigned
-    shelf = _read_shelf(output_dir, policy, assignments)
+    shelf = read_shelf(output_dir, policy, assignments)
     # Neither is a failure, and both change what the shelf looks like. A run
     # that says nothing leaves the only way to notice as looking afterwards
     # and wondering.
@@ -680,7 +520,7 @@ def plan_exports(
 def _decide(
     package: Path,
     assignment: Assignment,
-    shelf: _Shelf,
+    shelf: Shelf,
     output_dir: Path,
     settings: PlanOptions,
     *,
@@ -701,7 +541,7 @@ def _decide(
     """
     # Neither "write it", which would replace another book's archive, nor
     # "exported", which would silently drop this one.
-    filename, clash, reason = _place(assignment, shelf)
+    filename, clash, reason = place(assignment, shelf)
     if not filename:
         return Decision(package, COLLISION, reason=reason)
     found = clash.path if clash is not None else None

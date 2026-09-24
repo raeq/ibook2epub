@@ -24,7 +24,7 @@ from epubconvert.export.naming import (
     PassthroughNaming,
     disambiguator,
 )
-from epubconvert.run import convert, planning, run
+from epubconvert.run import convert, placing, planning, run
 from epubconvert.utils.policy import NamingPolicy
 from tests.conftest import make_metadata_package, make_package, remove_tree
 
@@ -715,3 +715,99 @@ class TestSuffixModeMovesOffAnotherBooksName:
         )
 
         assert decision.status == planning.COLLISION
+
+
+class TestWhereABookIsOnTheShelf:
+    """
+    ``placing.placed`` says which archive is a book's own, the way the plan decides it.
+
+    Annotations went to ``output_dir / assignment.filename`` without asking:
+    ``-ar`` rewrote the archive under a book's name when it held another
+    book, and a book that had moved on to its marked name never got its
+    highlights.
+    """
+
+    PLAIN = "Frank Herbert - Dune.epub"
+
+    @staticmethod
+    def _replaced(tmp_path: Path, output_dir: Path, mode: str) -> Path:
+        # The 1965 edition is exported and deleted; the Ace edition follows.
+        library = tmp_path / "lib"
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        argv += ["--name-by", "author-title", "--on-collision", mode]
+        make_metadata_package(library, "Emma.epub", title="Emma")
+        for number, folder in ((1, "Dune (1965)"), (2, "Dune (Ace)")):
+            make_metadata_package(
+                library,
+                f"{folder}.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=f"urn:uuid:{number}",
+            )
+            run.main(argv)
+            if number == 1:
+                remove_tree(library / f"{folder}.epub")
+        return library
+
+    @staticmethod
+    def _placed(
+        library: Path,
+        output_dir: Path,
+        policy: NamingPolicy,
+        mode: planning.CollisionMode,
+        *,
+        writing: bool = False,
+    ) -> dict[str, Path | None]:
+        assigned = planning.assign_names(collect_package_dirs(library), policy, mode)
+        found = placing.placed(assigned, output_dir, policy, writing=writing)
+        return {package.name: path for package, path in found.items()}
+
+    def test_skip_mode_finds_no_archive_under_a_name_another_book_holds(
+        self, tmp_path, output_dir
+    ):
+        library = self._replaced(tmp_path, output_dir, planning.SKIP)
+
+        found = self._placed(library, output_dir, MetadataNaming(), planning.SKIP)
+
+        assert (output_dir / self.PLAIN).is_file()
+        assert found == {
+            "Dune (Ace).epub": None,
+            "Emma.epub": output_dir / "Emma.epub",
+        }
+
+    def test_suffix_mode_finds_the_book_under_its_marked_name(
+        self, tmp_path, output_dir
+    ):
+        library = self._replaced(tmp_path, output_dir, planning.SUFFIX)
+        marked = f"Frank Herbert - Dune [{disambiguator('urn:uuid:2')}].epub"
+
+        found = self._placed(library, output_dir, MetadataNaming(), planning.SUFFIX)
+
+        assert (output_dir / self.PLAIN).is_file()
+        assert found["Dune (Ace).epub"] == output_dir / marked
+
+    def test_a_book_not_yet_written_has_no_archive(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+
+        found = self._placed(library, output_dir, PassthroughNaming(), planning.SKIP)
+
+        assert found == {"Book.epub": None}
+
+    def test_a_folder_name_is_checked_before_a_write(self, tmp_path, output_dir):
+        # Named from the folder, nothing was read: the name is trusted as the
+        # plan trusts it, unless the caller is about to write over the file.
+        library = tmp_path / "lib"
+        for folder, identifier in (("a", "urn:uuid:A"), ("b", "urn:uuid:B")):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier=identifier
+            )
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        remove_tree(library / "a" / "Dune.epub")
+        policy = PassthroughNaming()
+
+        trusted = self._placed(library, output_dir, policy, planning.SKIP)
+        checked = self._placed(library, output_dir, policy, planning.SKIP, writing=True)
+
+        assert trusted == {"Dune.epub": output_dir / "Dune.epub"}
+        assert checked == {"Dune.epub": None}
