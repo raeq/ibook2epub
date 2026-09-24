@@ -12,8 +12,46 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `collect/validate.py` is split into `collect/identifiers.py` (identifier and
   title canonicalisation), `collect/package.py` (reading a package) and
   `collect/validate.py` (archive checks and epubcheck).
+- `run/run.py` hands the `--verify` advice to `run/repair.py` and the
+  pre-flight checks to `run/preflight.py`; the summary line moves from
+  `run/convert.py` to `run/summary.py`.
 
 ### Fixed
+
+- A library or shelf behind a directory the run may not search (Full Disk
+  Access on macOS) ends with an exit code instead of a traceback: exit 8
+  with the Full Disk Access advice for the library, exit 5 ("Cannot read
+  output directory") for the shelf. A vault is refused the same way when it
+  would be named against a shelf it cannot read.
+
+- A read-only shelf is refused with exit 5 ("Cannot write into output
+  directory") once the plan has work for it, in the dry run as in the real
+  run, instead of the dry run passing and the real run failing every book.
+
+- A second Ctrl-C no longer breaks the wait for books already being written:
+  the run says "Finishing N book(s) already being written...", waits until
+  they are done, counts them in the summary, and only then releases the
+  output lock and exits 130.
+
+- `-ae -ar` no longer downloads books iCloud evicted in order to refresh the
+  others' highlights, and accepts `-w` and `--skip-incomplete`.
+
+- A report that cannot be written (`--list > /dev/full`) is said once and
+  exits 5 instead of a traceback; a summary on a closed standard error under
+  `-ad -` ends quietly.
+
+- An interrupted dry run says it was interrupted, instead of reading as a
+  finished rehearsal.
+
+- With `--min-free`, workers wait while the free space is being measured,
+  so no book starts during the measurement that would have refused it.
+
+- `--min-free` refuses a negative value instead of silently disabling the
+  floor.
+
+- The last messages that printed a path unescaped (an output directory
+  inside the library, the probed library homes, and the container-read
+  errors of `-ae`, `-ao` and `-ar`) now escape it.
 
 - A note written before notes were tagged goes only to the one book holding
   every highlight in it: two editions sharing a passage no longer hand one
