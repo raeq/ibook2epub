@@ -82,7 +82,7 @@ This models how the planner names books (`assign_names`) and how a run reads
 the shelf back (`plan_exports`). There is no state file, so a book whose
 name is on the shelf looks exported. The model checks what that inference
 gets right over a sequence of runs while the library changes. It checks
-three properties:
+four properties:
 
 - **ExportedMeansTheBooksOwnFile:** a book the planner reports as exported is
   the book held in the file it points at.
@@ -91,6 +91,12 @@ three properties:
   run leaves a book with a usable identifier unexported because another
   book's archive holds its name. Checked in the suffix configurations only;
   skip mode reports that as a collision by design.
+- **NoArchiveOfTheLibraryIsAnOrphan:** the orphan check (`find_orphans`)
+  never lists the archive of a book that is still in the library: the list
+  a person reviews before deleting. Checked in `Changing` and the copies
+  configurations. Suffix mode breaks it by design when a book enters a
+  collision and takes its marker, or a numbered book leaves one: the old
+  file stays, and is reported as an orphan.
 
 Names are strings, so a title that looks like a suffix (`Dune (2)`) collides
 exactly as it does on disk. The model has 3 editions sharing one title, as
@@ -104,11 +110,21 @@ only when the book is about to be written over an archive. `MoveOn`
 switches on `placing.place`: under suffix mode, a book whose name holds another
 book moves on to the first free position of its marked name.
 
+`Copies` are the books copied through rather than converted: PDFs and books
+that arrived already zipped. They take their names after every package
+(`copynames.claim_copies`), with no digest marker, and a package a copy wants
+the name of has its identifier read whatever the policy. `KeepOwn` switches
+on the claim-pass fixes: a copy whose own file is on the shelf under its name
+or one of its numbers keeps it in either mode and claims before the others,
+and a package with no digest marker moves on to its own name, numbered.
+`AllowChanges` lets the library start with any of its books and have books
+added; `AllowRemovals` lets books be removed as well.
+
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
 | `Stable` | whole library, `--refresh` | fixed | none | on | both hold |
 | `StableSuffix` | the same, suffix mode, look-alike title | fixed | two | on | all three hold |
-| `Changing` | `--match`, `--refresh` | books added and removed | all | on | both hold |
+| `Changing` | `--match`, `--refresh` | books added and removed | all | on | the two, and NoArchiveOfTheLibraryIsAnOrphan, hold |
 | `ChangingSuffix` | the same, suffix mode | books added and removed | all | on | all three hold |
 | `ChangingSuffixStuck` | the same, without `MoveOn` | books added and removed | all | on | **SuffixKeepsEveryIdentifiableBook violated** |
 | `MatchUnverified` | `--match` | fixed | all | off | both hold |
@@ -117,6 +133,8 @@ book moves on to the first free position of its marked name.
 | `Unidentifiable` | `--match`, `--refresh` | books added and removed | book 1 only | on | **ExportedMeansTheBooksOwnFile violated** |
 | `FolderNamedWrites` | `--match`, `--refresh`, named from the folder | books added and removed | all | before a write | NeverWritesOverAnotherBook holds |
 | `FolderNamedReports` | the same | books added and removed | all | before a write | **ExportedMeansTheBooksOwnFile violated** |
+| `CopiesSuffix` | `--match`, `--refresh`, suffix mode, named from the folder, two copies and a package | books added | all | before a write, and where a copy wants the name | all four hold |
+| `CopiesSuffixStuck` | the same, without `KeepOwn` | books added | all | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 
 What the configurations that fail show:
 
@@ -176,13 +194,42 @@ What the configurations that fail show:
   `tests/test_planning.py::TestAFolderNameIsNotProofOfTheBook` replays the
   writes against the CLI.
 
+- **`CopiesSuffixStuck`** is the claim pass before a copy kept its own
+  file in suffix mode. The rule that a copy already on the shelf keeps its
+  file was applied only to a copy that found no free name, and under
+  `--on-collision suffix` a free ` (n)` always exists. So a zipped
+  `b/Book.epub` copied before a package `pkg/Book.epub`, or another zipped
+  `a/Book.epub`, of its name arrived was copied again as `Book (2).epub`, and
+  its first file was listed as an orphan while the package was a collision
+  on every run. `CopiesSuffix` holds with the fix, over additions to the
+  library: `--match` runs, `--refresh`, and runs cut short.
+  `tests/test_copy_shelf.py` replays it against the CLI, and the model
+  found a case of it the tests had not: a copy numbered ` (2)` by a run
+  narrowed with `--match` took ` (3)` once a package arrived, and was copied
+  again, until a copy kept its own file under any of its numbers.
+
+  With removals too it does not hold, for the reasons above: a package
+  named from the folder that takes the name of a copy since deleted from the
+  library is reported exported from that copy's file (`FolderNamedReports`),
+  and a numbered book whose namesake leaves takes the plain name and is
+  written again.
+
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.
 
-The model names packages only. Files copied through -- PDFs and books that
-arrived already zipped -- are not modelled: they take their names in the same
-claim pass, after every package (`copynames.claim_copies`), and are placed on
-the shelf by the same `placing.place`, so a copy loses a name to a package
-rather than landing first under it. What the model does not check is that
-ordering, nor a copy's own positional suffix under `--on-collision suffix`;
-`tests/test_copy_claims.py` replays those against the CLI.
+What the model does not describe, and why:
+
+- **Case folding and Unicode normalization.** Names are strings compared
+  exactly, as `PassthroughNaming.identity` compares them, while the shelf is
+  looked up by `filesystem_key`, which folds both. Modelling the fold means
+  two name spaces and a map between them, for a state space that already
+  takes minutes; so the rules that exist only because of it -- a book renamed
+  by case finds its own archive (`holders.foreign`), and a book whose exact
+  name is on the shelf claims it first (`claims.claim_order`) -- are replayed
+  against the CLI in `tests/test_case_namesakes.py`.
+- **`--force`**, which writes over a book's own archive as `--refresh` does
+  for a newer source, and is checked before the write the same way.
+- **Two different copies of one size.** A copy's own file is told exactly
+  here; the code tells it by size, and by identifier where two books want
+  the name (`tests/test_copy_shelf.py`). PDFs have no identifier, and two
+  PDFs of one name and one size cannot be told apart.

@@ -67,6 +67,13 @@ EXPECTED = {
     "RerunPlanner.FolderNamedReports": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
+    # Files copied through beside a package, named from the folder, in
+    # suffix mode; without the claim pass keeping a copy at its own file, a
+    # copy is written again under a number and its file listed as an orphan.
+    "RerunPlanner.CopiesSuffix": HOLDS,
+    "RerunPlanner.CopiesSuffixStuck": (
+        "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
+    ),
 }
 
 
