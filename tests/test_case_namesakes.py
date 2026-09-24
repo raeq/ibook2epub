@@ -237,6 +237,25 @@ class TestABookRenamedByCaseOnly:
         assert "Already exported, skipping: Dune.epub" in captured.err
 
 
+class TestACopyRenamedByCaseOnly:
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_it_is_not_copied_again(self, tmp_path, output_dir, capsys, mode):
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "b" / "dune.epub", "urn:uuid:B", "Dune")
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+        argv += ["--on-collision", mode]
+        run.main([*argv, "-q"])
+        (library / "b" / "dune.epub").rename(library / "b" / "Dune.epub")
+        capsys.readouterr()
+
+        run.main(argv)
+        captured = capsys.readouterr()
+
+        assert files(output_dir) == {"dune.epub": "urn:uuid:B"}
+        assert " copied" not in captured.out
+        assert "orphan" not in captured.out
+
+
 class TestForeign:
     """What :func:`holders.foreign` says of a file of another spelling."""
 

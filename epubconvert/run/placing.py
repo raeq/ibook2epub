@@ -165,7 +165,14 @@ def settled(
     shelf = read_shelf(output_dir, policy, assigned)
     result = []
     for item in assigned:
-        filename, _clash, reason = place(item, shelf)
+        filename, clash, reason = place(item, shelf)
+        if clash is not None:
+            # The book's own archive, found under another spelling of its
+            # name: the file, not the name, is what a note is named after and
+            # what a copy is checked against. Kept as assigned, -ar wrote
+            # Dune.md where the conversion route wrote dune.md, and on a
+            # case-sensitive volume the copy was written again as Dune.epub.
+            filename = clash.path.name
         if filename == item.filename:
             result.append(item)
         elif filename:
