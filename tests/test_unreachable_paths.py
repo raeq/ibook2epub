@@ -121,7 +121,7 @@ class TestAShelfItMayNotSearch:
         assert code == exits.NO_OUTPUT
         assert f"Cannot read output directory {link}" in capsys.readouterr().err
 
-    def test_a_vault_is_still_written(self, tmp_path, monkeypatch):
+    def test_a_vault_named_against_it(self, tmp_path, monkeypatch, capsys):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")
         blocked = tmp_path / "blocked"
@@ -129,17 +129,83 @@ class TestAShelfItMayNotSearch:
         refuse_below(monkeypatch, blocked)
 
         code = run.main(
-            [
-                "-s",
-                str(library),
-                "-o",
-                str(blocked / "shelf"),
-                "-ao",
-                str(tmp_path / "vault"),
-                "--annotations-format",
-                "markdown",
-                "-q",
-            ]
+            ["-s", str(library), "-o", str(blocked / "shelf"), *_vault(tmp_path)]
+        )
+
+        assert code == exits.NO_OUTPUT
+        assert "Cannot read output directory" in capsys.readouterr().err
+
+
+def _vault(tmp_path: Path) -> list[str]:
+    """Write the highlights as a vault of notes, and nothing else."""
+    return ["-ao", str(tmp_path / "vault"), "--annotations-format", "markdown"]
+
+
+def _refuse_listing(monkeypatch: pytest.MonkeyPatch, shelf: Path) -> None:
+    """Make *shelf* unlistable, as mode 300 makes it for anyone but root."""
+    listable = os.scandir
+
+    def unlistable(path: Any, *args: Any, **kwargs: Any) -> Any:
+        if os.fspath(path) == str(shelf):
+            raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        return listable(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", unlistable)
+
+
+class TestAVaultNamedAgainstAShelfItCannotRead:
+    """
+    A vault names each note after the file its book is on the shelf, so it
+    reads -o, and the check that refuses a shelf it cannot list was skipped
+    for -ao: the notes were named as if the shelf were empty, which a later
+    run, reading it, names differently.
+    """
+
+    @staticmethod
+    def _shelf(tmp_path: Path) -> tuple[Path, Path]:
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        shelf = tmp_path / "shelf"
+        assert run.main(["-s", str(library), "-o", str(shelf), "-q"]) == 0
+        return library, shelf
+
+    def test_is_refused(self, tmp_path, monkeypatch, capsys):
+        library, shelf = self._shelf(tmp_path)
+        _refuse_listing(monkeypatch, shelf)
+
+        code = run.main(["-s", str(library), "-o", str(shelf), *_vault(tmp_path)])
+
+        assert code == exits.NO_OUTPUT
+        assert f"Cannot read output directory {shelf}" in capsys.readouterr().err
+        assert not (tmp_path / "vault").exists()
+
+    @needs_permissions
+    def test_for_real(self, tmp_path):
+        library, shelf = self._shelf(tmp_path)
+        shelf.chmod(0o300)
+        try:
+            code = run.main(["-s", str(library), "-o", str(shelf), *_vault(tmp_path)])
+        finally:
+            shelf.chmod(0o755)
+
+        assert code == exits.NO_OUTPUT
+
+    def test_a_shelf_not_made_yet_is_no_obstacle(self, tmp_path):
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+
+        code = run.main(
+            ["-s", str(library), "-o", str(tmp_path / "none"), *_vault(tmp_path)]
+        )
+
+        assert code == exits.SUCCESS
+
+    def test_a_file_of_highlights_does_not_read_it(self, tmp_path, monkeypatch):
+        library, shelf = self._shelf(tmp_path)
+        _refuse_listing(monkeypatch, shelf)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(shelf), "-ao", str(tmp_path / "h.json")]
         )
 
         assert code == exits.SUCCESS

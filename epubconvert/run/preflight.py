@@ -212,7 +212,11 @@ def _check_shelf(args: argparse.Namespace) -> int | None:
             kind,
         )
         return exits.NO_OUTPUT
-    unreadable = _unreadable(args.output_dir) if uses_shelf else None
+    # A vault reads the shelf too, even beside -ao: each note is named after
+    # the file its book is on the shelf, and one it could not list named them
+    # all as if it were empty.
+    reads_shelf = uses_shelf or vault_of(args) is not None
+    unreadable = _unreadable(args.output_dir) if reads_shelf else None
     if unreadable is not None:
         logger.critical(
             "Cannot read output directory %s: %s",
