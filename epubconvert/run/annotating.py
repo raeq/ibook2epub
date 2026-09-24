@@ -32,6 +32,7 @@ from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import Assignment, NamingPolicy
 from .convert import OutputLockedError, output_lock, progress_for
+from .placing import placed
 from .planning import assign_names
 
 
@@ -68,6 +69,7 @@ def gather_annotations(
 
 def annotations_after_export(
     args: argparse.Namespace,
+    policy: NamingPolicy,
     named: Sequence[Assignment],
     found: list[dict[str, Any]] | None,
     *,
@@ -86,8 +88,9 @@ def annotations_after_export(
     asking for it.
 
     :param args: Parsed command line arguments.
-    :param named: The names the export just used, so the refresh looks for the
-        archives the export actually wrote.
+    :param policy: The naming policy, so a book's archive is found the way the
+        plan finds it.
+    :param named: The names the export just used.
     :param found: The annotations this run read, or None.
     :param copyable: The library's already-zipped books and PDFs, the other
         half of telling a highlight's book apart; see
@@ -97,20 +100,21 @@ def annotations_after_export(
     """
     if args.dry_run:
         return None
+    # -ar never reaches here: it is its own route, apply_annotations, which
+    # converts nothing.
     code = exits.SUCCESS
-    if args.annotations_refresh and found is not None:
-        code = _embed_in_shelf(args, found, True, named, copyable)
-    if code == exits.SUCCESS and args.annotations_detached and found is not None:
+    if args.annotations_detached and found is not None:
         code = write_export(
             args, found, args.annotations_detached, named, copyable=copyable
         )
     if args.annotations_embedded and not args.annotations_detached and found:
-        _warn_about_stranded(args, found, named, copyable)
+        _warn_about_stranded(args, policy, found, named, copyable)
     return None if code == exits.SUCCESS else code
 
 
 def _warn_about_stranded(
     args: argparse.Namespace,
+    policy: NamingPolicy,
     found: list[dict[str, Any]],
     named: Sequence[Assignment],
     copyable: Sequence[Path],
@@ -133,9 +137,9 @@ def _warn_about_stranded(
     file, so there is nothing to warn about.
 
     :param args: Parsed command line arguments.
+    :param policy: The naming policy the names came from.
     :param found: Every annotation this run read.
-    :param named: The names the export used, which is the only place that knows
-        what each book's archive would be called.
+    :param named: The names the export used.
     :param copyable: The library's already-zipped books and PDFs.
     """
     # Quiet: the conversion before this read the same annotations against
@@ -143,11 +147,14 @@ def _warn_about_stranded(
     index = index_by_package(
         found, [item.package for item in named], copyable=copyable, quiet=True
     )
+    # Found where the plan finds it, not by name: a file under the book's name
+    # may hold another book, and then these highlights went nowhere and the
+    # warning, seeing a file there, said nothing.
+    places = placed(named, args.output_dir, policy)
     stranded_books: list[str] = []
     stranded = 0
     for item in named:
-        target = args.output_dir / item.filename if item.filename else None
-        if target is not None and target.is_file():
+        if places.get(item.package) is not None:
             continue
         mine = annotations_for_book(item.package.name, index)
         if mine:
@@ -274,7 +281,14 @@ def apply_annotations(
 
     code = exits.SUCCESS
     if args.annotations_embedded:
-        code = _embed_in_shelf(args, found, converted, assignments, copyable)
+        code = _embed_in_shelf(
+            args,
+            policy,
+            found,
+            converted=converted,
+            assignments=assignments,
+            copyable=copyable,
+        )
         # A book the refresh could not rebuild is that book's failure, and the
         # detached file is somewhere else, so it is still written. Anything
         # else -- no shelf, the lock held -- stops here as it always did.
@@ -307,7 +321,9 @@ def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
 
 def _embed_in_shelf(
     args: argparse.Namespace,
+    policy: NamingPolicy,
     found: list[dict[str, Any]],
+    *,
     converted: bool,
     assignments: Sequence[Assignment],
     copyable: Sequence[Path],
@@ -315,7 +331,14 @@ def _embed_in_shelf(
     """
     Put each book's annotations inside the archive already on the shelf.
 
+    The archive is the one the plan would call the book's own, not the file
+    under its name: that file may hold another book -- the edition the name
+    was given to first, likely the last copy of one deleted from the library
+    -- and a refresh wrote this book's highlights into it, while the book
+    itself, moved on to its marked name, got none.
+
     :param args: Parsed command line arguments.
+    :param policy: The naming policy the names came from.
     :param found: Every annotation read from Apple.
     :param converted: Whether this run also converted books.
     :param assignments: The names every package was given.
@@ -347,7 +370,10 @@ def _embed_in_shelf(
     # traceback and exit 1.
     try:
         with output_lock(args.output_dir):
-            changed, failed, stopped = _refresh_each(args, assignments, index)
+            # Read under the lock, and as before a write: a policy that names
+            # from the folder reads the book's own identifier to compare.
+            places = placed(assignments, args.output_dir, policy, writing=True)
+            changed, failed, stopped = _refresh_each(args, assignments, index, places)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
@@ -374,6 +400,7 @@ def _refresh_each(
     args: argparse.Namespace,
     assignments: Sequence[Assignment],
     index: dict[str, list[dict[str, Any]]],
+    places: dict[Path, Path | None],
 ) -> tuple[int, int, bool]:
     """
     Rebuild every archive on the shelf whose annotations changed.
@@ -387,6 +414,7 @@ def _refresh_each(
     :param args: Parsed command line arguments.
     :param assignments: The names every package was given.
     :param index: The annotations, by book.
+    :param places: Each book's own archive on the shelf, or None.
 
     :return: How many archives were rewritten, how many could not be, and
         whether the floor stopped the refresh before the rest.
@@ -401,8 +429,8 @@ def _refresh_each(
 
     for item in assignments:
         marker = progress.tick()
-        target = args.output_dir / item.filename if item.filename else None
-        if target is None or not target.is_file():
+        target = places.get(item.package)
+        if target is None:
             continue
         mine = annotations_for_book(item.package.name, index)
         if not mine:

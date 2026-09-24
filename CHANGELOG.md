@@ -9,6 +9,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--annotations-refresh` writes a book's highlights only into the archive
+  that is that book's own. It wrote them into whatever file had the book's
+  name -- which can hold another edition, likely the last copy of one deleted
+  from the library -- and a book moved on to its marked name under
+  `--on-collision suffix` never got its own. The warning that highlights
+  "reached no file" now also names a book whose name is held by another.
+
+- A highlight from an already-zipped book is no longer embedded in, or
+  written into the note of, a package with the same name; it goes to
+  neither, with a warning, as for two same-named packages.
+
+- `--annotations-refresh` stops at the `--min-free` floor and exits 1 when a
+  book could not be refreshed, instead of logging and exiting 0; a dry run
+  of it reads Apple's container as the real run does.
+
+- After Ctrl-C the run no longer writes the detached export or notes, or
+  warns that highlights reached no file; it says they were not written. The
+  exit code follows one documented order -- 130, then a failed book, then
+  the annotation destination -- so it cannot contradict the summary.
+
+- A failed copy no longer turns books the `--min-free` floor stopped into
+  "failed" books in the summary, and `-o` pointing beneath a file is
+  refused by `--dry-run` and `--list` as by a real run.
+
 - One annotation whose style is an infinity no longer ends the whole
   annotation export; it loses its style. A book whose recorded path holds a
   NUL byte loses only its package metadata, not its highlights or its

@@ -589,7 +589,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _after_export(
     args: argparse.Namespace,
+    policy: NamingPolicy,
     report: Report,
+    *,
     named: Sequence[Assignment],
     found: list[dict[str, Any]] | None,
     copyable: Sequence[Path],
@@ -604,6 +606,7 @@ def _after_export(
     reached.
 
     :param args: Parsed command line arguments.
+    :param policy: The naming policy the names came from.
     :param report: The export's report, which says whether it was stopped.
     :param named: The names the export used.
     :param found: The annotations this run read, or None.
@@ -613,7 +616,7 @@ def _after_export(
         returns, or None when the run was stopped.
     """
     if not report.interrupted:
-        return annotations_after_export(args, named, found, copyable=copyable)
+        return annotations_after_export(args, policy, named, found, copyable=copyable)
     # Said only when there was somewhere else for them to go. Under -ae alone
     # every book converted before the Ctrl-C already carries its own.
     elsewhere = args.annotations_detached or args.annotations_refresh
@@ -671,7 +674,9 @@ def _run(args: argparse.Namespace) -> int:
 
     # After the books are on the shelf, so annotations reach them by the same
     # path --annotations-refresh uses. A dry run writes nothing, here included.
-    annotated = _after_export(args, report, named, found, copyable)
+    annotated = _after_export(
+        args, policy, report, named=named, found=found, copyable=copyable
+    )
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     # Standard output belongs to the document when one is going there; a
     # summary in the middle of it would make the JSON unparsable, which is the
