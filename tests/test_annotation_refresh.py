@@ -18,6 +18,9 @@ exit code rather than promising success before looking.
 # pylint: disable=too-few-public-methods
 
 import errno
+import os
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -25,6 +28,8 @@ import pytest
 
 from epubconvert.collect import annotations
 from epubconvert.collect.coredata import ContainerPermissionError
+from epubconvert.collect.validate import ArchiveInvalidError
+from epubconvert.export import archive as shelf
 from epubconvert.run import annotating, convert, run
 from epubconvert.utils import exits
 from tests.conftest import make_package
@@ -165,3 +170,66 @@ class TestADryRefreshPredictsTheRealOne:
 
         assert dry == real == exits.NO_OUTPUT
         assert not typo.exists()
+
+
+def _unblocked(fifo: Path, call: Callable[[], object]) -> object:
+    """
+    Run *call*, failing rather than hanging if it opens *fifo* for reading.
+
+    :return: What it returned, or the exception it raised.
+    """
+    outcome: list[object] = []
+
+    def run_it() -> None:
+        try:
+            outcome.append(call())
+        except (ArchiveInvalidError, OSError) as exc:
+            outcome.append(exc)
+
+    worker = threading.Thread(target=run_it, daemon=True)
+    worker.start()
+    worker.join(5)
+    if worker.is_alive():
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        worker.join(5)
+        pytest.fail(f"blocked opening {fifo.name}")
+    return outcome[0]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="this platform has no FIFOs")
+class TestARefreshWaitsOnNoFifo:
+    """
+    Every reader of an archive opens it through ``open_regular`` and judges
+    the descriptor, but the refresh still opened the shelf's copy by name. A
+    FIFO swapped in for a book after the shelf was listed was opened for
+    reading, and ``-ar`` waited for a writer for ever.
+    """
+
+    def test_a_fifo_is_refused_as_an_invalid_archive(self, tmp_path):
+        fifo = tmp_path / "Book.epub"
+        os.mkfifo(fifo)
+
+        raised = _unblocked(
+            fifo, lambda: shelf.replace_annotations(fifo, [{"id": "x"}])
+        )
+
+        assert isinstance(raised, ArchiveInvalidError)
+        assert "not a regular file" in str(raised)
+
+    def test_the_run_counts_the_book_as_failed(
+        self, shelved, tmp_path, monkeypatch, capsys
+    ):
+        fifo = tmp_path / "swapped.epub"
+        os.mkfifo(fifo)
+        real = shelf._what_to_replace  # pylint: disable=protected-access
+
+        def swapped(target: Path) -> tuple[Path, int]:
+            found, mode = real(target)
+            return (fifo, mode) if target.name == "Old.epub" else (found, mode)
+
+        monkeypatch.setattr(shelf, "_what_to_replace", swapped)
+
+        code = _unblocked(fifo, lambda: run.main([*shelved, "-ae", "-ar"]))
+
+        assert code == exits.FAILED
+        assert "could not refresh 1" in capsys.readouterr().err
