@@ -152,6 +152,20 @@ class TestTheCommandsPrintNoControlCharacters:
         assert "Hostile.epub is damaged" in err
         _assert_escaped(err)
 
+    def test_verify_advice_names_a_hostile_archive_escaped(
+        self, tmp_path, output_dir, capsys
+    ):
+        # shlex.quote makes a name one shell word; it does nothing about ESC
+        # and CR, which reached the terminal inside the repair advice.
+        (output_dir / f"{ERASE}All fine.epub").write_bytes(b"not a zip")
+        make_metadata_package(tmp_path / "lib", f"{ERASE}All fine.epub", title="x")
+
+        run.main(["-s", str(tmp_path / "lib"), "-o", str(output_dir), "--verify"])
+
+        out = capsys.readouterr().out
+        assert "All fine" in out
+        _assert_escaped(out)
+
     def test_validate_reports_a_hostile_href_escaped(
         self, tmp_path, output_dir, capsys
     ):
