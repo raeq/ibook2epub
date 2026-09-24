@@ -9,6 +9,36 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A manifest href such as `" //[x#f"` (a space, tab or carriage return before
+  `//[`) no longer ends the whole run with "Invalid IPv6 URL", including under
+  `--dry-run` and when a zipped book is named with `--name-by author-title`;
+  the other books are still exported.
+
+- `--epubcheck` and `--verify` escape control characters in the problems
+  epubcheck reports and in the archive name they log, so a book's member
+  names can no longer send escape sequences to the terminal.
+
+- `--verify` no longer hangs on a FIFO named `*.epub` in the output directory,
+  and no longer reports a directory named `*.epub` as damaged (exit 7).
+
+- A highlight with no asset id is exported under "Unknown book" again instead
+  of being skipped with a warning.
+
+- A file that is not UTF-8 at a note's or sidecar's path no longer crashes a
+  Markdown vault run; it is left untouched, reported as unreadable, and the
+  other books' notes are still written (exit 1).
+
+- A vault note whose frontmatter the reader deleted is recognised as the
+  tool's own and updated again, instead of being reported as "not written by
+  ibook2epub" on every run; the frontmatter stays deleted.
+
+- JSON written to standard output (`-ao -`, `-ad -`, `--library-export -
+  --library-format json`) escapes C1 control characters such as CSI and still
+  decodes to the same data; files keep the exact characters.
+
+- An annotation export saved with a UTF-8 byte-order mark is merged into on
+  the next run instead of being refused (exit 5).
+
 - `--verify`'s repair advice now selects the damaged book. A title containing
   `?`, `[` or `*` is escaped, and a pattern that would also match another book
   is anchored. A damaged file not named after any package (copied through, or
