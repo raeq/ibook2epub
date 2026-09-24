@@ -26,9 +26,16 @@ from typing import Any
 from ..collect.identifiers import canonical_identifier
 from ..utils.display import collapse
 from ..utils.policy import Assignment
-from .naming import MAX_FILENAME_BYTES, encode_name, filesystem_key, truncate_bytes
+from .naming import (
+    MAX_FILENAME_BYTES,
+    disambiguator,
+    encode_name,
+    filesystem_key,
+    truncate_bytes,
+)
 from .noteformat import (
     END_PATTERN,
+    book_source,
     book_tags,
     first_start,
     normalise,
@@ -56,14 +63,15 @@ class Holding(Enum):
 
     #: Nothing is there.
     ABSENT = "absent"
-    #: A note of this book's: tagged for it, or holding its highlights.
+    #: A note of this book's: tagged for it, or holding every one of its
+    #: highlights in the note.
     MINE = "mine"
-    #: A note of another book's: tagged for one this run knows, or naming
-    #: another edition in its frontmatter.
+    #: A note of another book's: tagged for one this run knows, naming
+    #: another edition in its frontmatter or another file in its marker.
     ANOTHER = "another"
     #: A note that says nothing either way: tagged for no book this run
-    #: knows, or not tagged at all, and holding none of this book's
-    #: highlights.
+    #: knows, or not tagged at all, naming no other file, and holding not
+    #: every one of this book's highlights.
     UNCLAIMED = "unclaimed"
     #: A file this tool did not write.
     FOREIGN = "foreign"
@@ -81,6 +89,8 @@ class Held:
     kind: Holding
     #: The book the note's start marker is tagged for, if any.
     tag: str | None = None
+    #: The file the note's start marker names, if any.
+    source: str | None = None
     #: Each quoted block of the generated region, as :func:`_words` has it.
     quoted: frozenset[str] = frozenset()
     #: The ``identifier:`` values of the frontmatter above the marker, each
@@ -101,6 +111,8 @@ class Claimant:
     words: frozenset[str]
     #: Its identifier and its declared one, canonicalised.
     identifiers: frozenset[str]
+    #: The file it is read from, as :func:`~.noteformat.book_source` has it.
+    source: str | None = None
 
 
 def claimant(found: list[dict[str, Any]], also: Iterable[str] = ()) -> Claimant:
@@ -124,6 +136,7 @@ def claimant(found: list[dict[str, Any]], also: Iterable[str] = ()) -> Claimant:
         frozenset(book_tags(found)) | frozenset(also),
         frozenset(_words(str(item.get("text", ""))) for item in found),
         frozenset(identifiers),
+        book_source(found),
     )
 
 
@@ -200,6 +213,7 @@ def parse(text: str) -> Held:
     return Held(
         Holding.UNCLAIMED,
         marker.group(2),
+        marker.group(3),
         frozenset(filter(None, quoted_blocks)),
         frozenset(
             canonical_identifier(scalar(line.group(1))) for line in identifiers if line
@@ -224,9 +238,11 @@ def holding(held: Held, book: Claimant, known: Collection[str] | None) -> Holdin
     and neither does a note an older version wrote with no tag at all.
 
     Then the other evidence. A frontmatter naming another identifier is
-    another edition's note. A note holding the book's highlights, every one
-    of its quoted blocks, is its own -- though another book may hold them
-    too (:func:`_by_evidence`). Holding only some of them proves nothing:
+    another edition's note, and a marker naming another file than the one
+    the book is read from is that file's book's. A note holding the book's
+    highlights, every one of its quoted blocks, is its own -- though
+    another book may hold them too (:func:`_by_evidence`). Holding only
+    some of them proves nothing:
     two editions share a passage, and the note of one held the other's
     highlight. Holding none -- every one of them deleted in Books -- it
     says nothing either.
@@ -251,6 +267,8 @@ def holding(held: Held, book: Claimant, known: Collection[str] | None) -> Holdin
         and not held.identifiers & book.identifiers
     ):
         return Holding.ANOTHER
+    if held.source and book.source and held.source != book.source:
+        return Holding.ANOTHER
     mine = held.quoted and held.quoted <= book.words
     return Holding.MINE if mine else Holding.UNCLAIMED
 
@@ -269,15 +287,25 @@ class Naming:
 class _Names:
     """The names given so far, and what is known of the notes at them."""
 
-    def __init__(self, vault: Vault, known: Collection[str] | None) -> None:
+    def __init__(
+        self,
+        named: Sequence[Assignment],
+        vault: Vault,
+        known: Collection[str] | None,
+        *,
+        suffix: bool,
+    ) -> None:
+        self.named = named
         self.vault = vault
         self.known = known
+        self.suffix = suffix
         self.naming = Naming()
         self.given = self.naming.given
         self.taken: set[str] = set()
         #: Each note the evidence gives a book, by its listed name: the
         #: package it is the note of, or None when two books hold it alike.
         self.owners: dict[str, Path | None] = {}
+        self._wanting: dict[str, list[Assignment]] | None = None
 
     def free(self, name: str) -> bool:
         """Whether no book has been given *name*, as the filesystem compares."""
@@ -293,7 +321,49 @@ class _Names:
         if listed in self.owners:
             mine = self.owners[listed] == item.package
             return Holding.MINE if mine else Holding.ANOTHER
-        return holding(self.vault.held(listed), book, self.known)
+        held = self.vault.held(listed)
+        verdict = holding(held, book, self.known)
+        unclaimed = verdict is Holding.UNCLAIMED and held.quoted
+        if unclaimed and self.contested(listed, item, held.source):
+            return Holding.ANOTHER
+        return verdict
+
+    def contested(self, listed: str, item: Assignment, source: str | None) -> bool:
+        """
+        Whether a note nothing claims is wanted by a book besides *item*.
+
+        Such a note -- tagged for no book the run knows, or for none, and
+        holding not every one of a book's highlights -- went with its name to
+        whichever book came first: the PDF's note, its highlights deleted
+        in Books, went to the EPUB for good once that gained one, re-tagged.
+        Only one book wanting its name, it is that book's, as a book removed
+        from Books and added again is. Two wanting it, either may be a
+        guess, and it is handed to neither.
+
+        Wanted by every book of the run that could be given the name: its
+        own, and under suffix a numbered one. Whether or not it has a note
+        already, so the answer holds still as books gain notes, and a rerun
+        decides as the run before it did. A note naming the file its book
+        is read from is wanted only by a book read from a file of that name.
+
+        :param listed: The note's name, as the vault lists it.
+        :param item: The book that wants it.
+        :param source: The file the note names, if any.
+
+        :return: True when *item* is not the one book that wants it.
+        """
+        if self._wanting is None:
+            self._wanting = {}
+            for other in self.named:
+                for name in _candidates(other, suffix=self.suffix):
+                    key = filesystem_key(name)
+                    self._wanting.setdefault(key, []).append(other)
+        wanting = [
+            other
+            for other in self._wanting.get(filesystem_key(listed), [])
+            if source in (None, _source(other))
+        ]
+        return [other.package for other in wanting] != [item.package]
 
 
 def note_names(
@@ -315,15 +385,18 @@ def note_names(
     names (:func:`~epubconvert.export.naming.filesystem_key`), so ``dune.pdf``
     beside ``Dune.epub`` loses too on a case-insensitive volume.
 
-    Three passes. A note already a book's -- tagged for it, or holding its
-    highlights -- stays its own, before anything else is named: a note is
-    the book's it was written for, whichever book has highlights today, and
-    a book with none today keeps the note tagged for it too. Then
-    every book's own note name, in the order given, which is the run's own
-    order, so the same book wins each run. Then, under suffix, a number for
-    each book left without one, never onto a name another book's file gives
-    it and never onto a file already there: a leftover note is never taken
-    over.
+    Three passes. A note already a book's -- tagged for it, naming the file
+    it is read from, or holding every highlight in the note -- stays its
+    own, before anything else is named: a note is the book's it was written
+    for, whichever book has highlights today, and a book with none today
+    keeps the note tagged for it too. Then every book's own note name, in
+    the order given, which is the run's own order, so the same book wins
+    each run. Then, under suffix, a number for each book left without one,
+    never onto a name another book's file gives it and never onto a file
+    already there: a leftover note is never taken over.
+
+    A note nothing claims goes with its name only when one book alone
+    wants it (:meth:`_Names.contested`); to two, it is another book's.
 
     Under suffix a book with highlights also passes over its own name when
     the file there is not its to write: another book's note, or a file this
@@ -343,7 +416,7 @@ def note_names(
 
     :return: Each package's note name, and which of them to refuse.
     """
-    names = _Names(vault, known)
+    names = _Names(named, vault, known, suffix=suffix)
     tagged = {
         item.package: Claimant(frozenset(tags), frozenset(), frozenset())
         for item in named
@@ -351,6 +424,7 @@ def note_names(
         and (tags := (library or {}).get(item.package.name))
     }
     _reserve(named, {**tagged, **claimants}, names, suffix=suffix)
+    _by_source(named, claimants, names, suffix=suffix)
     _by_evidence(named, claimants, names, suffix=suffix)
     for item in named:
         if item.package in names.given:
@@ -431,6 +505,61 @@ def _reserve(
             if mine and held.tag in book.tags:
                 names.give(item, listed)
                 break
+
+
+def _by_source(
+    named: Sequence[Assignment],
+    claimants: Mapping[Path, Claimant],
+    names: _Names,
+    *,
+    suffix: bool,
+) -> None:
+    """
+    Give each book the note naming the file it is read from, if one does.
+
+    A book removed from Books and added again answers to a new asset id, so
+    its note's tag names no book the run knows and says nothing. The note
+    still names the file its book is read from, and is that book's, as a
+    tagged note is, highlights today or not -- unless its tag is another
+    known book's, its frontmatter names another edition, or another book
+    read from a file of that name wants it too.
+
+    :param named: Every book of the run with a name, in the run's order.
+    :param claimants: Each book with highlights.
+    :param names: The names given so far, added to in place.
+    :param suffix: Whether a book's numbered names are its too.
+    """
+    for item in named:
+        if item.package in names.given:
+            continue
+        source = _source(item)
+        book = claimants.get(item.package)
+        for name in _candidates(item, suffix=suffix):
+            listed = names.vault.spelling(name)
+            if listed is None or not names.free(listed):
+                continue
+            held = names.vault.held(listed)
+            if _names_only(held, source, book, names.known) and not (
+                names.contested(listed, item, source)
+            ):
+                names.give(item, listed)
+                break
+
+
+def _names_only(
+    held: Held, source: str, book: Claimant | None, known: Collection[str] | None
+) -> bool:
+    """Whether a note names the file *source*, and no other book at all."""
+    if held.kind is not Holding.UNCLAIMED or held.source != source:
+        return False
+    if held.tag is not None and (known is None or held.tag in known):
+        return False
+    return book is None or holding(held, book, known) is not Holding.ANOTHER
+
+
+def _source(item: Assignment) -> str:
+    """The file a book is read from, as a note's marker names it."""
+    return disambiguator(item.package.name)
 
 
 def _by_evidence(

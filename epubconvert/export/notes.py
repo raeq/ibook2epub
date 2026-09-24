@@ -46,6 +46,7 @@ from .noteformat import (
     END_MARKER,
     END_PATTERN,
     START_PATTERN,
+    book_source,
     book_tags,
     is_ours,
     normalise,
@@ -354,7 +355,8 @@ def compose(found: list[dict[str, Any]], tail: str | None = None) -> str:
     :return: The file's contents.
     """
     generated = body(found)
-    marker = start_marker(generated, min(book_tags(found), default=None))
+    tag = min(book_tags(found), default=None)
+    marker = start_marker(generated, tag, book_source(found))
     book = found[0].get("book", {}) if found else {}
     below = tail if tail is not None else f"{END_MARKER}\n"
     return f"{frontmatter(book)}{marker}\n{generated}{below}"
@@ -371,7 +373,7 @@ def rewrite(
     stays quiet. A note written before notes were tagged is therefore tagged
     only when its region is rewritten anyway, and so is one tagged for an
     asset id the book no longer answers to -- the old one of a book removed
-    from Books and added again.
+    from Books and added again. So is the file the book is read from named.
 
     :param existing: The note as it stands.
     :param found: This book's annotations, in reading order.
@@ -395,7 +397,8 @@ def rewrite(
     book = held.book
     if book is None or (own and book not in own | set(tags)):
         book = min(own, default=book)
-    return f"{held.head}{start_marker(generated, book)}\n{generated}{held.tail}"
+    marker = start_marker(generated, book, book_source(found) or held.source)
+    return f"{held.head}{marker}\n{generated}{held.tail}"
 
 
 def write_vault(
@@ -675,7 +678,8 @@ def _write_one(  # pylint: disable=too-many-return-statements
     :param beside: The note *target* is the sidecar of, or None when it is
         a note itself.
     :param theirs: Whether naming found the note another book's on evidence
-        the note alone does not carry, such as two books holding it alike.
+        the note alone does not carry: two books holding it alike, or
+        wanting a note that nothing claims.
 
     Each branch returns rather than threading one variable through, because
     every one of them is a different thing to tell the reader and collapsing

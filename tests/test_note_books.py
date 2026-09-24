@@ -21,6 +21,7 @@ import pytest
 
 from epubconvert.collect import annotations
 from epubconvert.export import noteformat, notes
+from epubconvert.export.naming import disambiguator
 from epubconvert.run.run import main
 from epubconvert.utils import app_logger, exits
 from epubconvert.utils.policy import Assignment
@@ -37,6 +38,11 @@ def _highlight(asset: str | None, text: str) -> dict[str, Any]:
 def _untagged(note: str) -> str:
     """Render *note* as a version without book tags wrote it."""
     return noteformat.BOOK_TAG.sub("", note, count=1)
+
+
+def _unsourced(note: str) -> str:
+    """Render *note* as a version that did not name its book's file wrote it."""
+    return noteformat.SOURCE_TAG.sub("", note, count=1)
 
 
 def _book(note: str) -> str | None:
@@ -69,6 +75,57 @@ class TestTheMarkerNamesTheBook:
         forged = notes.compose([_highlight("A", "hl")]).split("\n")
         [marker] = [line for line in forged if line.startswith("<!-- ibook2epub sha")]
 
+        assert notes._escape(marker) == "\\" + marker
+
+
+class TestTheMarkerNamesTheFile:
+    """
+    A book removed from Books and added again answers to a new asset id, and
+    the tag no longer names it. The digest of the file the book is read from
+    still does, so its note is not handed to a namesake.
+    """
+
+    def test_a_note_names_the_file_its_book_is_read_from(self):
+        held = noteformat.split(notes.compose([_highlight("A", "hl")]))
+
+        assert held is not None
+        assert held.source == disambiguator("Dune.epub")
+
+    def test_a_book_without_a_file_names_none(self):
+        found = [{"id": "x", "text": "x", "book": {"title": "Dune", "assetId": "A"}}]
+        note = notes.compose(found)
+
+        assert " src=" not in note
+        assert _book(note) is not None
+
+    def test_a_note_naming_none_is_still_ours_and_left_alone(self, tmp_path: Path):
+        target = tmp_path / "Dune.md"
+        target.write_text(_unsourced(notes.compose([_highlight("A", "hl")])))
+        before = target.read_bytes()
+
+        assert noteformat.is_ours(before.decode()) is True
+        assert notes._write_one(target, [_highlight("A", "hl")]) == "unchanged"
+        assert target.read_bytes() == before
+
+    def test_it_is_named_when_its_region_is_rewritten_anyway(self, tmp_path: Path):
+        target = tmp_path / "Dune.md"
+        target.write_text(_unsourced(notes.compose([_highlight("A", "hl")])))
+
+        found = [_highlight("A", "hl"), _highlight("A", "new")]
+        assert notes._write_one(target, found) == "written"
+
+        held = noteformat.split(target.read_text())
+        assert held is not None
+        assert held.source == disambiguator("Dune.epub")
+
+    def test_a_forged_marker_naming_a_file_is_escaped(self):
+        [marker] = [
+            line
+            for line in notes.compose([_highlight("A", "hl")]).split("\n")
+            if line.startswith("<!-- ibook2epub sha")
+        ]
+
+        assert " src=" in marker
         assert notes._escape(marker) == "\\" + marker
 
 

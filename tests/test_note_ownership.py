@@ -56,6 +56,12 @@ def _notes(vault: Path) -> dict[str, str]:
     return {note.name: note.read_text(encoding="utf-8") for note in vault.iterdir()}
 
 
+def _legacy(found: list[dict[str, Any]]) -> str:
+    """Render a note as a version naming neither its book nor file wrote it."""
+    note = notes.compose(found)
+    return noteformat.SOURCE_TAG.sub("", noteformat.BOOK_TAG.sub("", note, count=1))
+
+
 def _add_mine(note: Path) -> None:
     note.write_text(note.read_text(encoding="utf-8") + MINE, encoding="utf-8")
 
@@ -258,8 +264,7 @@ class TestANoteWrittenBeforeNotesWereTagged:
     @staticmethod
     def _legacy(vault: Path, found: list[dict[str, Any]]) -> bytes:
         vault.mkdir()
-        untagged = noteformat.BOOK_TAG.sub("", notes.compose(found), count=1)
-        (vault / "Dune.md").write_text(untagged + MINE, encoding="utf-8")
+        (vault / "Dune.md").write_text(_legacy(found) + MINE, encoding="utf-8")
         return (vault / "Dune.md").read_bytes()
 
     @pytest.mark.parametrize("suffix", [False, True])
@@ -340,20 +345,106 @@ class TestANoteWrittenBeforeNotesWereTagged:
         assert MINE in _notes(vault)["Dune.md"]
 
     def test_holding_no_ones_highlights_it_goes_with_its_name(self, tmp_path: Path):
-        # Nothing says whose it is, so it is the note of the book that
-        # claims its name, as it always was.
+        # Nothing says whose it is, and only one book wants its name: it is
+        # that book's note, as it always was.
         vault = tmp_path / "vault"
         vault.mkdir()
         gone = [_highlight(EPUB, "deleted in Books")]
-        untagged = noteformat.BOOK_TAG.sub("", notes.compose(gone), count=1)
-        (vault / "Dune.md").write_text(untagged + MINE, encoding="utf-8")
+        (vault / "Dune.md").write_text(_legacy(gone) + MINE, encoding="utf-8")
 
-        assert _write(vault, BOTH, suffix=True) == exits.SUCCESS
+        code = _write(vault, BOTH[:1], suffix=False, library=(EPUB,))
 
+        assert code == exits.SUCCESS
         held = _notes(vault)
         assert "epub highlight" in held["Dune.md"]
         assert MINE in held["Dune.md"]
-        assert "pdf highlight" in held["Dune (2).md"]
+
+
+class TestANoteNothingClaimsThatTwoBooksWant:
+    """
+    A note tagged for no book the run knows, or for none at all, and holding
+    none of a book's highlights -- or only some of them -- says nothing of
+    whose it is. It went to whichever book of its name came first: the
+    PDF's note, every highlight deleted in Books, was re-tagged for the EPUB
+    once the EPUB gained one. Two books wanting it, neither is handed it.
+    """
+
+    CASES = {
+        "holding none of their highlights": [_highlight(PDF, "deleted in Books")],
+        "holding one of theirs": [
+            _highlight(EPUB, "epub highlight"),
+            _highlight(PDF, "deleted in Books"),
+        ],
+    }
+
+    @staticmethod
+    def _vault(tmp_path: Path, found: list[dict[str, Any]]) -> tuple[Path, bytes]:
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "Dune.md").write_text(_legacy(found) + MINE, encoding="utf-8")
+        return vault, (vault / "Dune.md").read_bytes()
+
+    @pytest.mark.parametrize("found", CASES.values(), ids=CASES)
+    def test_without_suffix_it_is_refused(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        found: list[dict[str, Any]],
+    ):
+        app_logger.configure(verbosity=0)
+        vault, before = self._vault(tmp_path, found)
+
+        assert _write(vault, BOTH[:1], suffix=False) == exits.FAILED
+
+        assert (vault / "Dune.md").read_bytes() == before
+        assert "another book" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("found", CASES.values(), ids=CASES)
+    def test_under_suffix_it_is_numbered_past(
+        self, tmp_path: Path, found: list[dict[str, Any]]
+    ):
+        vault, before = self._vault(tmp_path, found)
+
+        for _ in range(2):
+            assert _write(vault, BOTH, suffix=True) == exits.SUCCESS
+
+        assert (vault / "Dune.md").read_bytes() == before
+        held = _notes(vault)
+        assert sorted(held) == ["Dune (2).md", "Dune (3).md", "Dune.md"]
+        assert "epub highlight" in held["Dune (2).md"]
+        assert "pdf highlight" in held["Dune (3).md"]
+
+    @pytest.mark.parametrize("suffix", [False, True])
+    def test_one_tagged_for_a_book_gone_names_the_file_it_was_written_for(
+        self, tmp_path: Path, suffix: bool
+    ):
+        # The PDF removed from Books and added again, under a new asset id
+        # with no highlights yet: its note is still the PDF's, as a tagged
+        # note is, and the EPUB loses the collision, or is numbered.
+        vault = tmp_path / "vault"
+        _write(vault, PDF_ONLY, suffix=suffix, library=(PDF,))
+        _add_mine(vault / "Dune.md")
+        before = (vault / "Dune.md").read_bytes()
+        assets: dict[str, str | None] = {"EPUBASSET": EPUB, "NEWPDF": PDF}
+
+        assert _write(vault, BOTH[:1], suffix=suffix, assets=assets) == 0
+
+        assert (vault / "Dune.md").read_bytes() == before
+        reimported = _highlight(PDF, "new")
+        reimported["book"] = {**reimported["book"], "assetId": "NEWPDF"}
+        found = [*BOTH[:1], reimported]
+
+        for _ in range(2):
+            assert _write(vault, found, suffix=suffix, assets=assets) == 0
+
+        pdfs = _notes(vault)["Dune.md"]
+        assert "epub highlight" not in pdfs
+        assert "> new" in pdfs
+        assert MINE in pdfs
+        if suffix:
+            assert "epub highlight" in _notes(vault)["Dune (2).md"]
+        else:
+            assert list(_notes(vault)) == ["Dune.md"]
 
 
 class TestUnderSuffixAFileThatIsNotANoteIsPassedOver:

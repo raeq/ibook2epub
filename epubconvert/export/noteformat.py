@@ -6,9 +6,10 @@ so that :mod:`epubconvert.export.notenames` can read a note already in the
 vault -- whose it is -- without importing the module that writes one.
 
 A note is four regions: the reader's frontmatter, a start marker carrying a
-digest of the generated region and the book the note is of, the generated
-region, and the end marker with the reader's writing beneath it. Everything
-here reads or renders that shape and nothing else.
+digest of the generated region, the book the note is of and the file that
+book is read from, the generated region, and the end marker with the
+reader's writing beneath it. Everything here reads or renders that shape and
+nothing else.
 """
 
 from __future__ import annotations
@@ -32,20 +33,23 @@ END_MARKER = "<!-- ibook2epub end — your notes below this line are never modif
 #: without orphaning every note already in a vault.
 END_PATTERN = re.compile(r"^<!-- ibook2epub end")
 
-#: Carries the digest of the generated region.
-START_TEMPLATE = "<!-- ibook2epub sha256={digest} -->"
-#: Carries the digest and the book the note is of: a digest of its asset id
-#: (:func:`book_tags`). Notes written before the tag existed carry none and
-#: are still read; each gains one the next time its region is rewritten.
-TAGGED_TEMPLATE = "<!-- ibook2epub sha256={digest} book={book} -->"
+#: Carries the digest of the generated region, then the book the note is
+#: of -- a digest of its asset id (:func:`book_tags`) -- and the file that
+#: book is read from (:func:`book_source`), each when known. Notes written
+#: before either existed carry neither and are still read; each gains them
+#: the next time its region is rewritten.
+START_TEMPLATE = "<!-- ibook2epub sha256={digest}{book}{source} -->"
 #: Trailing white space is part of the pattern, not stripped by each caller:
 #: an editor may leave some after the marker, and the one caller that did not
 #: strip it -- the escaper -- let a forged marker with a trailing space through.
 START_PATTERN = re.compile(
-    r"^<!-- ibook2epub sha256=([0-9a-f]{16,64})(?: book=([0-9a-f]{8,64}))? -->\s*$"
+    r"^<!-- ibook2epub sha256=([0-9a-f]{16,64})(?: book=([0-9a-f]{8,64}))?"
+    r"(?: src=([0-9a-f]{8,64}))? -->\s*$"
 )
+#: The file named within a start marker.
+SOURCE_TAG = re.compile(r" src=[0-9a-f]{8,64}(?= -->)")
 #: The book tag within a start marker.
-BOOK_TAG = re.compile(r" book=[0-9a-f]{8,64}(?= -->)")
+BOOK_TAG = re.compile(r" book=[0-9a-f]{8,64}(?=(?: src=[0-9a-f]{8,64})? -->)")
 
 #: Largest note this will read back. A note of a few hundred highlights is
 #: tens of kilobytes; anything past this is a runaway or a planted file, and
@@ -73,6 +77,9 @@ class Split(NamedTuple):
     #: The book the start marker is tagged for, or None for a note written
     #: before notes were tagged.
     book: str | None = None
+    #: The file the start marker names, or None for a note written before
+    #: notes named one.
+    source: str | None = None
 
 
 def split(text: str) -> Split | None:
@@ -134,6 +141,7 @@ def _regions(head: str, found: re.Match[str], rest: list[str]) -> Split | None:
                 "\n".join(rest[:offset]) + "\n" if rest[:offset] else "",
                 "\n".join(rest[offset:]),
                 found.group(2),
+                found.group(3),
             )
     # A missing end marker is treated as an edit. Skipping a note that may be
     # fine is recoverable; overwriting one that is not is not.
@@ -313,12 +321,36 @@ def book_tags(found: list[dict[str, Any]]) -> set[str]:
     return tags
 
 
-def start_marker(generated: str, book: str | None) -> str:
-    """Render the start marker for a region, tagged for its book when known."""
-    digest = digest_of(generated)
-    if book is None:
-        return START_TEMPLATE.format(digest=digest)
-    return TAGGED_TEMPLATE.format(digest=digest, book=book)
+def book_source(found: list[dict[str, Any]]) -> str | None:
+    """
+    Name the file a note's book is read from, as its start marker records it.
+
+    The book's package name, digested as its tag is. A book removed from
+    Books and added again answers to a new asset id, so its tag names no
+    book the run knows and says nothing; the file it is read from is still
+    named the same, and tells its note from a namesake's -- ``Dune.pdf``'s
+    note from ``Dune.epub``'s, which want one name.
+
+    :param found: This book's annotations.
+
+    :return: The digest, or None when they name no one file.
+    """
+    sources = set()
+    for item in found:
+        book = item.get("book")
+        source = book.get("source") if isinstance(book, dict) else None
+        sources.add(source if isinstance(source, str) and source else None)
+    only = sources.pop() if len(sources) == 1 else None
+    return None if only is None else disambiguator(only)
+
+
+def start_marker(generated: str, book: str | None, source: str | None = None) -> str:
+    """Render the start marker for a region, naming its book and file if known."""
+    return START_TEMPLATE.format(
+        digest=digest_of(generated),
+        book="" if book is None else f" book={book}",
+        source="" if source is None else f" src={source}",
+    )
 
 
 def is_ours(existing: str) -> bool:
