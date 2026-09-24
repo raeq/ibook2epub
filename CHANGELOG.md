@@ -9,6 +9,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--validate` and `--verify` report an archive holding two members of one
+  name, which OCF forbids and readers resolve differently. It passed.
+
 - A run narrowed by `--match` gives each book the name a full run gives it.
   Names were assigned over the matched books alone, so under
   `--on-collision suffix` one edition of a crowded title lost its marker: a
