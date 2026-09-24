@@ -733,7 +733,9 @@ Only the middle part is ever rewritten. Tag a note, add an alias, write three
 paragraphs underneath — the next run still adds your new highlights and leaves
 all of it alone. Edit *inside* the highlights and the tool stops touching that
 note entirely, putting the new ones in a `.md.new` beside it so you never have
-to choose between keeping your edits and getting your highlights.
+to choose between keeping your edits and getting your highlights. Edit the
+`.md.new` too, part way through merging it, and it is left alone as well: the
+run names it and exits `1` until you merge it into the note or remove it.
 
 The middle part mirrors Books: a highlight you delete there leaves the note on
 the next run, as it leaves each book's embedded set. Only the JSON file of

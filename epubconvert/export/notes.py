@@ -596,7 +596,7 @@ REPORTS = {
     "kept": "%d note(s) you have edited were left alone; their new highlights "
     "are in a file beside each one: %s",
     "blocked": "%d note(s) you have edited were left alone, and their new "
-    "highlights could not be written beside them either: %s",
+    "highlights were not written beside them either; see the errors above: %s",
     "unreadable": "%d file(s) could not be read and were left alone, so their "
     "books' highlights were not written; see the errors above: %s",
     "foreign": "%d file(s) were not written by ibook2epub and were left alone, "
@@ -630,6 +630,7 @@ def _write_one(  # pylint: disable=too-many-return-statements
     *,
     book: Claimant | None = None,
     known: Collection[str] | None = None,
+    beside: Path | None = None,
 ) -> str:
     """
     Put one book's note in place, without touching what the reader wrote.
@@ -644,12 +645,15 @@ def _write_one(  # pylint: disable=too-many-return-statements
         its highlights describe it.
     :param known: The tags of every book the run knows of, or None to take
         any tag as a known book's (:func:`~.notenames.holding`).
+    :param beside: The note *target* is the sidecar of, or None when it is
+        a note itself.
 
     Each branch returns rather than threading one variable through, because
     every one of them is a different thing to tell the reader and collapsing
     them into a single exit obscured which case produced which sentence.
 
-    :return: One of :data:`OUTCOMES`.
+    :return: One of :data:`OUTCOMES`, or ``edited`` for a sidecar the reader
+        has edited, which only :func:`_write_beside` asks about.
     """
     try:
         # Inside the handler, and not exists(): a name past NAME_MAX raised
@@ -690,20 +694,62 @@ def _write_one(  # pylint: disable=too-many-return-statements
     if not is_ours(existing):
         # Edited inside the generated region, or missing the end marker, which
         # is treated as an edit. Either way the note is left exactly as it is
-        # and the new highlights go beside it. The sidecar is a note like any
-        # other and gets the same treatment one level down, so one the reader
-        # has partly merged into survives too.
-        beside = _write_one(sidecar_for(target), mine, book=book, known=known)
-        if beside in ("written", "unchanged"):
-            return "kept"
-        # The sidecar could not be written either, so nothing was saved and
-        # the reader must not be told otherwise.
-        return "blocked"
+        # and the new highlights go beside it.
+        if beside is None:
+            return _write_beside(target, mine, book=book, known=known)
+        # A sidecar the reader has edited -- part way through merging it --
+        # is left alone like the note. It was treated as a note one level
+        # down, and the highlights went into a third file, .md.new.new, that
+        # the run then said could not be written.
+        logger.error(
+            "Left %s alone: it holds your edits. Merge it into %s, or remove "
+            "it, and rerun to have the new highlights written beside the note.",
+            printable(target.name),
+            printable(beside.name),
+        )
+        return "edited"
 
     rewritten = rewrite(existing, mine, book.tags)
     if rewritten == normalise(existing):
         return "unchanged"
     return _put(target, rewritten)
+
+
+def _write_beside(
+    target: Path,
+    mine: list[dict[str, Any]],
+    *,
+    book: Claimant,
+    known: Collection[str] | None,
+) -> str:
+    """
+    Write an edited note's new highlights into its sidecar.
+
+    :param target: The note, which the reader has edited.
+    :param mine: This book's annotations, in reading order.
+    :param book: The book, as a note is judged against it.
+    :param known: The tags of every book the run knows of.
+
+    :return: ``kept`` when they are in the sidecar, ``blocked`` when they are
+        in no file at all.
+    """
+    sidecar = sidecar_for(target)
+    outcome = _write_one(sidecar, mine, book=book, known=known, beside=target)
+    if outcome in ("written", "unchanged"):
+        return "kept"
+    if outcome in ("foreign", "another"):
+        logger.error(
+            "Left %s alone: %s. Move it aside and rerun to have the new "
+            "highlights written beside %s.",
+            printable(sidecar.name),
+            "it is another book's note"
+            if outcome == "another"
+            else "ibook2epub did not write it",
+            printable(target.name),
+        )
+    # Nothing was saved, and the reader must not be told otherwise. Every
+    # other outcome has already said why.
+    return "blocked"
 
 
 def _put(target: Path, text: str) -> str:

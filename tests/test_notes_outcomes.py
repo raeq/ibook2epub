@@ -9,13 +9,14 @@ that said 0 is the silent loss this module exists to catch.
 """
 
 # pylint: disable=missing-function-docstring,missing-class-docstring
+# pylint: disable=protected-access
 
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from epubconvert.export import noteformat, notes
+from epubconvert.export import detached, noteformat, notes
 from epubconvert.utils import app_logger, exits
 from epubconvert.utils.policy import Assignment
 
@@ -177,6 +178,75 @@ class TestNothingSavedForABookFailsTheRun:
 
         assert self._run(vault) == exits.SUCCESS
         assert notes.sidecar_for(note).is_file()
+
+
+class TestASidecarTheReaderHasEdited:
+    """
+    A reader part way through merging a sidecar edits it, as they edited the
+    note. The sidecar was treated as a note one level down, so the new
+    highlights went into a ``.md.new.new`` while the run said they "could not
+    be written" and exited 1.
+    """
+
+    @staticmethod
+    def _edited(note: Path, was: str, now: str) -> None:
+        text = note.read_text(encoding="utf-8")
+        note.write_text(text.replace(was, now), encoding="utf-8")
+
+    def _run(self, vault: Path, *texts: str) -> int:
+        found = [_highlight("Alpha.epub", text) for text in texts]
+        return notes.write_vault(found, str(vault), ALONE, copyable=())
+
+    def test_is_left_alone_and_nothing_is_written_beside_it(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        vault = tmp_path / "vault"
+        self._run(vault, "first")
+        note = vault / "Alpha.md"
+        self._edited(note, "> first", "> first, as I read it")
+        assert self._run(vault, "first", "second") == exits.SUCCESS
+        sidecar = notes.sidecar_for(note)
+        self._edited(sidecar, "> second", "> second, merged")
+        before = {path.name: path.read_bytes() for path in vault.iterdir()}
+        app_logger.configure(verbosity=0)
+
+        code = self._run(vault, "first", "second", "third")
+
+        assert code == exits.FAILED
+        assert {path.name: path.read_bytes() for path in vault.iterdir()} == before
+        reported = capsys.readouterr().err
+        assert "could not be written" not in reported
+        assert sidecar.name in reported
+        assert "your edits" in reported
+        assert "Merge it into Alpha.md" in reported
+
+    def test_a_file_of_the_readers_own_there_is_named_too(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        vault = tmp_path / "vault"
+        self._run(vault, "first")
+        self._edited(vault / "Alpha.md", "> first", "> edited")
+        sidecar = notes.sidecar_for(vault / "Alpha.md")
+        sidecar.write_text("my own scratch file\n", encoding="utf-8")
+        app_logger.configure(verbosity=0)
+
+        assert self._run(vault, "first", "second") == exits.FAILED
+
+        assert sidecar.read_text(encoding="utf-8") == "my own scratch file\n"
+        reported = capsys.readouterr().err
+        assert f"Left {sidecar.name} alone: ibook2epub did not write it" in reported
+
+    def test_every_name_the_vault_writes_is_a_note_name(self, tmp_path: Path):
+        # The catalogue refuses a note's name inside a vault; a .md.new.new
+        # was a name it did not know.
+        vault = tmp_path / "vault"
+        self._run(vault, "first")
+        self._edited(vault / "Alpha.md", "> first", "> edited")
+        self._run(vault, "first", "second")
+        self._edited(notes.sidecar_for(vault / "Alpha.md"), "> second", "> mine")
+        self._run(vault, "first", "second", "third")
+
+        assert all(detached._note_name(path.name) for path in vault.iterdir())
 
 
 #: A reader's own note saved in Windows-1252: not UTF-8, so not decodable.
