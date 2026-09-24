@@ -851,8 +851,8 @@ put them in, so those highlights reach nothing:
 ```text
 10 annotation(s) from 4 book(s) reached no file: Blindsight.epub, Dune.epub,
 Neuromancer.epub, and 1 more. Those books are not on the shelf, so there was
-nothing to embed them in — a DRM-protected book can never be converted, and its
-highlights are the only part of it you can keep. Run again with
+nothing to embed them in -- a DRM-protected book can never be converted, and
+its highlights are the only part of it you can keep. Run again with
 --annotations-detached FILE to write them to a file of their own, or
 --annotations-only FILE to do that without converting anything.
 ```

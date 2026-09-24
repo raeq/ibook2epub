@@ -12,6 +12,7 @@ had nowhere to go, pointing at DRM, when the next run would embed them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import re
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,18 @@ def _annotated_library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return library
 
 
+def _protect(package: Path) -> None:
+    """Give *package* Apple's DRM, so it can never be converted."""
+    (package / "META-INF" / "encryption.xml").write_text(
+        '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+        '<EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">'
+        '<EncryptionMethod Algorithm="http://www.apple.com/technology/fps"/>'
+        '<CipherData><CipherReference URI="OEBPS/text/chapter1.xhtml"/>'
+        "</CipherData></EncryptedData></encryption>",
+        encoding="utf-8",
+    )
+
+
 class TestBooksHeldBackByTheCap:
     def test_are_not_said_to_have_reached_no_file(
         self, tmp_path, output_dir, monkeypatch, capsys
@@ -66,14 +79,7 @@ class TestBooksHeldBackByTheCap:
         self, tmp_path, output_dir, monkeypatch, capsys
     ):
         library = _annotated_library(tmp_path, monkeypatch)
-        (library / "Book7.epub" / "META-INF" / "encryption.xml").write_text(
-            '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
-            '<EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">'
-            '<EncryptionMethod Algorithm="http://www.apple.com/technology/fps"/>'
-            '<CipherData><CipherReference URI="OEBPS/text/chapter1.xhtml"/>'
-            "</CipherData></EncryptedData></encryption>",
-            encoding="utf-8",
-        )
+        _protect(library / "Book7.epub")
 
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "5", "-ae"])
         err = capsys.readouterr().err
@@ -135,3 +141,24 @@ class TestBooksTheFloorStopped:
         assert "7 annotation(s) wait for books the --min-free floor stopped" in (
             captured.err
         )
+
+
+class TestTheReadmeQuotesTheWarning:
+    def test_the_sample_reads_as_the_tool_prints_it(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # The README's sample had an em dash where the tool prints "--".
+        library = _annotated_library(tmp_path, monkeypatch)
+        _protect(library / "Book7.epub")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-ae"])
+        [printed] = [
+            " ".join(line.split(" reached no file: ", 1)[1].split(". ", 1)[1].split())
+            for line in capsys.readouterr().err.splitlines()
+            if " reached no file: " in line
+        ]
+        readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(
+            encoding="utf-8"
+        )
+        [sample] = re.findall(r"```text\n([^`]* reached no file: [^`]*)```", readme)
+
+        assert " ".join(sample.split(" more. ", 1)[1].split()) == printed
