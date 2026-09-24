@@ -140,7 +140,8 @@ policy (unless `--skip-incomplete` leaves an evicted book unopened, which the
 model does not describe; the orphan check then lists no numbered or marked
 file of its name), or the file of its marked name once its crowd has left it; with no
 usable identifier, the one numbered file when no other package wants the name
-and nothing holds the plain name. A copy that keeps that file sends the
+and nothing holds the plain name, and with `AskNumbered` only when that file
+declares no usable identifier either. A copy that keeps that file sends the
 package back to claim a name (`_Claiming.reclaim`). `ReclaimOwn` widens that
 to any package given the name of a file the claim pass kept as a copy's own
 bytes: in suffix mode it claims its marked or numbered name, and in skip mode
@@ -177,6 +178,8 @@ size says so where no identifier can.
 | `NumberedRemovals` | `--match`, `--refresh`, suffix mode, named from the folder, two packages | removed with their archives | none | before a write | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `NumberedRemovalsStuck` | the same, without `KeepNumbered` | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 | `NumberedRemovalsCrowd` | `NumberedRemovals` with three packages | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `NumberedLeftBehind` | `--match`, `--refresh`, suffix mode, named from the folder, a package titled like the other's name numbered | books added and removed, archives left | the look-alike only | before a write | ExportedMeansTheBooksOwnFile and NoArchiveOfTheLibraryIsAnOrphan hold |
+| `NumberedLeftBehindLoose` | the same, without `AskNumbered` | books added and removed, archives left | the look-alike only | the same | **ExportedMeansTheBooksOwnFile violated** |
 
 What the configurations that fail show:
 
@@ -309,6 +312,18 @@ What the configurations that fail show:
   packages and no usable identifier, once the first leaves, two books still
   want the plain name, and nothing says which numbered file is whose. The
   last takes the second's number, and its own archive is an orphan.
+
+- **`NumberedLeftBehindLoose`** is that rule before `AskNumbered`. It asked
+  nothing of the file: a book `Dune (1965)` with a real identifier was
+  deleted from the library and its archive `Dune (1965).epub` stayed, and a
+  book `Dune` declaring no usable identifier, added since, kept that file as
+  its own number. It was reported exported from it and never written, and
+  the deleted book's archive, maybe its last copy, was not listed as an
+  orphan. Now a book with no usable identifier keeps the one numbered file
+  only when the file declares none either; a file that declares one is
+  another book's. `NumberedLeftBehind` holds with it, and
+  `tests/test_numbered_names.py::TestABookWithNoIdentifier` replays it
+  against the CLI under the default policy and `--name-by author-title`.
 
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.

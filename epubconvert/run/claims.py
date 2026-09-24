@@ -311,7 +311,14 @@ def kept_numbers(
     has numbered files on the shelf keeps one of them: where it has a
     usable identifier, the lowest-numbered one declaring that identifier;
     where it has none, the one numbered file, when no other book wants its
-    name and no file has the plain name. Nothing else can say whose it is.
+    name, no file has the plain name, and the file declares no usable
+    identifier either. Nothing else can say whose it is. A file that does
+    declare one is another book's: ``Dune (1965)``, deleted from the library,
+    left its archive, and an unidentified ``Dune`` added since was reported
+    exported from it and never written, and the deleted book's archive, maybe
+    its last copy, was not listed as an orphan. A book left unopened may
+    declare the file's identifier, since nobody read its own: it keeps the
+    file, as before.
     A file under a name another book wants is never kept, as for a title
     that looks like a number (``Dune (2)``).
 
@@ -357,7 +364,8 @@ def kept_numbers(
         if directory is None or (all(n == 1 for n, _ in numbers) and not marked_forms):
             continue
         identifier = book.identifier
-        if identifier is None and book.unread and book.unread not in unopened:
+        unknown = identifier is None and book.unread in unopened
+        if identifier is None and book.unread and not unknown:
             identifier = source_identifier(book.unread)
         if identifier is not None:
             found = [
@@ -367,7 +375,12 @@ def kept_numbers(
             ]
             if found:
                 kept[position] = found[0]
-        elif book.alone and len(numbers) == 1 and numbers[0][0] > 1:
+        elif (
+            book.alone
+            and len(numbers) == 1
+            and numbers[0][0] > 1
+            and (unknown or identifier_on_shelf(directory / numbers[0][1]) is None)
+        ):
             kept[position] = numbers[0][1]
     return kept
 

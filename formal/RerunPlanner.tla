@@ -64,7 +64,8 @@
  * not modelled: then no numbered or marked file of its name is an orphan),
  * or the file of its marked name once its crowd has left it;
  * with no usable identifier, the one numbered file when no other package
- * wants its name and nothing holds the plain name. One that kept a file a
+ * wants its name and nothing holds the plain name, and with AskNumbered
+ * when that file declares no usable identifier either. One that kept a file a
  * copy keeps claims a name again (_Claiming.reclaim), and with ReclaimOwn so
  * does one given the name of a file the claim pass kept as a copy's own
  * bytes, whoever's identifier is unusable. TakesArchive stands for a person
@@ -116,8 +117,10 @@ CONSTANTS
     KeepNumbered,  \* claims.kept_numbers: a package keeps its numbered file
     TakesArchive,  \* with AllowRemovals, a book leaves with its archive, as a
                    \* person deletes both; otherwise the archive stays
-    ReclaimOwn     \* _Claiming.reclaim: a package given the name of a file
+    ReclaimOwn,    \* _Claiming.reclaim: a package given the name of a file
                    \* that is a copy's own bytes claims a name again
+    AskNumbered    \* with KeepNumbered, a package with no usable identifier
+                   \* keeps no numbered file that declares one
 
 Books == 1..N
 
@@ -181,7 +184,8 @@ Sorted(S) ==
    leaves unopened is not modelled), the lowest-numbered file
    declaring it, and, once its crowd has left it, one of its marked name
    declaring it; where it has none, the one numbered file, when no other
-   package wants the name and nothing holds the plain name. "" for a
+   package wants the name, nothing holds the plain name, and with
+   AskNumbered the file declares no usable identifier either. "" for a
    package that keeps none. *)
 RECURSIVE Numbered(_, _, _)
 Numbered(S, order, taken) ==
@@ -211,6 +215,8 @@ Numbered(S, order, taken) ==
                        ELSE IF /\ Crowd(S, Wanted[b]) = 1
                                /\ Cardinality(there) = 1
                                /\ \A k \in there : k > 1
+                               /\ AskNumbered => shelf[Suffixed(base, Min(there))]
+                                                  \notin Usable
                          THEN Suffixed(base, Min(there))
                        ELSE ""
              rest   == Numbered(S, Tail(order),
@@ -573,4 +579,8 @@ OneTitle == [b \in Books |-> "Dune"]
 \* Two editions of one title, and a book whose title is what the second
 \* edition's suffix produces.
 SuffixLookalike == [b \in Books |-> IF b = 3 THEN "Dune (2)" ELSE "Dune"]
+
+\* A book whose title is what a second edition's suffix would produce, and
+\* a book of the plain title that sorts after it.
+NumberedLookalike == [b \in Books |-> IF b = 1 THEN "Dune (2)" ELSE "Dune"]
 =============================================================================

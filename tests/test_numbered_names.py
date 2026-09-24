@@ -19,6 +19,8 @@ from collections import Counter
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
+
 from epubconvert.collect import package as package_reader
 from epubconvert.run import run
 from tests.conftest import make_metadata_package, make_package, remove_tree
@@ -164,6 +166,98 @@ class TestNamedFromTheFolder:
             "Dune (2).epub",
         }
         assert set(opened.values()) <= {1}
+
+
+class TestABookWithNoIdentifier:
+    """
+    Nothing but the name says whose a numbered file is when the book declares
+    no usable identifier, so it keeps the one numbered file of its name
+    (claims.kept_numbers) -- but not one that declares an identifier of its
+    own, which is another book's.
+    """
+
+    @staticmethod
+    def _numbered(library: Path, output_dir: Path, argv: list[str]) -> None:
+        # Two books of one name, neither identified: the second is numbered.
+        for folder in ("a", "b"):
+            make_metadata_package(
+                library / folder,
+                "Dune.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier="none",
+            )
+        run.main([*argv, "-q"])
+        [plain, _] = sorted(output_dir.glob("*.epub"), key=len_then_name)
+        remove_tree(library / "a")
+        plain.unlink()
+
+    @pytest.mark.parametrize("policy", [[], AUTHOR_TITLE], ids=["folder", "author"])
+    def test_not_a_deleted_books_archive_that_looks_numbered(
+        self, tmp_path, output_dir, capsys, policy
+    ):
+        # "Dune (1965)" left the library with its archive; an unidentified
+        # "Dune" was then reported exported from that archive, never
+        # written, and the deleted book's file -- maybe its last copy --
+        # was not listed as an orphan.
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir, *policy)
+        deleted = make_metadata_package(
+            library / "a",
+            "Dune (1965).epub",
+            title="Dune (1965)",
+            creator="Frank Herbert",
+            identifier="urn:isbn:9780441013593",
+        )
+        run.main([*argv, "-q"])
+        [archive] = output_dir.glob("*.epub")
+        remove_tree(deleted)
+        make_metadata_package(
+            library / "b",
+            "Dune.epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier="none",
+        )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, *policy]
+            + ["--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert sorted((row["status"], Path(row["target"]).name) for row in rows) == [
+            ("orphan", archive.name),
+            ("pending", archive.name.replace(" (1965)", "")),
+        ]
+        assert "Exported 1 epub file(s)" in ran.out
+        assert "orphan" in ran.out
+        assert identifier_of(archive) == "urn:isbn:9780441013593"
+        assert identifier_of(output_dir / archive.name.replace(" (1965)", "")) == (
+            "none"
+        )
+
+    @pytest.mark.parametrize("policy", [[], AUTHOR_TITLE], ids=["folder", "author"])
+    def test_it_keeps_its_own_numbered_archive(
+        self, tmp_path, output_dir, capsys, policy
+    ):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir, *policy)
+        self._numbered(library, output_dir, argv)
+        [numbered] = output_dir.glob("*.epub")
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, *SUFFIX, *policy)
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        assert listed == [("Dune.epub", "exported")]
+        assert "Exported 0 epub file(s)" in ran.out
+        assert "orphan" not in ran.out
+        assert list(output_dir.glob("*.epub")) == [numbered]
 
 
 class TestAPackageMovedOnPastACopy:
