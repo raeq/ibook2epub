@@ -15,6 +15,40 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Two zipped copies of one book, a zipped copy and a package of one book, or
+  two PDFs of one size, no longer both take one file on the shelf for their
+  own: the collision no longer disappears on the next run, and in suffix mode
+  the second copy's file is no longer listed as an orphan.
+
+- In suffix mode a numbered or digest-marked book keeps its file when the book
+  before it, or its crowd, leaves the library, instead of being written again
+  with its archive listed as an orphan. A package zipped in place keeps its
+  archive under its digest-marked name.
+
+- A different zipped book or PDF of the same size replacing a deleted one is
+  copied: copies keep their source's modification time, and a copy on the
+  shelf is recognised by size and time together. Copies made by earlier
+  releases are still recognised by size. A PDF of a different size under a
+  deleted book's name is copied beside it, or reported as a collision.
+
+- `-ae -ar` finds a package the run moved on past a copy's file and refreshes
+  its highlights, and `-ao` names a note after the same file the run writes.
+
+- A DRM-protected or not-downloaded book's vault note is named after the file
+  the plan places it at, and the run no longer exits 1 claiming two books
+  want one note.
+
+- `--no-copy-through` and `--skip-incomplete` no longer open (and so
+  download) books iCloud has evicted to name them or to judge a file under
+  another spelling of their name.
+
+- A book that loses its name to a namesake differing only in case is told
+  which file holds it, and the identifier read from a book's source to judge
+  such a file is read once per run.
+
+- `-ae` and `-ae -ar` warn about highlights Apple recorded against no book,
+  which only `-ad` or `-ao` can carry.
+
 - A vault note's name no longer depends on which books have highlights. Every
   book in the library claims its note name, and a note already written for a
   book stays that book's, so a book gaining its first highlight or losing its
