@@ -328,7 +328,8 @@ What the model does not describe, and why:
   own bytes are told exactly here; the code tells them by size and
   modification time, which a copy keeps from its source
   (`tests/test_copy_keeping.py`). A copy made before copies kept the time
-  is newer than its source, and is told by its size alone.
+  is newer than its source, and is told by the identifiers where both
+  declare one, and by its size where not.
 - **`claim_order` for packages.** It puts every package whose first name is a
   file on the shelf ahead of the rest -- whatever put the file there: a
   namesake by case, the book's own archive or another's, or a title that

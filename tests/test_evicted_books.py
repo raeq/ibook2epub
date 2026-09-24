@@ -24,6 +24,7 @@ from epubconvert.run import run
 from epubconvert.utils.display import printable
 from tests.conftest import make_metadata_package, remove_tree
 from tests.test_copy_claims import zipped_book
+from tests.test_copy_keeping import LATER
 from tests.test_copy_through import _evict
 
 AUTHOR_TITLE = ["--name-by", "author-title"]
@@ -366,3 +367,31 @@ class TestAnEvictedZippedBookUnderADeletedBooksName:
         assert (row["status"], Path(row["target"]).name) == ("orphan", "Dune.epub")
         assert "Dune.epub is not downloaded from iCloud" in row["reason"]
         assert "1 orphaned" in ran.out
+
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_nor_by_its_size_alone(
+        self, tmp_path, output_dir, monkeypatch, capsys, mode
+    ):
+        # The deleted book's copy is of the newcomer's size and newer, as a
+        # copy made before copies kept their time is: only the identifiers
+        # could say whose it is, and the newcomer's is not read.
+        library = tmp_path / "lib"
+        old = zipped_book(tmp_path, library / "a" / "Book.epub", "urn:uuid:A", "A")
+        argv = ["-s", str(library), "-o", str(output_dir), "--on-collision", mode]
+        run.main([*argv, "-m", "0", "-q"])
+        os.utime(output_dir / "Book.epub", ns=(LATER, LATER))
+        old.unlink()
+        added = zipped_book(tmp_path, library / "b" / "Book.epub", "urn:uuid:C", "C")
+        assert added.stat().st_size == (output_dir / "Book.epub").stat().st_size
+        _evict(monkeypatch, added)
+        capsys.readouterr()
+
+        run.main([*argv, "--list", "--json", "--skip-incomplete"])
+        rows = json.loads(capsys.readouterr().out)
+
+        assert [(row["status"], row["reason"]) for row in rows] == [
+            (
+                "incomplete",
+                "not downloaded from iCloud; cannot tell whether Book.epub is its copy",
+            )
+        ]

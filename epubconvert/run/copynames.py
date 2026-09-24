@@ -422,7 +422,13 @@ class _Claiming:
         # that package moves on.
         self.claims.take(identity, 1, identity, mine.name)
         self.holders.setdefault(filesystem_key(identity), mine.name)
-        return Assignment(source, mine.name, identity, identifier=identifier)
+        return Assignment(
+            source,
+            mine.name,
+            identity,
+            identifier=identifier,
+            unverified=self._doubted(source, mine),
+        )
 
     def name(self, source: Path, name: str, group: str) -> Assignment:
         """
@@ -448,9 +454,7 @@ class _Claiming:
             if found is not None
             else (True, None)
         )
-        # A zipped book left unopened may declare the identifier that says
-        # the file is its own; only a size that differs cannot tell.
-        doubt = source in self.unopened and source.suffix.lower() == PACKAGE_SUFFIX
+        doubt = found is not None and self._doubted(source, found)
         return Assignment(
             source,
             filename,
@@ -465,7 +469,30 @@ class _Claiming:
             not_own=not (own or doubt),
             # Nothing says, and the file may be a deleted book's: it was
             # reported copied from that file, and never copied.
-            unverified=doubt and not own,
+            unverified=doubt,
+        )
+
+    def _doubted(self, source: Path, found: Path) -> bool:
+        """
+        Say whether nothing can tell *found* from *source*'s copy.
+
+        A zipped book left unopened may declare the identifier that says the
+        file is its own, or another's; only its own bytes, its size and
+        modification time both, say so without it. A size alone, which a
+        copy made before copies kept their time has, says nothing: taken for
+        its copy, a zipped book of the size of a deleted book's was listed
+        as copied from that book's file, and never copied.
+
+        :param source: The file to copy.
+        :param found: The file on the shelf under the name it takes.
+
+        :return: True when *source* is unopened and *found* is not its own
+            bytes.
+        """
+        return (
+            source in self.unopened
+            and source.suffix.lower() == PACKAGE_SUFFIX
+            and _stamp(found) != _stamp(source)
         )
 
     def _lost(self, source: Path, group: str) -> Assignment:
@@ -545,19 +572,29 @@ class _Claiming:
         zipped books of one size told apart by nothing else, and the one
         added later was never copied; there the identifiers decide. They
         decide too for a file of another size, which may be the copy's own
-        from before Apple rewrote the book. A PDF has none, and its size is
-        all there is.
+        from before Apple rewrote the book, and for one only its size says
+        is its copy, made before copies kept their time: a zipped book of
+        the size of a deleted book's copy, and older, was taken for it and
+        never copied. A PDF has none, and its size is all there is.
 
         :param source: The file to copy.
         :param found: The file on the shelf under the name it wants.
         :param key: That name's filesystem key.
-        :param exact: Only a file :func:`_same_file` finds is *source*'s will
-            do, whatever the identifiers say.
+        :param exact: Only *source*'s own bytes will do: its size and its
+            modification time both. A file of its size and newer, which
+            :func:`_same_file` takes for a copy made before copies kept their
+            time, is left to the pass after this one, where the identifiers
+            and the size decide: taken here, it was the copy's own bytes
+            ahead of anything else, and a package declaring no identifier
+            was sent off its own archive of that size (:meth:`reclaim`).
 
         :return: Whether it is, and *source*'s identifier when it was read.
         """
         same = _same_file(source, found, self.stamps)
-        if same and key not in self.contested:
+        own_bytes = same and _stamp(found) == _stamp(source)
+        if exact and not own_bytes:
+            return False, None
+        if own_bytes and key not in self.contested:
             return True, None
         identifier = self._identifier(source)
         if identifier is not None:

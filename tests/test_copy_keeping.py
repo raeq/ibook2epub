@@ -299,6 +299,113 @@ class TestACopyMadeBeforeCopiesKeptTheirTime:
         assert "collision" not in ran.out
         assert "orphan" not in ran.out
 
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_it_is_still_found_beside_a_package_of_its_name(
+        self, tmp_path, output_dir, capsys, mode
+    ):
+        # Found in the pass after its own bytes are looked for: a file only
+        # its size says is its copy is left to the identifiers there.
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "a" / "Book.epub", "urn:uuid:A", "A")
+        argv = [*_argv(library, output_dir, mode), "-m", "0"]
+        run.main([*argv, "-q"])
+        os.utime(output_dir / "Book.epub", ns=(LATER, LATER))
+        make_metadata_package(
+            library / "b", "Book.epub", title="B", identifier="urn:uuid:B"
+        )
+        rows = _rows(argv[:-2], capsys)
+        run.main(argv)
+        ran = capsys.readouterr()
+
+        statuses = {row["source"]: row["status"] for row in rows}
+        assert statuses[str(library / "a" / "Book.epub")] == "copied"
+        assert statuses[str(library / "b" / "Book.epub")] == (
+            "collision" if mode == "skip" else "pending"
+        )
+        assert " copied" not in ran.out
+        assert "orphan" not in ran.out
+        assert identifier_of(output_dir / "Book.epub") == "urn:uuid:A"
+
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_a_book_of_its_size_replacing_it_is_not_taken_for_it(
+        self, tmp_path, output_dir, capsys, mode
+    ):
+        # Only the size says such a file is the copy's, and where the two
+        # declare different identifiers, they say otherwise: the newcomer
+        # was listed as copied from the deleted book's file, and never was.
+        library = tmp_path / "lib"
+        first = zipped_book(tmp_path, library / "a" / "Book.epub", "urn:uuid:A", "A")
+        argv = [*_argv(library, output_dir, mode), "-m", "0"]
+        run.main([*argv, "-q"])
+        os.utime(output_dir / "Book.epub", ns=(LATER, LATER))
+        first.unlink()
+        added = zipped_book(tmp_path, library / "b" / "Book.epub", "urn:uuid:C", "C")
+        assert added.stat().st_size == (output_dir / "Book.epub").stat().st_size
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, "--on-collision", mode)
+        run.main([*argv, "-q"])
+
+        assert ("Book.epub", "copied") not in listed
+        assert identifier_of(output_dir / "Book.epub") == "urn:uuid:A"
+        if mode == "suffix":
+            assert identifier_of(output_dir / "Book (2).epub") == "urn:uuid:C"
+
+
+def _sized_like(tmp_path: Path, target: Path, other: Path) -> Path:
+    """A zipped book declaring no identifier, of exactly *other*'s size."""
+    staged = make_metadata_package(
+        tmp_path / "sized", "x.epub", title="Another", identifier="none"
+    )
+    zipped(staged, target)
+    probe = tmp_path / "probe.epub"
+    probe.write_bytes(target.read_bytes())
+    with ZipFile(probe, "a") as opened:
+        opened.writestr("pad", b"")
+    overhead = probe.stat().st_size - target.stat().st_size
+    padding = other.stat().st_size - target.stat().st_size - overhead
+    assert padding >= 0
+    with ZipFile(target, "a") as opened:
+        opened.writestr("pad", b"x" * padding)
+    assert target.stat().st_size == other.stat().st_size
+    return target
+
+
+class TestAZippedBookTheSizeOfAPackagesArchive:
+    """
+    A zipped book of the same size as a package's archive, and older, is
+    what a copy made before copies kept their time looks like, and the
+    claim pass took the archive for the zipped book's own bytes on the pass
+    that looks for those: ahead of anything an identifier could say, and so
+    the package, which declares none, was sent off its own archive -- a
+    collision in skip mode, and written again under a number in suffix
+    mode. Own bytes are the size and the modification time both.
+    """
+
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_the_package_keeps_its_archive(self, tmp_path, output_dir, capsys, mode):
+        library = tmp_path / "lib"
+        package = make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="none"
+        )
+        (package / "OEBPS" / "extra.txt").write_bytes(os.urandom(2048))
+        argv = [*_argv(library, output_dir, mode), "-m", "0"]
+        run.main([*argv, "-q"])
+        archive = (output_dir / "Dune.epub").read_bytes()
+        older = _sized_like(
+            tmp_path, library / "b" / "Dune.epub", output_dir / "Dune.epub"
+        )
+        os.utime(older, ns=(EARLIER, EARLIER))
+
+        rows = _rows(argv[:-2], capsys)
+        run.main([*argv, "-q"])
+
+        [mine] = [row for row in rows if row["source"] == str(package)]
+        assert mine["status"] == "exported"
+        assert Path(mine["target"]).name == "Dune.epub"
+        assert (output_dir / "Dune.epub").read_bytes() == archive
+        assert shelf(output_dir) == ["Dune.epub"]
+
 
 class TestAPackageZippedInPlaceKeepsItsMarkedArchive:
     """
