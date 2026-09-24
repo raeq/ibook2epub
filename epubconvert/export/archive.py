@@ -539,9 +539,7 @@ def zip_package(
         assert_is_a_book(target_archive.name, stored)
 
         if validation is not None:
-            problems = validation.check(partial)
-            if problems:
-                raise ArchiveInvalidError(target_archive.name, problems)
+            validation.enforce(partial, target_archive.name)
 
         partial.replace(target_archive)
     except BaseException:

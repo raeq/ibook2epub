@@ -247,13 +247,13 @@ class TestValidationOptions:
         path = tmp_path / "junk.epub"
         path.write_bytes(b"not a zip")
 
-        assert validate.ValidationOptions(enabled=False).check(path) == []
+        assert validate.ValidationOptions(enabled=False).check(path).problems == []
 
     def test_enabled_reports_problems(self, tmp_path):
         path = tmp_path / "junk.epub"
         path.write_bytes(b"not a zip")
 
-        assert validate.ValidationOptions(enabled=True).check(path)
+        assert validate.ValidationOptions(enabled=True).check(path).problems
 
 
 class TestValidateDuringExport:
@@ -967,7 +967,7 @@ class TestTheValidatorRunsWhatItWasAskedFor:
         monkeypatch.setattr(validate, "run_epubcheck", record)
         options = validate.ValidationOptions(enabled=True, epubcheck=True)
 
-        assert options.check(good_epub) == []
+        assert options.check(good_epub) == validate.Verdict()
         assert called == [good_epub]
 
     def test_a_structural_failure_skips_epubcheck(self, tmp_path, monkeypatch):
@@ -983,7 +983,7 @@ class TestTheValidatorRunsWhatItWasAskedFor:
             pass
         options = validate.ValidationOptions(enabled=True, epubcheck=True)
 
-        assert "archive is empty" in options.check(broken)
+        assert "archive is empty" in options.check(broken).problems
         assert called == []
 
 

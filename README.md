@@ -1144,6 +1144,11 @@ contradict each other.
 reasons: `4` that there is none where it was looked for, `8` that macOS would
 not let this run look. Every failure prints its reason on stderr as well.
 
+`7` is for damage a reader can trip on. What the specification asks against
+but readers open anyway — an extra field in the `mimetype` member's local
+header, which `zip` writes unless given `-X` — is said on stderr and changes
+no exit code: a book copied through keeps its bytes, so no rerun would mend it.
+
 `5` also covers a report that could not be written. When `--list`, `--verify`
 or a run's summary cannot be written to standard output — a full disk behind
 `> report.txt`, say — the run says so on stderr and exits `5` rather than `0`,
