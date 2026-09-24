@@ -439,6 +439,33 @@ def read_package(archive: ZipFile) -> Package:
     return _package(_ArchiveMembers(archive))
 
 
+def read_archive_package(path: Path) -> Package:
+    """
+    Open an ``*.epub`` archive and parse its package document.
+
+    The one way to read an already-zipped book's metadata, so opening the
+    archive fails the same way reading it does. zipfile raises more than
+    BadZipFile from its constructor: UnicodeDecodeError for a name flagged
+    UTF-8 that is not, NotImplementedError for a zip version it does not
+    implement. Three readers caught ValidationError, BadZipFile and OSError
+    each, so either took down a ``--name-by author-title`` run.
+
+    :param path: The archive.
+
+    :return: The package metadata, manifest and spine.
+
+    :raises ValidationError: If the archive cannot be opened or read, or its
+        package document is missing or unparsable -- an OSError included, as
+        every caller treats a file it cannot open as one that cannot describe
+        itself.
+    """
+    try:
+        with ZipFile(path) as archive:
+            return read_package(archive)
+    except UNREADABLE_MEMBER as exc:
+        raise ValidationError(printable(str(exc))) from exc
+
+
 def _package(members: _Members) -> Package:
     """
     Find and parse a book's package document, whatever shape the book is in.

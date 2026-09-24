@@ -12,10 +12,9 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NamedTuple
-from zipfile import BadZipFile, ZipFile
 
 from ..collect.identifiers import usable_identifier
-from ..collect.package import ValidationError, read_package
+from ..collect.package import ValidationError, read_archive_package
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -211,9 +210,8 @@ def _identified(
 def _copy_identifier(source: Path) -> str | None:
     """Read an already-zipped book's usable identifier; None for anything else."""
     try:
-        with ZipFile(source) as archive:
-            return usable_identifier(read_package(archive))
-    except (ValidationError, BadZipFile, OSError):
+        return usable_identifier(read_archive_package(source))
+    except ValidationError:
         return None
 
 

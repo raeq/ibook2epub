@@ -15,10 +15,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-from zipfile import BadZipFile, ZipFile
 
 from ..collect.identifiers import usable_identifier
-from ..collect.package import ValidationError, read_package, read_package_dir
+from ..collect.package import ValidationError, read_archive_package, read_package_dir
 from ..collect.source import inspect_package
 from ..export.naming import disambiguator, filesystem_key
 from ..utils.app_logger import logger
@@ -172,9 +171,8 @@ def copy_target_name(source: Path, policy: NamingPolicy) -> str:
     metadata = None
     if copy_name_opens_file(source, policy):
         try:
-            with ZipFile(source) as archive:
-                metadata = read_package(archive)
-        except (ValidationError, BadZipFile, OSError):
+            metadata = read_archive_package(source)
+        except ValidationError:
             # A file that cannot describe itself still gets copied; it just
             # cannot be renamed from metadata it does not have.
             metadata = None

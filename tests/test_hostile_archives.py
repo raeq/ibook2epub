@@ -2,8 +2,9 @@
 Tests for archives built to cost more to read than they are worth.
 
 An ``*.epub`` archive arrives from a library, a sideload or a shelf this tool
-did not write, so what its central directory declares is a claim, not a bound.
-These cases cover what believing that claim cost.
+did not write, so what its central directory declares is a claim, not a bound,
+and the directory itself may not even be readable. These cases cover what
+believing either cost.
 """
 
 # Test names describe the behaviour under test; separate docstrings would only
@@ -23,7 +24,9 @@ from epubconvert.collect import package as package_reader
 from epubconvert.collect import validate
 from epubconvert.collect.annotations import EMBEDDED_PATH
 from epubconvert.export import archive
-from tests.test_validate import MEMBERS
+from epubconvert.run import run
+from tests.conftest import make_metadata_package
+from tests.test_validate import MEMBERS, write_epub
 
 #: How much padding a bomb inflates to. Enough that decompressing it whole
 #: stands far above :data:`PEAK`, small enough that the old behaviour costs a
@@ -222,3 +225,90 @@ class TestARefreshInflatesNothingWhole:
         assert peak() < PEAK
         assert target.read_bytes() == before
         assert sorted(path.name for path in tmp_path.iterdir()) == ["Bomb.epub"]
+
+
+def _crafted(path: Path, flaw: str) -> Path:
+    """
+    Write a sound epub, then break its last central-directory entry.
+
+    ``utf8`` flags the entry's name as UTF-8 when it is not, and ``version``
+    says reading it needs a zip version newer than zipfile implements. Both
+    are refused while the archive is opened, before any member is read.
+    """
+    data = bytearray(write_epub(path).read_bytes())
+    entry = data.rfind(b"PK\x01\x02")
+    if flaw == "utf8":
+        flags = int.from_bytes(data[entry + 8 : entry + 10], "little") | 0x800
+        data[entry + 8 : entry + 10] = flags.to_bytes(2, "little")
+        length = int.from_bytes(data[entry + 28 : entry + 30], "little")
+        data[entry + 46 + length - 1] = 0xFF
+    else:
+        data[entry + 6 : entry + 8] = (64).to_bytes(2, "little")
+    path.write_bytes(bytes(data))
+    return path
+
+
+FLAWS = pytest.mark.parametrize("flaw", ["utf8", "version"])
+
+
+class TestAnArchiveThatCannotBeOpenedCostsOneBook:
+    """
+    zipfile raises UnicodeDecodeError for a name flagged UTF-8 that is not,
+    and NotImplementedError for a zip version it does not implement. The
+    three readers of an already-zipped book's metadata caught ValidationError,
+    BadZipFile and OSError, so either ended a ``--name-by author-title`` run
+    with a traceback.
+    """
+
+    @FLAWS
+    def test_it_is_a_validation_error(self, tmp_path, flaw):
+        path = _crafted(tmp_path / "Hostile.epub", flaw)
+
+        with pytest.raises(package_reader.ValidationError):
+            package_reader.read_archive_package(path)
+
+    def test_a_sound_archive_is_read(self, tmp_path):
+        path = write_epub(tmp_path / "Book.epub")
+
+        assert package_reader.read_archive_package(path).title == (
+            "A Wizard of Earthsea"
+        )
+
+    def test_a_missing_archive_is_a_validation_error(self, tmp_path):
+        with pytest.raises(package_reader.ValidationError):
+            package_reader.read_archive_package(tmp_path / "Absent.epub")
+
+    @FLAWS
+    def test_one_in_the_library_is_copied_under_its_own_name(
+        self, tmp_path, output_dir, flaw
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        _crafted(library / "Hostile.epub", flaw)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "--name-by", "author-title"]
+            + ["-m", "0", "-q"]
+        )
+
+        assert code == 0
+        assert [path.name for path in output_dir.glob("*.epub")] == ["Hostile.epub"]
+
+    @FLAWS
+    def test_one_on_the_shelf_under_a_wanted_name_does_not_end_the_run(
+        self, tmp_path, output_dir, flaw
+    ):
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library, "Dune.epub", title="Dune", file_as="Herbert, Frank"
+        )
+        held = _crafted(output_dir / "Herbert, Frank - Dune.epub", flaw)
+        before = held.read_bytes()
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "--name-by", "author-title"]
+            + ["-q"]
+        )
+
+        assert code == 0
+        assert held.read_bytes() == before
