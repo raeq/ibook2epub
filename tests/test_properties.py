@@ -180,6 +180,25 @@ def test_indentation_that_opens_code_is_kept_as_columns_of_text(lead, rest):
         assert escaped.startswith(lead)
 
 
+# ------------------------------------------------------------- notes._quoted
+
+
+@given(ANY_TEXT)
+def test_a_quoted_scalar_carries_only_what_yaml_allows_unescaped(value):
+    # YAML 1.2 (5.1): one character outside this set invalidates the whole
+    # frontmatter, and Obsidian then drops every property of the note.
+    quoted = notes._quoted(value)
+
+    assert all(
+        c in "\t\n\r\x85"
+        or 0x20 <= ord(c) <= 0x7E
+        or 0xA0 <= ord(c) <= 0xD7FF
+        or 0xE000 <= ord(c) <= 0xFFFD
+        or ord(c) >= 0x10000
+        for c in quoted
+    )
+
+
 # ------------------------------------------------------------------------ ISBN
 
 

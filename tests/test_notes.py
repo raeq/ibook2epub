@@ -50,6 +50,18 @@ def _annotation(**overrides: Any) -> dict[str, Any]:
     return item
 
 
+def _yaml_printable(char: str) -> bool:
+    """YAML 1.2's printable set (5.1): what a stream may carry unescaped."""
+    code = ord(char)
+    return (
+        char in "\t\n\r\x85"
+        or 0x20 <= code <= 0x7E
+        or 0xA0 <= code <= 0xD7FF
+        or 0xE000 <= code <= 0xFFFD
+        or code >= 0x10000
+    )
+
+
 class TestFrontmatter:
     def test_a_title_holding_a_colon_stays_one_property(self):
         # 298 titles in a surveyed library contain ": ", which starts a mapping.
@@ -79,6 +91,20 @@ class TestFrontmatter:
 
         assert line.startswith('title: "')
         assert line.endswith('"')
+
+    @pytest.mark.parametrize(
+        "title",
+        ["Don\x92t", "bell\x07", "del\x7f", "nul\x00", "esc\x1b[2K", "odd\ufffe"],
+    )
+    def test_a_control_character_is_escaped_not_written_raw(self, title: str):
+        # U+0092 is what CP1252 mojibake leaves of an apostrophe. Written raw
+        # into a double-quoted scalar it made the frontmatter invalid YAML,
+        # and Obsidian dropped every property of the note without an error.
+        rendered = notes.frontmatter({"title": title})
+
+        assert all(_yaml_printable(char) for char in rendered)
+        yaml = pytest.importorskip("yaml")
+        assert yaml.safe_load(rendered.strip().strip("-"))["title"] == title
 
     def test_tool_owned_literals_are_bare(self):
         rendered = notes.frontmatter({"title": "T"})

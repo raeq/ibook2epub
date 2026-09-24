@@ -231,12 +231,31 @@ def _quoted(value: object) -> str:
     ``": "``, which starts a mapping and makes Obsidian show the note as having
     no properties at all -- silently, which is the worst way for it to fail.
 
+    Characters YAML will not carry unescaped are escaped too. U+0092, which is
+    what CP1252 mojibake leaves of an apostrophe, was written raw, and a
+    single one made the whole frontmatter invalid: Obsidian dropped every
+    property of the note, silently again.
+
     :param value: The value, which came from the book.
 
     :return: The quoted scalar.
     """
     escaped = collapse(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    return f'"{UNPRINTABLE.sub(_yaml_escape, escaped)}"'
+
+
+#: What YAML 1.2 (5.1) will not carry unescaped in a stream: C0 but for the
+#: white space ``collapse`` has already turned into spaces, DEL, C1 but for
+#: NEL, the surrogates a filename can hand back, and the two non-characters.
+UNPRINTABLE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ud800-\udfff\ufffe\uffff]"
+)
+
+
+def _yaml_escape(match: re.Match[str]) -> str:
+    """Render one character as a double-quoted YAML escape: ``\\x92``."""
+    code = ord(match.group())
+    return f"\\x{code:02X}" if code <= 0xFF else f"\\u{code:04X}"
 
 
 def frontmatter(book: dict[str, Any]) -> str:
