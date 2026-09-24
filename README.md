@@ -723,6 +723,12 @@ all of it alone. Edit *inside* the highlights and the tool stops touching that
 note entirely, putting the new ones in a `.md.new` beside it so you never have
 to choose between keeping your edits and getting your highlights.
 
+The middle part mirrors Books: a highlight you delete there leaves the note on
+the next run, as it leaves each book's embedded set. Only the JSON file of
+`-ad` or `-ao` keeps highlights deleted in Books (see
+[Re-running](#re-running)). Anything of your own written below the end marker
+is never touched either way.
+
 A file at a note's path that the tool did not write, or one it cannot read,
 is never touched either. That book's highlights then reach no file at all, so
 the run names the file and exits `1`; move it aside and rerun.
@@ -851,8 +857,24 @@ being gathered again.
 
 #### Re-running
 
-A rerun merges rather than replaces. Annotations are matched on the UUID Apple
-gives them, so a file you have been adding to is added to again:
+What a rerun does with a highlight you have deleted in Books depends on where
+the highlights go, and only one destination keeps it:
+
+| Destination | On a rerun |
+|---|---|
+| the `-ad` / `-ao` JSON file | merged into: a highlight deleted in Books is **kept** |
+| the set embedded in each book (`-ae`, `-ar`) | replaced: mirrors what Books holds now |
+| a vault note (`--annotations-format markdown`) | its highlights are replaced: mirrors what Books holds now |
+
+So the JSON file is the one to keep if you want everything you ever
+highlighted. A book that arrives carrying its own `META-INF/annotations.json`
+has it replaced by this run's set, not merged with it. One exception on the
+mirroring side: a book with no highlight left in Books is not touched at all,
+so its embedded set and its note keep the last highlights they had, rather
+than being emptied.
+
+The JSON file merges rather than replaces. Annotations are matched on the UUID
+Apple gives them, so a file you have been adding to is added to again:
 
 ```text
 3 added, 1 updated, 214 unchanged, 2 kept (no longer in Books)
