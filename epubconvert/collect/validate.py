@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import stat
 import subprocess
 import unicodedata
 from collections import Counter
@@ -37,6 +36,7 @@ from .package import (
     ValidationError,
     disallowed_method,
     open_member,
+    open_regular,
     read_member,
     read_package,
     repeated_entries,
@@ -90,9 +90,9 @@ def validate_archive(path: Path) -> list[str]:
     problems: list[str] = []
 
     try:
-        if not stat.S_ISREG(path.stat().st_mode):  # Opening a FIFO waits for ever.
-            return ["not a regular file"]
-        with ZipFile(path) as archive:
+        # Judged on the descriptor, not a stat of the name: a FIFO swapped in
+        # between the two was opened for reading, and waited for ever.
+        with open_regular(path) as handle, ZipFile(handle) as archive:
             names = archive.namelist()
             members = set(names)
             problems.extend(_check_mimetype(archive, names))
@@ -107,6 +107,8 @@ def validate_archive(path: Path) -> list[str]:
             problems.extend(methods)
             if not methods and repeated is None:
                 problems.extend(_check_contents(archive, members))
+    except ValidationError as exc:
+        return [str(exc)]
     except BadZipFile as exc:
         return [f"not a readable zip archive: {exc}"]
     except OSError as exc:

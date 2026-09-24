@@ -521,13 +521,13 @@ def read_archive_package(path: Path) -> Package:
     """
     try:
         # zipfile leaves a stream it was handed open, so it is closed here.
-        with _open_regular(path) as handle, ZipFile(handle) as archive:
+        with open_regular(path) as handle, ZipFile(handle) as archive:
             return read_package(archive)
     except UNREADABLE_MEMBER as exc:
         raise ValidationError(printable(str(exc))) from exc
 
 
-def _open_regular(path: Path) -> IO[bytes]:
+def open_regular(path: Path) -> IO[bytes]:
     """
     Open a file for reading, refusing anything that is not a regular file.
 

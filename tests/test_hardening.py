@@ -189,6 +189,26 @@ class TestAMemberThatIsNotAFileIsNotOpened:
     metadata naming and cover extraction all froze on it.
     """
 
+    def test_a_fifo_swapped_in_after_the_check_is_not_waited_on(
+        self, tmp_path, monkeypatch
+    ):
+        # validate_archive stat'ed the path, then opened it by name: a FIFO
+        # put there in between was opened for reading, and --verify waited
+        # for ever. Judged on the descriptor it opens, the swap is refused.
+        fifo = tmp_path / "Swapped.epub"
+        os.mkfifo(fifo)
+        regular = (tmp_path / "regular").touch() or (tmp_path / "regular").stat()
+        real_stat = Path.stat
+        monkeypatch.setattr(
+            Path,
+            "stat",
+            lambda self, **kw: regular if self == fifo else real_stat(self, **kw),
+        )
+
+        problems = _within(5, fifo, lambda: validate.validate_archive(fifo))
+
+        assert problems == ["not a regular file"]
+
     def test_a_fifo_for_a_container_is_refused_not_waited_on(self, tmp_path):
         package = make_package(tmp_path / "lib", "Piped.epub")
         container = package / "META-INF" / "container.xml"
