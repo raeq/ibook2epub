@@ -19,6 +19,7 @@ highlights, and the reader's writing left under them.
 # Test names describe the behaviour under test; separate docstrings would only
 # restate them.
 # pylint: disable=missing-function-docstring,missing-class-docstring
+# pylint: disable=too-few-public-methods
 
 from pathlib import Path
 from typing import Any
@@ -364,6 +365,48 @@ class TestANamesakeOfTheOldName:
         before = {name: (vault / name).read_bytes() for name in _names(vault)}
         assert self._write(vault, suffix=True) == exits.SUCCESS
         assert {name: (vault / name).read_bytes() for name in _names(vault)} == before
+
+
+class TestANamesakeWithNothingToWrite:
+    """
+    ``Dune.pdf``, with no highlights, is given ``Dune.md`` as every named
+    book is given its name. The renamed EPUB's note there was left behind
+    because another book is given that name, and the run exited 1 every
+    time, though the PDF writes nothing and the note is not its.
+    """
+
+    ASSETS: dict[str, str | None] = {"A": "Dune.epub", "P": "Dune.pdf"}
+
+    def _write(self, vault: Path, found: list[dict[str, Any]], suffix: bool) -> int:
+        named = [
+            Assignment(Path("Dune.epub"), "Dune (Deluxe).epub", "dune (deluxe).epub"),
+            Assignment(Path("Dune.pdf"), "Dune.pdf", "dune.pdf"),
+        ]
+        return notes.write_vault(
+            found, str(vault), named, copyable=(), suffix=suffix, assets=self.ASSETS
+        )
+
+    @pytest.mark.parametrize("suffix", [False, True])
+    def test_the_note_moves_and_the_pdf_starts_its_own_later(
+        self, vault: Path, suffix: bool
+    ):
+        found = [_highlight("x"), _highlight("y")]
+
+        assert self._write(vault, found, suffix) == exits.SUCCESS
+
+        assert _names(vault) == ["Dune (Deluxe).md"]
+        text = (vault / "Dune (Deluxe).md").read_text(encoding="utf-8")
+        assert "> y" in text
+        assert text.endswith(MINE)
+        before = _snapshot(vault)
+        assert self._write(vault, found, suffix) == exits.SUCCESS
+        assert _snapshot(vault) == before
+
+        found.append(_highlight("p", "P", "Dune.pdf"))
+        assert self._write(vault, found, suffix) == exits.SUCCESS
+        assert _names(vault) == ["Dune (Deluxe).md", "Dune.md"]
+        assert "> p" in (vault / "Dune.md").read_text(encoding="utf-8")
+        assert (vault / "Dune (Deluxe).md").read_bytes() == before["Dune (Deluxe).md"]
 
 
 class TestWhatIsLookedFor:

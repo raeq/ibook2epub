@@ -584,6 +584,9 @@ def _write_notes(
         library=known.of_package,
     )
     collided: list[str] = []
+    # A book with nothing to write is given a name too, but writes nothing
+    # there, so a renamed book's old note under that name may leave it.
+    writing = [naming.given.get(package) for package in books]
     for item, mine in wanted:
         if not mine:
             continue
@@ -601,9 +604,7 @@ def _write_notes(
             continue
         theirs = item.package in naming.refused
         strays = naming.strays.get(item.package)
-        if strays and not _gather(
-            directory, strays, name, naming.given.values(), theirs=theirs
-        ):
+        if strays and not _gather(directory, strays, name, writing, theirs=theirs):
             tally["left"].extend(strays)
             continue
         written = _write_one(
@@ -699,12 +700,20 @@ def _gather(
     only onto a name nothing is at. A sidecar beside it (``.md.new``) holds
     new highlights the reader has yet to merge, and would be left beside
     nothing: the note is not moved while one is there. Nor is a note
-    another book of the run is given, or one of two that are the book's.
+    another book of the run is to write, or one of two that are the book's.
+
+    A name given to a book with nothing to write does not count: every
+    named book is given its name, so the renamed ``Dune.epub``'s note stayed
+    at ``Dune.md`` because ``Dune.pdf``, with no highlights, is given it,
+    and the run exited 1 every time, though the PDF writes nothing and the
+    note is not its. Moved, it leaves that name free for the PDF's own note,
+    started the day it has a highlight. Nor is a note ever moved onto a
+    name such a book is given: no two books are given one name.
 
     :param directory: The vault.
     :param strays: The book's notes under other names.
     :param name: The note name the book is given.
-    :param given: Every note name the run gives.
+    :param given: Every note name the run gives a book with highlights.
     :param theirs: Whether the note at *name* is another book's, as naming
         found it.
 
