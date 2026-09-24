@@ -330,7 +330,10 @@ class TestANameOnTheShelfIsNotProofOfTheBook:
         listed = self._listed(library, output_dir, capsys, "--match", "Ace")
 
         assert listed["Dune (Ace).epub"]["status"] == planning.COLLISION
-        assert "holds another book" in listed["Dune (Ace).epub"]["reason"]
+        # Named against the whole library, the Ace edition loses the name to
+        # the 1965 one before the shelf is even read; either way the reason
+        # names the file that holds it.
+        assert "Frank Herbert - Dune.epub" in listed["Dune (Ace).epub"]["reason"]
 
     def test_the_next_edition_is_not_exported_by_a_deleted_ones_archive(
         self, tmp_path, output_dir, capsys

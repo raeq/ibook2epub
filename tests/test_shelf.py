@@ -17,6 +17,7 @@ the gap was that it would not tell you either.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import json
+from pathlib import Path
 
 from epubconvert.export import archive
 from epubconvert.export.naming import MetadataNaming, PassthroughNaming, StripNaming
@@ -199,6 +200,51 @@ class TestMatchDoesNotInventOrphans:
         )
 
         assert "orphan" not in capsys.readouterr().out
+
+
+class TestMatchNamesAgainstTheWholeLibrary:
+    """A book's name does not depend on which other books --match selected."""
+
+    ARGS = ["--name-by", "author-title", "--on-collision", "suffix", "-q"]
+
+    def _library(self, tmp_path: Path) -> Path:
+        library = tmp_path / "lib"
+        for folder, identifier in (
+            ("Dune (1965)", "urn:uuid:a"),
+            ("Dune (Ace)", "urn:uuid:b"),
+        ):
+            make_metadata_package(
+                library,
+                f"{folder}.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=identifier,
+            )
+        return library
+
+    def test_a_matched_book_keeps_the_name_a_full_run_gave_it(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Regression: names were assigned over the matched subset alone, where
+        # one edition is not crowded and so gets no marker. A book the full
+        # run had already exported as "Dune [digest]" was then pending under
+        # the plain name, written a second time, and the duplicate reported
+        # as an orphan by every later full run.
+        library = self._library(tmp_path)
+        base = ["-s", str(library), "-o", str(output_dir), "-m", "0", *self.ARGS]
+        assert run.main(base) == 0
+        exported = sorted(path.name for path in output_dir.glob("*.epub"))
+        capsys.readouterr()
+
+        assert run.main([*base, "--match", "1965"]) == 0
+
+        assert sorted(path.name for path in output_dir.glob("*.epub")) == exported
+        capsys.readouterr()
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "--list", "--json", *self.ARGS]
+        )
+        listed = json.loads(capsys.readouterr().out)
+        assert sorted(entry["status"] for entry in listed) == ["exported", "exported"]
 
 
 class TestTheListingNamesTheFileItWillWrite:

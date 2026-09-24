@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- A run narrowed by `--match` gives each book the name a full run gives it.
+  Names were assigned over the matched books alone, so under
+  `--on-collision suffix` one edition of a crowded title lost its marker: a
+  book already exported was written a second time under the plain name, and
+  every later full run reported the duplicate as an orphan.
+
 - `--refresh` and `--force` no longer write one book over another's archive
   when their package folders share a name: same-named packages in different
   subfolders, or names `--portable-names` folds together such as `Café` and

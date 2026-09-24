@@ -25,8 +25,10 @@
  *   _place                      under suffix, a book whose name holds another
  *       book moves on to the first position of its marked name that no other
  *       book of the run is named and no other book's archive holds
- * and epubconvert/run/run.py (_shared_names): a run narrowed by --match names
- * only the books it selected.
+ * and epubconvert/run/run.py (_shared_names): every run names the whole
+ * library, and one narrowed by --match plans only the books it selected. It
+ * used to name the selection alone, so a matched book could get a different
+ * name from the one a full run gives it.
  *
  * Names are strings, compared exactly: PassthroughNaming.identity is the
  * filename, and case folding is left out. A digest marker is " [b]" for book
@@ -141,7 +143,8 @@ RemoveBook(b) ==
    TLC re-evaluates a LET definition at every reference: naming, once per
    lookup of a name. ChangingSuffix took 2m08s that way and takes 1s. *)
 Run(S, refresh, newer, done) ==
-    \E first \in {Assign(S)} :
+    \E whole \in {Assign(lib)} :
+    \E first \in {[b \in S |-> whole[b]]} :
     LET
         \* Whose archive is compared: every book on the shelf when naming read
         \* the sources, otherwise only a book --refresh would write.
@@ -160,9 +163,9 @@ Run(S, refresh, newer, done) ==
                                /\ ReadsSources
                                /\ first[b] # ""
                                /\ Foreign(b, first[b])}
-        taken    == {first[c] : c \in S}
-        \* _place: the first position of b's marked name that no book of this
-        \* run is named and no other book's archive holds. first[b] is one of
+        taken    == {whole[c] : c \in lib}
+        \* _place: the first position of b's marked name that no book of the
+        \* library is named and no other book's archive holds. first[b] is one of
         \* the names taken, and holds another book besides.
         moved    == [b \in moves |->
                        LET open == {k \in 1..Limit :

@@ -112,35 +112,30 @@ def _log_preamble(args: argparse.Namespace, policy: NamingPolicy) -> None:
 
 
 def _shared_names(
-    packages: Sequence[Path],
     discovered: Sequence[Path],
     policy: NamingPolicy,
     on_collision: CollisionMode,
-) -> list[Assignment] | None:
+) -> list[Assignment]:
     """
-    Name every package once, when both callers want the same answer.
+    Name every package in the library once, for every caller.
 
-    Planning and orphan detection each name a set of packages, and naming reads
-    a package document per book under a metadata policy -- so computing it in
-    both places read every book twice. Measured on a real 2,805-book library:
-    5,610 reads for one listing.
+    Always the whole library, never the subset ``--match`` selected. Naming
+    the subset gave a matched book a different name from the one a full run
+    gives it: alone in its selection, one edition of a crowded title got no
+    marker, so a book already exported as ``Dune [digest]`` was pending under
+    the plain name, written again, and the duplicate became an orphan. The
+    run plans only the books it selected, looked up in this one assignment.
 
-    They want different sets whenever ``--match`` or ``-m`` narrows the
-    selection: the shelf is judged against the whole library, the run against
-    the subset. Sharing only when the two lists agree keeps that distinction,
-    at the cost of the saving on a filtered run, which is the smaller run
-    anyway.
+    It also saves work. Naming reads a package document per book under a
+    metadata policy, and planning and orphan detection each named their own
+    set: on a real 2,805-book library, 5,610 reads for one listing.
 
-    :param packages: What this run will convert.
     :param discovered: Every package in the library.
     :param policy: The naming policy in force.
     :param on_collision: The collision mode in force.
 
-    :return: The shared assignment, or None when the callers disagree and each
-        must name its own set.
+    :return: The assignment of every package in the library.
     """
-    if list(packages) != list(discovered):
-        return None
     return assign_names(discovered, policy, on_collision)
 
 
@@ -185,7 +180,7 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
     discovered = collect_package_dirs(args.source_dir)
     copies = _plan_copies(args, policy)
     packages = filter_packages(discovered, args.match)
-    shared = _shared_names(packages, discovered, policy, args.on_collision)
+    shared = _shared_names(discovered, policy, args.on_collision)
     decisions = plan_exports(
         packages, args.output_dir, policy, _plan_options(args), assigned=shared
     )
@@ -281,14 +276,7 @@ def _survey(
 
     copies = _plan_copies(args, policy)
     report.ignored = count_ignored(args.source_dir, discovered) - len(copies.named)
-    shared = _shared_names(packages, discovered, policy, args.on_collision)
-    # The names this run actually uses, computed once. plan_exports would
-    # otherwise work them out again from the same inputs.
-    assigned = (
-        shared
-        if shared is not None
-        else assign_names(packages, policy, args.on_collision)
-    )
+    shared = _shared_names(discovered, policy, args.on_collision)
     report.orphaned = len(
         find_orphans(
             args.output_dir,
@@ -299,7 +287,7 @@ def _survey(
             assigned=shared,
         )
     )
-    return packages, copies, assigned
+    return packages, copies, shared
 
 
 def _run_export(
@@ -418,7 +406,25 @@ def _run_export(
     # off: counting only exports said "-m 0 -d" would leave every book it
     # had just listed.
     done = report.planned if args.dry_run else report.exported
-    return report, max(0, pending_before - done), assigned
+    return report, max(0, pending_before - done), _selected(assigned, packages)
+
+
+def _selected(
+    assigned: Sequence[Assignment], packages: Sequence[Path]
+) -> list[Assignment]:
+    """
+    Keep the assignments of this run's own books.
+
+    The assignment names the whole library, and ``--match`` narrows what the
+    run touches: only the books it selected go on to the annotation step.
+
+    :param assigned: The assignment of every package in the library.
+    :param packages: The packages this run selected.
+
+    :return: Their assignments, in the library's order.
+    """
+    chosen = set(packages)
+    return [entry for entry in assigned if entry.package in chosen]
 
 
 def _run_read_only(args: argparse.Namespace, policy: NamingPolicy) -> int | None:

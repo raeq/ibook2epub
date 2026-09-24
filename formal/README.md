@@ -111,7 +111,7 @@ book moves on to the first free position of its marked name.
 | `Changing` | `--match`, `--refresh` | books added and removed | all | on | both hold |
 | `ChangingSuffix` | the same, suffix mode | books added and removed | all | on | all three hold |
 | `ChangingSuffixStuck` | the same, without `MoveOn` | books added and removed | all | on | **SuffixKeepsEveryIdentifiableBook violated** |
-| `MatchUnverified` | `--match` | fixed | all | off | **ExportedMeansTheBooksOwnFile violated** |
+| `MatchUnverified` | `--match` | fixed | all | off | both hold |
 | `ChangesUnverified` | whole library | books added and removed | all | off | **ExportedMeansTheBooksOwnFile violated** |
 | `RefreshUnverified` | whole library, `--refresh` | books added and removed | all | off | **NeverWritesOverAnotherBook violated** |
 | `Unidentifiable` | `--match`, `--refresh` | books added and removed | book 1 only | on | **ExportedMeansTheBooksOwnFile violated** |
@@ -121,7 +121,11 @@ book moves on to the first free position of its marked name.
 What the configurations that fail show:
 
 - **The `Unverified` rows** are the three defects the check fixes. Each one
-  reproduces with the code before the check. The setup is three packages
+  reproduced with the code before the check; `MatchUnverified` no longer
+  does, because every run now names the whole library, so a run narrowed by
+  `--match` gives each book the name a full run gives it and the first case
+  below cannot arise even without the check. It stays as the configuration
+  that shows it. The setup is three packages
   titled *Dune* by Frank Herbert, each with its own identifier, run with
   `--name-by author-title`:
   - `--match 1965` writes `Frank Herbert - Dune.epub`. A later
@@ -143,8 +147,8 @@ What the configurations that fail show:
   UUID, cannot be told apart either.
 - **`ChangingSuffixStuck`** is what the check cost suffix mode before
   `_place`. With the 1965 edition's archive under the plain name, a run
-  that names the Ace edition alone -- `--match Ace`, or any run after the
-  1965 edition is deleted -- gives it that name, finds it held by another
+  that names the Ace edition alone -- any run after the 1965 edition is
+  deleted -- gives it that name, finds it held by another
   book, and reports a collision, on every run for ever: the mode that exists
   to keep both kept one. Now the Ace edition moves on to its marked name,
   `Frank Herbert - Dune [<digest>].epub`, which the next run finds again

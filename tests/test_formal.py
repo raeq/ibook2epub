@@ -44,10 +44,10 @@ EXPECTED = {
     "RerunPlanner.StableSuffix": HOLDS,
     "RerunPlanner.Changing": HOLDS,
     "RerunPlanner.ChangingSuffix": HOLDS,
-    # Without planning._decide_against_holder: the defects it fixes.
-    "RerunPlanner.MatchUnverified": (
-        "Invariant ExportedMeansTheBooksOwnFile is violated."
-    ),
+    # Without planning._decide_against_holder: the defects it fixes. The
+    # --match one is closed a second time by naming the whole library on
+    # every run, so it holds even without the check.
+    "RerunPlanner.MatchUnverified": HOLDS,
     "RerunPlanner.ChangesUnverified": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
