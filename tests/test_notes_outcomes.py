@@ -56,7 +56,7 @@ class TestABookThatLostACollision:
         app_logger.configure(verbosity=0)
         found = [_highlight("One.epub", "first"), _highlight("Two.epub", "second")]
 
-        notes.write_vault(found, str(tmp_path / "vault"), COLLIDED)
+        notes.write_vault(found, str(tmp_path / "vault"), COLLIDED, copyable=())
 
         reported = capsys.readouterr().err
         assert "Two.epub" in reported
@@ -69,7 +69,7 @@ class TestABookThatLostACollision:
         # tool, and the fix is a flag, not a retry.
         found = [_highlight("One.epub", "first"), _highlight("Two.epub", "second")]
 
-        code = notes.write_vault(found, str(tmp_path / "vault"), COLLIDED)
+        code = notes.write_vault(found, str(tmp_path / "vault"), COLLIDED, copyable=())
 
         assert code == exits.SUCCESS
 
@@ -79,7 +79,10 @@ class TestABookThatLostACollision:
         app_logger.configure(verbosity=0)
 
         notes.write_vault(
-            [_highlight("One.epub", "first")], str(tmp_path / "vault"), COLLIDED
+            [_highlight("One.epub", "first")],
+            str(tmp_path / "vault"),
+            COLLIDED,
+            copyable=(),
         )
 
         assert "--on-collision" not in capsys.readouterr().err
@@ -92,7 +95,10 @@ class TestABookThatLostACollision:
         app_logger.configure(verbosity=0)
 
         notes.write_vault(
-            [_highlight("Two.epub", "second")], str(tmp_path / "vault"), COLLIDED
+            [_highlight("Two.epub", "second")],
+            str(tmp_path / "vault"),
+            COLLIDED,
+            copyable=(),
         )
 
         reported = capsys.readouterr().err
@@ -116,7 +122,9 @@ class TestNothingSavedForABookFailsTheRun:
     """
 
     def _run(self, vault: Path) -> int:
-        return notes.write_vault([_highlight("Alpha.epub", "hl")], str(vault), ALONE)
+        return notes.write_vault(
+            [_highlight("Alpha.epub", "hl")], str(vault), ALONE, copyable=()
+        )
 
     def test_a_directory_where_the_note_should_be_fails_the_run(self, tmp_path: Path):
         vault = tmp_path / "vault"
