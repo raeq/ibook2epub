@@ -398,6 +398,38 @@ class TestDiskFloor:
         assert code == 1
         assert len(list(output_dir.glob("*.epub"))) < 4
 
+    def test_once_the_floor_is_crossed_no_further_book_starts(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Only one book in `interval` measures. The floor used to stop only the
+        # book whose sample found it crossed: every unsampled book after it
+        # went on writing to a volume already below the floor. Twelve books on
+        # four workers wrote ten.
+        library = tmp_path / "lib"
+        for index in range(12):
+            make_package(library, f"Book {index:02}.epub")
+        # Room for the pre-flight check and the first sample; below the floor
+        # from the second sample on.
+        readings = iter([10_000, 10_000])
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: next(readings, 1))
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+            + ["--min-free", "100", "-w", "4"]
+        )
+
+        written = len(list(output_dir.glob("*.epub")))
+        summary = capsys.readouterr().out.strip().splitlines()[-1]
+        # The four books before the second sample, and at most the three that
+        # had already passed their own check when it found the floor crossed.
+        assert written <= 7
+        # Nothing it declined to start failed: a rerun on a volume with room
+        # converts them, which is what the summary has to say.
+        assert code == 1
+        assert summary.startswith("Aborted: not enough free space")
+        assert "failed" not in summary
+        assert f"{12 - written} not attempted: rerun to continue." in summary
+
     def test_export_stops_when_space_is_short(self, tmp_path, output_dir, monkeypatch):
         library = tmp_path / "lib"
         make_package(library, "Book.epub")

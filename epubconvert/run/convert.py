@@ -141,9 +141,13 @@ class _Progress:  # pylint: disable=too-few-public-methods
         self.done = 0
         self.checks = 0
         # Never wider than the pool. Sampling one book in 32 while 64 run at
-        # once means up to 31 further books are written after the floor has
-        # already been crossed.
+        # once let up to 31 further books start after the floor had been
+        # crossed and before any sample noticed.
         self.interval = max(1, min(interval, self.ROOM_INTERVAL))
+        #: Sticky once any sample finds the volume below the floor. Without
+        #: it only the sampled book stopped, and every unsampled book after it
+        #: went on writing: twelve books on four workers wrote ten.
+        self.floor_crossed = False
 
     def should_check_room(self) -> bool:
         """
@@ -155,6 +159,30 @@ class _Progress:  # pylint: disable=too-few-public-methods
         """
         self.checks += 1
         return (self.checks - 1) % self.interval == 0
+
+    def has_room(self, output_dir: Path, min_free_mb: int) -> bool:
+        """
+        Report whether one more write may start, measuring when it is due.
+
+        Once a sample finds the floor crossed, every later caller is refused
+        without measuring: the volume does not get emptier by being asked
+        again, and asking only every ``interval`` writes is what let the
+        writes in between carry on.
+
+        :param output_dir: Directory being written to.
+        :param min_free_mb: Floor in MiB; 0 disables the check.
+
+        :return: True when the write may go ahead.
+        """
+        with _REPORT_LOCK:
+            if self.floor_crossed:
+                return False
+            measure = self.should_check_room()
+        if not measure or _has_room(output_dir, min_free_mb):
+            return True
+        with _REPORT_LOCK:
+            self.floor_crossed = True
+        return False
 
     def tick(self) -> str:
         """Advance the counter and render it as ``[12/240]``."""
@@ -184,14 +212,13 @@ def _zip_and_record(
     :param progress: Shared counter for the ``[n/total]`` prefix.
     :param run: Options for this run.
     """
-    with _REPORT_LOCK:
-        measure = progress.should_check_room()
-    if measure and not _has_room(target.parent, run.min_free_mb):
+    if not progress.has_room(target.parent, run.min_free_mb):
+        # Not started, so not failed: counted the way the pre-flight check
+        # counts a full volume, and the summary sends it back to a rerun.
         with _REPORT_LOCK:
-            report.failed += 1
-            marker = progress.tick()
-        logger.error(
-            "%s Skipped %s: not enough free space", marker, printable(package.name)
+            report.aborted = True
+        logger.info(
+            "Not started, the volume is below --min-free: %s", printable(package.name)
         )
         return
 
