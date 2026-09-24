@@ -61,7 +61,16 @@ from .noteformat import (
     untouched,
     wrote_it,
 )
-from .notenames import Claimant, Holding, Vault, claimant, holding, note_names, parse
+from .notenames import (
+    Claimant,
+    Holding,
+    Vault,
+    claimant,
+    holding,
+    note_names,
+    parse,
+    read_note,
+)
 
 #: Suffix for the copy written when a reader has edited the note itself. Not
 #: ``.new.md``: a book titled "Foo.new" is named ``Foo.new.md``, which was
@@ -590,8 +599,11 @@ def _write_notes(
             # another book's file has the same stem.
             collided.append(item.package.name)
             continue
+        theirs = item.package in naming.refused
         strays = naming.strays.get(item.package)
-        if strays and not _gather(directory, strays, name, naming.given.values()):
+        if strays and not _gather(
+            directory, strays, name, naming.given.values(), theirs=theirs
+        ):
             tally["left"].extend(strays)
             continue
         written = _write_one(
@@ -599,7 +611,7 @@ def _write_notes(
             mine,
             book=books[item.package],
             known=known.tags,
-            theirs=item.package in naming.refused,
+            theirs=theirs,
         )
         tally[written].append(name)
     return tally, collided
@@ -673,7 +685,12 @@ def _naming(names: list[str]) -> str:
 
 
 def _gather(
-    directory: Path, strays: list[str], name: str, given: Collection[str | None]
+    directory: Path,
+    strays: list[str],
+    name: str,
+    given: Collection[str | None],
+    *,
+    theirs: bool = False,
 ) -> bool:
     """
     Move a book's note from the name it had before to the one it is given.
@@ -688,6 +705,8 @@ def _gather(
     :param strays: The book's notes under other names.
     :param name: The note name the book is given.
     :param given: Every note name the run gives.
+    :param theirs: Whether the note at *name* is another book's, as naming
+        found it.
 
     :return: True when the note is at *name* now, False when it was left,
         which is logged.
@@ -695,13 +714,14 @@ def _gather(
     old, target = directory / strays[0], directory / name
     others = {filesystem_key(other) for other in given if other and other != name}
     sidecar = sidecar_for(old)
+    advice = f"Move it to {printable(name)} yourself and rerun."
     try:
-        if len(strays) > 1:
+        if _present(target):
+            reason, advice = _occupied(target, old.name, theirs=theirs)
+        elif len(strays) > 1:
             reason = "another note is the same book's"
         elif filesystem_key(old.name) in others:
             reason = "another book is given that name"
-        elif _present(target):
-            reason = f"{printable(name)} is already there"
         elif _present(sidecar):
             reason = f"{printable(sidecar.name)} beside it is still to be merged"
         else:
@@ -712,17 +732,52 @@ def _gather(
                 printable(name),
             )
             return True
+    except FileExistsError:
+        # Saved there since it was looked at: never advise a move onto it.
+        reason, advice = _occupied(target, old.name, theirs=theirs)
     except OSError as exc:
         reason = f"it could not be moved: {printable(str(exc))}"
     logger.error(
         "Left %s alone: it is the note of the book now given %s, under the "
-        "name it had before, and %s. Move it to %s yourself and rerun.",
+        "name it had before, and %s. %s",
         ", ".join(printable(stray) for stray in strays),
         printable(name),
         reason,
-        printable(name),
+        advice,
     )
     return False
+
+
+def _occupied(target: Path, old: str, *, theirs: bool) -> tuple[str, str]:
+    """
+    Say what is at the name a book's old note cannot be moved onto.
+
+    The advice was to move the old note there, and a plain ``mv`` onto a
+    file the reader wrote, or onto another book's note, replaces it. What is
+    there is named, and it is what the reader is asked to move aside.
+
+    :param target: The file at the name the book is given.
+    :param old: The book's note, under the name it had before.
+    :param theirs: Whether naming found the file another book's note.
+
+    :return: What is there, as the reason the note was left, and what to do.
+    """
+    here = printable(target.name)
+    kind = read_note(target).kind
+    if kind is Holding.UNREADABLE:
+        return f"{here} is there and could not be read", f"Move {here} aside and rerun."
+    if theirs and kind is not Holding.FOREIGN:
+        return (
+            f"{here} is another book's note",
+            "Rerun with --on-collision suffix to give the book a note of its "
+            f"own, or move {here} aside and rerun.",
+        )
+    if kind is Holding.FOREIGN:
+        what = f"{here} is a file ibook2epub did not write"
+    else:
+        what = f"{here} is a note not known to be this book's"
+    keep = f"merging into {printable(old)} whatever of it you want to keep"
+    return what, f"Move {here} aside, {keep}, and rerun."
 
 
 def _move(old: Path, target: Path) -> None:

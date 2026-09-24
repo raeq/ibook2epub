@@ -181,11 +181,11 @@ class Vault:
         if listed is None:
             return Held(Holding.ABSENT)
         if listed not in self._held:
-            self._held[listed] = _read(self.directory / listed)
+            self._held[listed] = read_note(self.directory / listed)
         return self._held[listed]
 
 
-def _read(target: Path) -> Held:
+def read_note(target: Path) -> Held:
     """Read one file of the vault for whose note it is."""
     if not readable(target):
         return Held(Holding.UNREADABLE)

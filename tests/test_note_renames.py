@@ -74,6 +74,10 @@ def _names(vault: Path) -> list[str]:
     return sorted(path.name for path in vault.iterdir())
 
 
+def _snapshot(vault: Path) -> dict[str, bytes]:
+    return {path.name: path.read_bytes() for path in vault.iterdir()}
+
+
 class TestABookWhoseNameChanged:
     @pytest.mark.parametrize("suffix", [False, True])
     def test_its_note_moves_to_the_new_name(self, vault: Path, suffix: bool):
@@ -140,9 +144,39 @@ class TestANoteThatCannotBeMoved:
             reported = self._reported(capsys)
             assert "Dune.md" in reported
             assert "name it had before" in reported
+            # A plain move onto that name would destroy the reader's page.
+            assert "Move it to" not in reported
+            assert f"{RENAMED}.md is a file ibook2epub did not write" in reported
+            assert f"Move {RENAMED}.md aside" in reported
 
         assert (vault / "Dune.md").read_bytes() == before
         assert (vault / f"{RENAMED}.md").read_text() == "# my own page\n"
+
+    def test_not_onto_another_books_note(
+        self, vault: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        app_logger.configure(verbosity=0)
+        other = {"title": "Other", "assetId": "O", "source": "Other.epub"}
+        theirs = notes.compose([{"id": "o", "text": "o", "book": other}])
+        (vault / f"{RENAMED}.md").write_text(theirs)
+        before = _snapshot(vault)
+        named = [
+            Assignment(Path("Dune.epub"), f"{RENAMED}.epub", f"{RENAMED}.epub"),
+            Assignment(Path("Other.epub"), "Other.epub", "other.epub"),
+        ]
+        assets: dict[str, str | None] = {"A": "Dune.epub", "O": "Other.epub"}
+        found = [_highlight("x"), _highlight("y")]
+
+        for _ in range(2):
+            code = notes.write_vault(
+                found, str(vault), named, copyable=(), assets=assets
+            )
+            assert code == exits.FAILED
+            reported = self._reported(capsys)
+            assert "Move it to" not in reported
+            assert f"{RENAMED}.md is another book's note" in reported
+            assert f"move {RENAMED}.md aside" in reported
+            assert _snapshot(vault) == before
 
     def test_not_while_a_sidecar_is_beside_it(
         self, vault: Path, capsys: pytest.CaptureFixture[str]
@@ -173,6 +207,30 @@ class TestANoteThatCannotBeMoved:
         reported = self._reported(capsys)
         assert "\x1b" not in reported
         assert "Dune\\x1b[31m.md" in reported
+
+    def test_nor_what_is_at_the_new_one(
+        self, vault: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        app_logger.configure(verbosity=0)
+        (vault / "New\x1b[32m.md").write_text("# my own page\n")
+
+        assert _write(vault, "New\x1b[32m", "x", "y") == exits.FAILED
+
+        reported = self._reported(capsys)
+        assert "\x1b" not in reported
+        assert "Move New\\x1b[32m.md aside, merging into Dune.md" in reported
+
+    def test_nor_onto_a_file_that_cannot_be_read(
+        self, vault: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        app_logger.configure(verbosity=0)
+        (vault / f"{RENAMED}.md").write_bytes(b"\xff\xfe not a note")
+
+        assert _write(vault, RENAMED, "x", "y") == exits.FAILED
+
+        reported = self._reported(capsys)
+        assert f"{RENAMED}.md is there and could not be read" in reported
+        assert f"Move {RENAMED}.md aside and rerun" in reported
 
     def test_nor_one_of_two(self, vault: Path, capsys: pytest.CaptureFixture[str]):
         app_logger.configure(verbosity=0)
@@ -361,11 +419,12 @@ class TestWhatIsLookedFor:
 
 
 def test_a_note_appearing_at_the_new_name_mid_move_is_not_replaced(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, capsys
 ):
     # The move checked the new name was free and then renamed, and rename
     # replaces whatever is there: a note the reader saved at that name in
     # between was lost. Linked, the new name is claimed only if still free.
+    app_logger.configure(verbosity=0)
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "Old.md").write_text("the book's note", encoding="utf-8")
@@ -377,5 +436,6 @@ def test_a_note_appearing_at_the_new_name_mid_move_is_not_replaced(
     )
 
     assert not moved
+    assert "Move New.md aside" in capsys.readouterr().err
     assert (vault / "New.md").read_text(encoding="utf-8") == "the reader's own"
     assert (vault / "Old.md").read_text(encoding="utf-8") == "the book's note"
