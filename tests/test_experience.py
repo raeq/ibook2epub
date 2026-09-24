@@ -582,3 +582,14 @@ class TestAReaderThatStopsEarly:
 
         # The reader stopping says nothing about the shelf.
         assert code == 7
+
+    def test_a_run_s_summary_ends_quietly(self, tmp_path, monkeypatch, closed_stdout):
+        # `ibook2epub | head`: the summary is the last thing printed.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        monkeypatch.setattr(sys, "stdout", closed_stdout)
+
+        code = run.main(["-s", str(library), "-o", str(tmp_path / "out"), "-m", "0"])
+        closed_stdout.flush()
+
+        assert code == 0

@@ -100,6 +100,22 @@ class TestParseArgs:
 
         assert code == exits.NO_SOURCE
 
+    @pytest.mark.parametrize("below", ["", "books"])
+    @pytest.mark.parametrize("dry_run", [[], ["-d"]])
+    def test_an_output_path_through_a_symlink_loop_cannot_be_created(
+        self, library, tmp_path, below, dry_run
+    ):
+        # The real run fails at mkdir with 5. The dry run judged the nearest
+        # part of the path that exists(), which a loop never does, so it looked
+        # past the loop to its writable parent and exited 0.
+        loop = tmp_path / "loop"
+        loop.symlink_to(loop)
+        output = loop / below if below else loop
+
+        code = run.main(["-s", str(library), "-o", str(output), "-q", *dry_run])
+
+        assert code == exits.NO_OUTPUT
+
     def test_negative_cap_is_rejected(self, library):
         with pytest.raises(SystemExit):
             cli.parse_args(["-s", str(library), "-m", "-1"])
