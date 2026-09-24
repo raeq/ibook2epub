@@ -10,6 +10,7 @@ output directory, which is why this tool needs no state file.
 from __future__ import annotations
 
 import json
+import unicodedata
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -697,11 +698,22 @@ def _decide_against_clash(
     """
     if clash is None:
         return None
-    if clash.identity != assignment.identity:
+    # Compared through NFC, like the lookup that found the file: HFS+ hands
+    # names back decomposed, and compared raw a book's own archive read back
+    # from there was another book's for ever -- a collision no --refresh or
+    # --force could get past. Canonically equivalent names render alike and
+    # are one file wherever the filesystem normalizes, so they cannot be two
+    # books.
+    if _nfc(clash.identity) != _nfc(assignment.identity):
         return Decision(
             package, COLLISION, reason=f"{clash.path.name} already holds this name"
         )
     return _decide_against_holder(package, clash.path, assignment.identifier)
+
+
+def _nfc(identity: str) -> str:
+    """Return *identity* composed, so a decomposed readback compares equal."""
+    return unicodedata.normalize("NFC", identity)
 
 
 def _decide_against_holder(

@@ -7,6 +7,7 @@
 
 import json
 import os
+import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -395,3 +396,46 @@ class TestANameOnTheShelfIsNotProofOfTheBook:
         listed = self._listed(library, output_dir, capsys)
 
         assert listed["Dune (1965).epub"]["status"] == planning.EXPORTED
+
+
+class TestADecomposedNameIsTheSameName:
+    """
+    An archive read back decomposed is still the book that wrote it.
+
+    HFS+ stores names in NFD, so a shelf that has lived there hands back
+    ``Cafe\\u0301.epub`` for the ``Caf\\u00e9.epub`` the planner computes.
+    The lookup is keyed through NFC and found the file; the identity comparison
+    behind it was not, and called the book's own archive another book's --
+    a collision it could never refresh or force its way out of.
+    """
+
+    @staticmethod
+    def _decomposed_shelf(tmp_path: Path, output_dir: Path) -> tuple[Path, Path]:
+        library = tmp_path / "lib"
+        package = make_package(library, unicodedata.normalize("NFC", "Café.epub"))
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        [written] = output_dir.glob("*.epub")
+        decomposed = output_dir / unicodedata.normalize("NFD", written.name)
+        written.rename(decomposed)
+        return package, decomposed
+
+    def test_the_books_own_archive_is_exported(self, tmp_path, output_dir):
+        package, decomposed = self._decomposed_shelf(tmp_path, output_dir)
+
+        [decision] = planning.plan_exports([package], output_dir, PassthroughNaming())
+
+        assert decision.status == planning.EXPORTED
+        assert decision.target == decomposed
+
+    def test_force_rewrites_the_books_own_archive(self, tmp_path, output_dir):
+        package, decomposed = self._decomposed_shelf(tmp_path, output_dir)
+
+        [decision] = planning.plan_exports(
+            [package],
+            output_dir,
+            PassthroughNaming(),
+            planning.PlanOptions(force=True),
+        )
+
+        assert decision.status == planning.PENDING
+        assert decision.target == decomposed
