@@ -1,7 +1,7 @@
 """
 Tests for the runtime schema check both exports share.
 
-``epubconvert.schema`` is the tool's own validator: not a JSON Schema library,
+``epubconvert.utils.schema`` is the tool's own validator: not a JSON Schema library,
 but the parts of a shipped schema a consumer will rely on, derived from the
 schema rather than restated beside it. Its whole purpose is to report what is
 wrong with a document, so every test here hands it something malformed and

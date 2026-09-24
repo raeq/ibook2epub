@@ -5,7 +5,7 @@ Everything between parsing arguments and returning an exit code: what a run
 announces before it starts, the read-only ``--list`` and ``--verify`` branches,
 and the export itself under the output directory lock.
 
-Held apart from :mod:`epubconvert.convert` so the exporter can be used as a
+Held apart from :mod:`epubconvert.run.convert` so the exporter can be used as a
 library without argparse in the call chain.
 """
 
@@ -533,7 +533,7 @@ def _ambiguous_names(assignments: Sequence[Assignment]) -> set[str]:
     An annotation records its book's package *name*, not its path, because the
     path runs through the reader's home directory. Two directories with the
     same name in different places are therefore indistinguishable to
-    :func:`~epubconvert.annotations.for_book`, and embedding by name gave each
+    :func:`~epubconvert.collect.annotations.for_book`, and embedding by name gave each
     of them the other's highlights. This is the only place that knows every
     path, so it is the place that settles it.
 

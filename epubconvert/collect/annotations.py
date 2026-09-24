@@ -573,7 +573,7 @@ def for_book(
     Two package directories with the same name in different subdirectories
     therefore look alike here. That ambiguity is settled by the caller, which
     is the only place that knows every package path; see
-    :func:`~epubconvert.run.ambiguous_names`.
+    :func:`~epubconvert.run.run._ambiguous_names`.
 
     :param source: The package directory name, e.g. ``Leviathan Wakes.epub``.
     :param index: What :func:`index_by_book` built.

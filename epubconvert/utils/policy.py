@@ -2,7 +2,7 @@
 What a naming policy provides, and what it produces.
 
 The vocabulary only. Every policy that implements this lives in
-:mod:`epubconvert.naming`, and everything that writes a file reads an
+:mod:`epubconvert.export.naming`, and everything that writes a file reads an
 :class:`Assignment`, but the two modules that *read* Apple's databases also
 have to state what a book will be called on the shelf. Held here, they can
 say so without importing the module that decides how a run is named, which

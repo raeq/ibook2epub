@@ -4,7 +4,7 @@ Take a reader's library out of Apple Books.
 Apple gives no way to get a catalogue out: what you own, who wrote it, when
 you got it, and the collections you sorted it onto. All of it sits in the
 ``BKLibrary`` database inside the Books container, and this module reads it.
-:mod:`epubconvert.catalogue` writes what comes back. The annotation export
+:mod:`epubconvert.export.catalogue` writes what comes back. The annotation export
 reads the same database to name the book an annotation belongs to, and does
 so through this module, which is why a book is described in one place.
 

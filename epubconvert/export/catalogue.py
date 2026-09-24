@@ -6,7 +6,7 @@ and every other importer is built for, so its header is Goodreads' header and
 its cells are spelled the way Goodreads spells them. The JSON is the canonical
 record the CSV is a view of, and carries what the CSV has no column for.
 
-Held apart from :mod:`epubconvert.library`, which reads the database: this
+Held apart from :mod:`epubconvert.collect.library`, which reads the database: this
 module decides nothing about what a book *is*, only how to write one down.
 """
 

@@ -1,7 +1,7 @@
 """
 Exporting a batch of packages: concurrency, bookkeeping and the output lock.
 
-:mod:`epubconvert.archive` writes one book and :mod:`epubconvert.planning`
+:mod:`epubconvert.export.archive` writes one book and :mod:`epubconvert.run.planning`
 decides which books to write. This module runs the writes -- a thread pool, a
 shared :class:`Report` the workers update under a lock, an advisory lock over
 the output directory, and the arithmetic that turns the result into a summary
@@ -88,7 +88,7 @@ class ExportOptions:
     validation: ValidationOptions | None = None
     plan: PlanOptions | None = None
     #: Annotations to store inside each book, keyed the way
-    #: :func:`~epubconvert.annotations.for_book` looks them up. Embedding
+    #: :func:`~epubconvert.collect.annotations.for_book` looks them up. Embedding
     #: during the one write the conversion already does; rebuilding the
     #: finished archive afterwards serialised every book twice.
     annotations: dict[str, list[dict[str, object]]] | None = None

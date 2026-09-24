@@ -4,7 +4,7 @@ Finding source packages, and writing one out as an epub archive.
 The two halves of the mechanical work: locating the ``*.epub/`` directories
 Apple leaves behind, and turning one of them into a zip archive the epub
 specification accepts. Neither half knows anything about runs, reports or
-concurrency -- :mod:`epubconvert.convert` supplies those.
+concurrency -- :mod:`epubconvert.run.convert` supplies those.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAG
 ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 #: Marks a half-written archive. The prefix matters as much as the suffix:
-#: the sweep in :func:`epubconvert.convert.sweep_partials` deletes what it
+#: the sweep in :func:`epubconvert.run.convert.sweep_partials` deletes what it
 #: matches, and a bare ``*.part`` glob also matches a browser's in-progress
 #: download or a user's own file sitting in the output directory.
 PARTIAL_PREFIX = ".ibook2epub-"
@@ -246,7 +246,7 @@ def collect_package_dirs(source_dir: Path) -> list[Path]:
             # A package is a directory the walk owns, never a redirection. A
             # symlink named *.epub was accepted here and its whole target
             # zipped into the shelf. The rule lives in one place; see
-            # :mod:`epubconvert.contained` for why it is not restated here.
+            # :mod:`epubconvert.utils.contained` for why it is not restated here.
             if not contains(Path(root), candidate):
                 # Only a *.epub link is a skipped book; anything else is a
                 # linked directory the walk simply does not follow, and
@@ -345,7 +345,7 @@ def _embed_annotations(
     Store this book's annotations inside the archive, if it has any.
 
     The W3C work puts an embedded annotation set at
-    :data:`~epubconvert.annotations.EMBEDDED_PATH` and requires no entry for it
+    :data:`~epubconvert.collect.annotations.EMBEDDED_PATH` and requires no entry for it
     in ``container.xml`` or the package manifest: the location is the contract.
 
     Written after the members rather than before, so it cannot displace the
@@ -666,7 +666,7 @@ def write_atomically(target: Path, text: str) -> None:
     neither the old file nor the new one. It is also not valid JSON, so every
     later run then refused to write to that path at all. The export is the
     artifact the merge machinery exists to protect; this is the same
-    temporary-then-replace path :func:`~epubconvert.archive.zip_package` uses.
+    temporary-then-replace path :func:`~epubconvert.export.archive.zip_package` uses.
 
     :param target: The file to replace.
     :param text: What it should hold.
