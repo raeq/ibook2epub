@@ -15,6 +15,43 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Under `--on-collision suffix`, a zipped book copied before a package of its
+  name was added is no longer copied again as "Book (2).epub" and listed as
+  an orphan: it keeps its file, and the package is written as "Book (2).epub".
+  A copy already on the shelf under a numbered name keeps that name too.
+
+- `--no-copy-through` only stops the copying. It no longer reports a package
+  as exported from a zipped book's file, lists copied books as orphans, counts
+  zipped books as "ignored (not books)", or leaves them out of a vault.
+
+- A book already on the shelf keeps its name when a book whose name differs
+  only in case is added: in skip mode the newcomer is the one collision, and
+  in suffix mode it becomes "Dune (2).epub". Every route (a run, `--list`,
+  `-ar`, vaults) names the library the same way.
+
+- A book renamed only by case finds its own archive under the old spelling
+  instead of colliding with it on every run, and `-ar` and the vault name its
+  note after the archive's actual spelling.
+
+- The shelf is read case-insensitively, PDFs included: a copy named
+  `Foo.EPUB`, or a PDF, is seen, so a package `Foo.epub` is not judged free to
+  write over it, a same-named PDF added later is reported or numbered, and
+  such files no book claims are listed as orphans.
+
+- Two different zipped books with the same name and size are told apart by
+  their identifiers; the second is no longer silently never copied.
+
+- `-ae` and `-ae -ar` warn when highlights belong to zipped books or PDFs
+  copied through unchanged, which cannot hold embedded highlights. They no
+  longer say the highlights of books held back by `-m` "reached no file";
+  those wait for the books to be converted.
+
+- A run over only PDFs and zipped books, or a `--match` selecting only those,
+  no longer says "No matching *.epub packages found".
+
+- `--list` and `--list --json` show each file copied through as `copy` or
+  `copied`, and say "N not copied (--no-copy-through)" under that flag.
+
 - A small epub whose members declare a small size but decompress to
   gigabytes (a "zip bomb") no longer makes the reader, `--verify` or an
   annotation refresh allocate gigabytes and crash with an uncaught
