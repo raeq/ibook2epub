@@ -16,6 +16,7 @@ module uncollected without it.
 # Several properties are of private helpers, which is where the rule lives.
 # pylint: disable=protected-access
 
+import json
 import re
 
 from hypothesis import given
@@ -25,10 +26,13 @@ from epubconvert.collect import annotations, validate
 from epubconvert.export import notes
 from epubconvert.export.naming import encode_name, split_extension, truncate_bytes
 from epubconvert.run.planning import marked, suffixed
-from epubconvert.utils.display import printable
+from epubconvert.utils.display import printable, printable_json
 
 #: Any code point Python can hold in a str, lone surrogates included.
 ANY_TEXT = st.text(alphabet=st.characters(codec=None, exclude_categories=()))
+
+#: The high half of the surrogate range.
+HIGH_SURROGATES = "".join(chr(code) for code in range(0xD800, 0xDC00))
 
 #: Nine ASCII digits: the body every ISBN-10 and 978 ISBN-13 shares.
 BODY = st.text(alphabet="0123456789", min_size=9, max_size=9)
@@ -256,4 +260,27 @@ def test_a_printable_name_carries_no_control_character_or_surrogate(name):
         for c in shown
     )
     # A surrogate that survives would make the log handler raise.
+    shown.encode("utf-8")
+
+
+# ------------------------------------------------------------- printable_json
+
+
+#: Any text a filename can carry: os.walk escapes an undecodable byte as a
+#: low surrogate only, so a high one never precedes a low one to form a pair.
+FILENAME_TEXT = st.text(
+    alphabet=st.characters(
+        codec=None, exclude_categories=(), exclude_characters=HIGH_SURROGATES
+    )
+)
+
+
+@given(FILENAME_TEXT)
+def test_printable_json_decodes_to_the_same_text_and_prints_nothing_raw(name):
+    shown = printable_json(json.dumps([name], indent=2, ensure_ascii=False))
+
+    assert json.loads(shown) == [name]
+    assert not any(
+        (ord(c) < 0x20 and c != "\n") or 0x7F <= ord(c) <= 0x9F for c in shown
+    )
     shown.encode("utf-8")

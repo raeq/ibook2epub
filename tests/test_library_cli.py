@@ -49,7 +49,7 @@ def _container(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str]:
         ),
     )
     monkeypatch.setattr(
-        "epubconvert.run.run.collect_annotations",
+        "epubconvert.run.annotating.collect_annotations",
         lambda policy=None: annotations.collect(tmp_path / "container", policy),
     )
     return ["-s", str(tmp_path / "no-such-library"), "-o", str(tmp_path / "out")]

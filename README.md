@@ -590,6 +590,12 @@ shelf. Numbering did: a book that sorted earlier pushed every later member of
 its group down by one, and the old files stayed behind under names nothing
 claimed any more.
 
+A book also takes its marked name when the file under its plain name holds a
+different book: an edition since deleted from the library, or one a `--match`
+left out of the run. That file is left alone, and reported as an orphan once
+no book in the library claims it. Under `--name-by author-title` the planner
+can tell, because it compares the file's `dc:identifier` with the book's.
+
 Two cases still fall back to ` (2)`, and both say so rather than pretending:
 
 - **No usable identifier.** Some books carry a placeholder where the identifier

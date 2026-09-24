@@ -28,7 +28,7 @@ from epubconvert.export.archive import (
     write_atomically,
     zip_package,
 )
-from epubconvert.run import convert, run
+from epubconvert.run import annotating, convert, run
 from tests.conftest import make_package, needs_permissions
 
 
@@ -361,8 +361,84 @@ class TestInterrupt:
         assert run.main(argv) == 0
         assert len(list(output_dir.glob("*.epub"))) == 2
 
+    @pytest.mark.parametrize("phase", ["find_orphans", "assign_names", "_plan_copies"])
+    def test_an_interrupt_before_the_lock_is_still_a_clean_stop(
+        self, library, output_dir, monkeypatch, capsys, phase
+    ):
+        # Naming and the orphan check run before the lock, and under a
+        # metadata policy they read every package document -- minutes on a
+        # cloud library. Only the work inside the lock was guarded, so a
+        # Ctrl-C here was a traceback with no summary and no 130.
+        def interrupted(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(run, phase, interrupted)
+        # Named per run rather than shared, so assign_names is reached.
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+
+        code = run.main(argv + (["--match", "Book"] if phase == "assign_names" else []))
+
+        assert code == 130
+        assert capsys.readouterr().out.startswith("Interrupted.")
+        assert list(output_dir.glob("*.epub")) == []
+
+    def test_an_interrupt_during_an_annotation_refresh_is_a_clean_stop(
+        self, library, output_dir, monkeypatch
+    ):
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+
+        def interrupted(*_args, **_kwargs):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(annotating, "collect_annotations", lambda **_kwargs: [])
+        monkeypatch.setattr(annotating, "annotations_for_book", interrupted)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
+
+        assert code == 130
+
 
 class TestDiskFloor:
+    def test_nothing_is_copied_onto_a_volume_below_the_floor(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # The floor guarded conversions only: PDFs and zipped epubs were copied
+        # onto an SD card already below it, the very volume it exists for.
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Manual.pdf").write_bytes(b"%PDF-1.4\n" + b"x" * 1000)
+        _zipped(library / "Zipped.epub")
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: 1)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--min-free", "100"]
+        )
+
+        assert list(output_dir.glob("*.pdf")) + list(output_dir.glob("*.epub")) == []
+        assert code == 1
+        summary = capsys.readouterr().out.strip().splitlines()[-1]
+        assert summary.startswith("Aborted: not enough free space")
+
+    def test_copies_stop_once_the_floor_is_crossed(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        for index in range(12):
+            (library / f"Manual {index:02}.pdf").write_bytes(b"%PDF-1.4\n")
+        # Room before the copies start; below the floor at the next sample.
+        readings = iter([10_000])
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: next(readings, 1))
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+            + ["--min-free", "100", "-w", "4"]
+        )
+
+        # Three before the second sample, and at most three already started.
+        assert len(list(output_dir.glob("*.pdf"))) <= 6
+        assert code == 1
+
     def test_a_later_book_is_stopped_when_space_runs_out_mid_run(
         self, tmp_path, output_dir, monkeypatch
     ):
@@ -397,6 +473,38 @@ class TestDiskFloor:
 
         assert code == 1
         assert len(list(output_dir.glob("*.epub"))) < 4
+
+    def test_once_the_floor_is_crossed_no_further_book_starts(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Only one book in `interval` measures. The floor used to stop only the
+        # book whose sample found it crossed: every unsampled book after it
+        # went on writing to a volume already below the floor. Twelve books on
+        # four workers wrote ten.
+        library = tmp_path / "lib"
+        for index in range(12):
+            make_package(library, f"Book {index:02}.epub")
+        # Room for the pre-flight check and the first sample; below the floor
+        # from the second sample on.
+        readings = iter([10_000, 10_000])
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: next(readings, 1))
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+            + ["--min-free", "100", "-w", "4"]
+        )
+
+        written = len(list(output_dir.glob("*.epub")))
+        summary = capsys.readouterr().out.strip().splitlines()[-1]
+        # The four books before the second sample, and at most the three that
+        # had already passed their own check when it found the floor crossed.
+        assert written <= 7
+        # Nothing it declined to start failed: a rerun on a volume with room
+        # converts them, which is what the summary has to say.
+        assert code == 1
+        assert summary.startswith("Aborted: not enough free space")
+        assert "failed" not in summary
+        assert f"{12 - written} not attempted: rerun to continue." in summary
 
     def test_export_stops_when_space_is_short(self, tmp_path, output_dir, monkeypatch):
         library = tmp_path / "lib"
@@ -866,3 +974,11 @@ class TestRewritingASidecarKeepsWhatTheUserSet:
 
         assert stat.S_IMODE(target.stat().st_mode) == 0o444
         assert target.read_text(encoding="utf-8") == "second"
+
+
+def _zipped(path: Path) -> None:
+    """Write an already-zipped epub, which a run copies rather than converts."""
+    with ZipFile(path, "w") as opened:
+        opened.writestr("mimetype", "application/epub+zip", compress_type=ZIP_STORED)
+        opened.writestr("META-INF/container.xml", "<container/>")
+        opened.writestr("OEBPS/text.xhtml", "<html/>")

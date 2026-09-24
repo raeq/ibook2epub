@@ -802,6 +802,7 @@ def validate_archive(path: Path) -> list[str]:
             names = archive.namelist()
             members = set(names)
             problems.extend(_check_mimetype(archive, names))
+            problems.extend(_check_unique(names))
 
             broken = archive.testzip()
             if broken is not None:
@@ -826,6 +827,30 @@ def validate_archive(path: Path) -> list[str]:
         return [f"unreadable archive: {exc}"]
 
     return problems
+
+
+def _check_unique(names: list[str]) -> list[str]:
+    """
+    Report every member name the archive holds more than once.
+
+    OCF requires unique names, and readers disagree about a duplicate: some
+    take the first local header, some the last directory entry, so one book
+    shows different content in each. zipfile merely warns when writing one,
+    and the validator passed it, so --verify called such an archive sound.
+
+    :param names: The archive's member names, in its own order.
+
+    :return: One problem per duplicated name.
+    """
+    seen: set[str] = set()
+    repeated: list[str] = []
+    for name in names:
+        if name in seen and name not in repeated:
+            repeated.append(name)
+        seen.add(name)
+    return [
+        f"member name appears more than once: {printable(name)}" for name in repeated
+    ]
 
 
 def _check_mimetype(archive: ZipFile, names: list[str]) -> list[str]:

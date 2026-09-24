@@ -116,6 +116,12 @@ class TestEveryCrossReferenceResolves:
         ]
         if any(_walk(cls, parts) for cls in classes):
             return True
+        # An instance attribute exists only once __init__ has run, so no
+        # class answers for it; its assignment in the class body does.
+        if len(parts) == 1 and any(
+            f"self.{parts[0]} =" in inspect.getsource(cls) for cls in classes
+        ):
+            return True
         return bool(_resolves_absolute(target))
 
     def test_every_role_in_the_package_names_something_real(self):

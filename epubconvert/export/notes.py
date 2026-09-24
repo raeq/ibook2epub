@@ -30,13 +30,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from ..collect.annotations import for_book, index_by_book
+from ..collect.annotations import for_book
 from ..collect.validate import isbn13_of
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import collapse, printable
 from ..utils.policy import Assignment
-from .archive import write_atomically
+from .archive import index_by_package, write_atomically
 from .naming import (
     MAX_FILENAME_BYTES,
     disambiguator,
@@ -526,7 +526,7 @@ def write_vault(
         logger.critical("Could not create %s: %s", printable(str(directory)), exc)
         return exits.NO_OUTPUT
 
-    index = index_by_book(found)
+    index = index_by_package(found, [item.package for item in named])
     tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
     for item in named:
         if not item.filename:
@@ -544,8 +544,8 @@ def write_vault(
         # Highlights were read and not one reached a note. Every book they
         # belong to is absent from the library this run walked, so nothing
         # was matched -- which said "Wrote 0 note(s)" and exited 0. The same
-        # shape as run._warn_about_stranded, and for the same reason: silence
-        # here reads as "you had nothing to export".
+        # shape as annotating._warn_about_stranded, and for the same reason:
+        # silence here reads as "you had nothing to export".
         #
         # Two counts that are true whatever narrowed the run, and no third
         # invented from them: under --match the other books were excluded on
@@ -598,7 +598,7 @@ def _naming(names: list[str]) -> str:
 
     Named rather than counted, because a reader with several edited notes in a
     large vault would otherwise have to glob for them. The same shape
-    ``run._warn_about_stranded`` uses.
+    ``annotating._warn_about_stranded`` uses.
 
     :param names: The files this outcome applies to.
 

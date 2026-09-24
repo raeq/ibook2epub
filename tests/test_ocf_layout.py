@@ -12,6 +12,7 @@ the writer chose, so it says nothing about what comes first in the file.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import warnings
 from pathlib import Path
 from zipfile import ZIP_STORED, ZipFile, ZipInfo
 
@@ -89,3 +90,21 @@ class TestMimetypeIsPhysicallyFirst:
         with ZipFile(target) as archive:
             assert archive.getinfo("mimetype").header_offset == 0
         assert validate.validate_archive(target) == []
+
+
+class TestEveryMemberNameIsUnique:
+    def test_two_members_with_one_name_are_reported(self, tmp_path: Path):
+        # OCF requires unique names, and readers disagree about a duplicate:
+        # some take the first local header, some the last directory entry. The
+        # validator passed such an archive, and --verify called it sound.
+        path = write_epub(tmp_path / "Doubled.epub")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)  # "Duplicate name"
+            with ZipFile(path, "a") as archive:
+                archive.writestr("OEBPS/text/chapter1.xhtml", "<html/>")
+
+        problems = validate.validate_archive(path)
+
+        assert problems == [
+            "member name appears more than once: OEBPS/text/chapter1.xhtml"
+        ]

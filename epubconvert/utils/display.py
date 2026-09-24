@@ -11,6 +11,11 @@ and neither should have to import the other to do it.
 
 from __future__ import annotations
 
+import re
+
+#: DEL, C1 and lone surrogates: what :func:`_is_control` flags besides C0.
+_UNPRINTABLE_ABOVE_C0 = re.compile("[\x7f-\x9f\ud800-\udfff]")
+
 
 def printable(name: str) -> str:
     """
@@ -28,6 +33,29 @@ def printable(name: str) -> str:
     """
     return "".join(
         char if not _is_control(char) else f"\\x{ord(char):02x}" for char in name
+    )
+
+
+def printable_json(document: str) -> str:
+    """
+    Render a JSON document safe to print, without changing what it decodes to.
+
+    ``json.dumps`` escapes C0 but, told to keep titles readable with
+    ``ensure_ascii=False``, writes DEL, C1 and lone surrogates through as they
+    are: a C1 ``CSI`` then steers the terminal, and a surrogate -- which
+    ``os.walk`` returns for an undecodable filename -- makes printing the
+    document raise UnicodeEncodeError. Each is written as the ``\\uXXXX``
+    escape JSON already has for it instead, so a reader decodes the very same
+    name and can still open the file. A surrogate that ``os.walk`` hands back
+    is always a low one, so no two escaped here recombine into a pair.
+
+    :param document: JSON text, as ``json.dumps`` produced it.
+
+    :return: The same document with those characters escaped.
+    """
+    # Everything _is_control flags above C0, which json.dumps has escaped.
+    return _UNPRINTABLE_ABOVE_C0.sub(
+        lambda found: f"\\u{ord(found.group()):04x}", document
     )
 
 

@@ -15,6 +15,7 @@ epub stays byte-identical and a PDF stays a PDF.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
+import errno
 import threading
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ from zipfile import ZipFile
 
 from epubconvert.collect import source as source_module
 from epubconvert.export import archive, naming
-from epubconvert.run import convert, planning, run
+from epubconvert.run import convert, copying, planning, run
 from tests.conftest import corrupt_member, damaged_streams, make_package, recompress
 
 
@@ -395,13 +396,59 @@ class TestAnInterruptedCopyStillCounts:
                 raise KeyboardInterrupt
             return real(source, target)
 
-        monkeypatch.setattr(convert, "copy_through", stop_at_the_third)
+        monkeypatch.setattr(copying, "copy_through", stop_at_the_third)
 
         code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
 
         assert code == 130
         assert len(list(output_dir.glob("*.epub"))) == 2
         assert "2 copied" in capsys.readouterr().out
+
+
+class TestAFailedCopyIsCounted:
+    """A book that did not reach the shelf is a failure, whichever way it went."""
+
+    def test_a_copy_that_fails_fails_the_run(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # The error was logged and counted nowhere: the run exited 0 with a
+        # clean summary and the PDF missing from the shelf, and a scheduled
+        # run had no way to know.
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Manual.pdf").write_bytes(b"%PDF-1.4\n")
+
+        def full(_source, _target):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(copying, "copy_through", full)
+
+        code = run.main(["-s", str(library), "-o", str(output_dir), "-m", "0"])
+
+        assert code == 1
+        assert "failed 1" in capsys.readouterr().out.strip().splitlines()[-1]
+
+    def test_a_failed_copy_is_not_blamed_on_a_held_back_book(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # The advice after "remaining" is about books still to convert. A
+        # failed copy is not one of them, so it must not turn a book the cap
+        # held back into one that "failed: see the errors above".
+        library = tmp_path / "lib"
+        for index in range(3):
+            make_package(library, f"Book {index}.epub")
+        (library / "Manual.pdf").write_bytes(b"%PDF-1.4\n")
+
+        def full(_source, _target):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        monkeypatch.setattr(copying, "copy_through", full)
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "1"])
+
+        summary = capsys.readouterr().out.strip().splitlines()[-1]
+        assert "2 remaining. 2 held back by --max-export-files" in summary
+        assert "failed: see the errors above" not in summary
 
 
 class TestCopiesRunConcurrently:
@@ -425,7 +472,7 @@ class TestCopiesRunConcurrently:
             both_started.wait()
             return real(source, target)
 
-        monkeypatch.setattr(convert, "copy_through", meet_then_copy)
+        monkeypatch.setattr(copying, "copy_through", meet_then_copy)
 
         code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "2", "-q"]
@@ -461,7 +508,7 @@ class TestCopiesRunConcurrently:
                 with guard:
                     running["now"] -= 1
 
-        monkeypatch.setattr(convert, "copy_through", counted)
+        monkeypatch.setattr(copying, "copy_through", counted)
 
         code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "1", "-q"]
@@ -497,7 +544,7 @@ class TestSameNamedCopiesStayDeterministic:
                 time.sleep(0.2)
             return real(source, target)
 
-        monkeypatch.setattr(convert, "copy_through", slow_first)
+        monkeypatch.setattr(copying, "copy_through", slow_first)
 
         code = run.main(
             ["-s", str(library), "-o", str(output_dir), "-m", "0", "-w", "2", "-q"]
@@ -666,10 +713,10 @@ class TestSkipIncompleteCoversCopies:
         monkeypatch.setattr(planning, "ZipFile", recording)
         report = convert.Report()
 
-        plan = convert.plan_copies(
+        plan = copying.plan_copies(
             [evicted], naming.build_policy(None, "author-title"), skip_incomplete=True
         )
-        convert.copy_through_all(plan, output_dir, report)
+        copying.copy_through_all(plan, output_dir, report)
 
         assert opened == []
         assert report.incomplete == 1

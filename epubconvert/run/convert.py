@@ -29,11 +29,10 @@ from random import shuffle
 from typing import TextIO
 
 from ..collect.annotations import for_book as annotations_for_book
-from ..collect.source import is_dataless
 from ..collect.validate import ValidationOptions
-from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, copy_through, zip_package
+from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from ..export.inspect_output import extract_cover, free_megabytes
-from ..export.naming import PassthroughNaming, filesystem_key
+from ..export.naming import PassthroughNaming, encode_name
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
@@ -42,8 +41,6 @@ from .planning import (
     PENDING,
     Decision,
     PlanOptions,
-    copy_name_opens_file,
-    copy_target_name,
     plan_exports,
     record_decisions,
 )
@@ -101,7 +98,30 @@ class OutputLockedError(RuntimeError):
     Two causes: another run already holds the lock, or the lock file itself
     could not be opened -- a read-only output directory gets past ``main``'s
     ``mkdir(exist_ok=True)`` and fails here.
+
+    Which one is carried as :attr:`contended` rather than left in the prose.
+    ``main`` used to look for "already using" in the message, which quotes the
+    output path, so a directory named for the phrase turned an unopenable lock
+    file into a held lock and "fix the path" into "retry later".
     """
+
+    def __init__(self, message: str, *, contended: bool) -> None:
+        super().__init__(message)
+        #: True when another run holds the lock; False when this one could not
+        #: open the lock file at all.
+        self.contended = contended
+
+    @property
+    def exit_code(self) -> int:
+        """
+        What a run ends with when this is why it could not proceed.
+
+        Carried by the error, as
+        :class:`~epubconvert.collect.coredata.ContainerUnavailableError`
+        carries its own, so every route that takes the lock maps it the same
+        way.
+        """
+        return exits.LOCKED if self.contended else exits.NO_OUTPUT
 
 
 @dataclass
@@ -141,9 +161,13 @@ class _Progress:  # pylint: disable=too-few-public-methods
         self.done = 0
         self.checks = 0
         # Never wider than the pool. Sampling one book in 32 while 64 run at
-        # once means up to 31 further books are written after the floor has
-        # already been crossed.
+        # once let up to 31 further books start after the floor had been
+        # crossed and before any sample noticed.
         self.interval = max(1, min(interval, self.ROOM_INTERVAL))
+        #: Sticky once any sample finds the volume below the floor. Without
+        #: it only the sampled book stopped, and every unsampled book after it
+        #: went on writing: twelve books on four workers wrote ten.
+        self.floor_crossed = False
 
     def should_check_room(self) -> bool:
         """
@@ -155,6 +179,30 @@ class _Progress:  # pylint: disable=too-few-public-methods
         """
         self.checks += 1
         return (self.checks - 1) % self.interval == 0
+
+    def has_room(self, output_dir: Path, min_free_mb: int) -> bool:
+        """
+        Report whether one more write may start, measuring when it is due.
+
+        Once a sample finds the floor crossed, every later caller is refused
+        without measuring: the volume does not get emptier by being asked
+        again, and asking only every ``interval`` writes is what let the
+        writes in between carry on.
+
+        :param output_dir: Directory being written to.
+        :param min_free_mb: Floor in MiB; 0 disables the check.
+
+        :return: True when the write may go ahead.
+        """
+        with _REPORT_LOCK:
+            if self.floor_crossed:
+                return False
+            measure = self.should_check_room()
+        if not measure or _has_room(output_dir, min_free_mb):
+            return True
+        with _REPORT_LOCK:
+            self.floor_crossed = True
+        return False
 
     def tick(self) -> str:
         """Advance the counter and render it as ``[12/240]``."""
@@ -184,14 +232,13 @@ def _zip_and_record(
     :param progress: Shared counter for the ``[n/total]`` prefix.
     :param run: Options for this run.
     """
-    with _REPORT_LOCK:
-        measure = progress.should_check_room()
-    if measure and not _has_room(target.parent, run.min_free_mb):
+    if not progress.has_room(target.parent, run.min_free_mb):
+        # Not started, so not failed: counted the way the pre-flight check
+        # counts a full volume, and the summary sends it back to a rerun.
         with _REPORT_LOCK:
-            report.failed += 1
-            marker = progress.tick()
-        logger.error(
-            "%s Skipped %s: not enough free space", marker, printable(package.name)
+            report.aborted = True
+        logger.info(
+            "Not started, the volume is below --min-free: %s", printable(package.name)
         )
         return
 
@@ -391,189 +438,6 @@ async def export_planned(
     return report
 
 
-def _copy_and_record(group: Sequence[tuple[Path, Path]], report: Report) -> None:
-    """
-    Copy files that could share a name, in order, recording each as it lands.
-
-    Runs in the worker thread, for the same reason :func:`_zip_and_record`
-    does: a copy counted anywhere else can be on disk and missing from the
-    summary after a Ctrl-C.
-
-    :param group: Sources and their targets, whose names a filesystem may
-        treat as one.
-    :param report: Report to record each copy in.
-    """
-    for source, target in group:
-        if target.exists():
-            continue
-        try:
-            copy_through(source, target)
-        except OSError as exc:
-            logger.error("Could not copy %s: %s", printable(source.name), exc)
-            continue
-        with _REPORT_LOCK:
-            report.copied += 1
-        logger.info("Copied %s", printable(source.name))
-
-
-@dataclass(frozen=True)
-class CopyPlan:
-    """
-    Every file to take along, with the name it takes on the shelf.
-
-    Named once per run and handed to both the orphan check and the copy. Each
-    used to name them for itself, and under a metadata policy naming a zipped
-    book opens it: the orphan check did so in a loop, one download at a time,
-    before the run started, and the copy then opened every one again (#14).
-    """
-
-    #: Each file with its name, or None when it was left unnamed.
-    named: tuple[tuple[Path, str | None], ...] = ()
-    #: Files ``--skip-incomplete`` leaves where they are.
-    evicted: frozenset[Path] = frozenset()
-
-    @property
-    def claimed(self) -> list[str]:
-        """The names these files hold on the shelf, for the orphan check."""
-        return [name for _source, name in self.named if name is not None]
-
-    @property
-    def unnamed(self) -> int:
-        """How many files could only have been named by downloading them."""
-        return sum(1 for _source, name in self.named if name is None)
-
-
-def plan_copies(
-    copyable: Sequence[Path],
-    policy: NamingPolicy,
-    *,
-    max_workers: int | None = None,
-    skip_incomplete: bool = False,
-) -> CopyPlan:
-    """
-    Name each file for the shelf, in a pool, without opening an evicted one.
-
-    Naming an already-zipped epub under a metadata policy opens it, which is a
-    download of its own, so it runs in a pool as the copy does. Under
-    ``--skip-incomplete`` an evicted file that could only be named that way
-    gets no name: opening it is the download the flag exists to avoid. A stat
-    tells which files are evicted, and a stat downloads nothing.
-
-    :param copyable: Files found beside the packages, sorted.
-    :param policy: The naming policy this run is using.
-    :param max_workers: Size of the thread pool, as for :func:`export_planned`.
-    :param skip_incomplete: Whether evicted files are to be left alone.
-
-    :return: The plan.
-    """
-    if not copyable:
-        return CopyPlan()
-    evicted = (
-        frozenset(source for source in copyable if is_dataless(source))
-        if skip_incomplete
-        else frozenset()
-    )
-
-    def name(source: Path) -> str | None:
-        if source in evicted and copy_name_opens_file(source, policy):
-            return None
-        return copy_target_name(source, policy)
-
-    pool = ThreadPoolExecutor(
-        max_workers=default_workers(max_workers), thread_name_prefix="name"
-    )
-    try:
-        names = list(pool.map(name, copyable))
-    finally:
-        pool.shutdown(wait=True, cancel_futures=True)
-    return CopyPlan(tuple(zip(copyable, names, strict=True)), evicted)
-
-
-def _group_copies(
-    plan: CopyPlan, output_dir: Path, report: Report
-) -> list[list[tuple[Path, Path]]]:
-    """
-    Group the copies that could land on one name, and set evicted files aside.
-
-    An evicted file is settled against the shelf first, as a package is: one
-    whose copy is already there is finished work, not a skipped book. Without
-    that, every rerun after iCloud evicts the source again would report the
-    whole PDF shelf as not downloaded. One left unnamed cannot be looked for,
-    so it counts as not downloaded.
-
-    :param plan: The files and their names, from :func:`plan_copies`.
-    :param output_dir: Directory to copy into.
-    :param report: Counted into for each evicted file not on the shelf.
-
-    :return: Sources and targets, grouped by the name a filesystem sees.
-    """
-    groups: dict[str, list[tuple[Path, Path]]] = {}
-    not_downloaded: list[Path] = []
-    for source, name in plan.named:
-        if source in plan.evicted or name is None:
-            if name is None or not (output_dir / name).exists():
-                not_downloaded.append(source)
-            continue
-        groups.setdefault(filesystem_key(name), []).append((source, output_dir / name))
-    for source in not_downloaded:
-        logger.warning(
-            "Skipped, not downloaded from iCloud: %s", printable(source.name)
-        )
-    with _REPORT_LOCK:
-        report.incomplete += len(not_downloaded)
-    return list(groups.values())
-
-
-def copy_through_all(
-    plan: CopyPlan,
-    output_dir: Path,
-    report: Report,
-    *,
-    max_workers: int | None = None,
-) -> None:
-    """
-    Put already-valid books on the shelf without converting them.
-
-    Rerun-safe on the same terms as everything else: a file already there is
-    left alone rather than rewritten, so a second run does nothing and says
-    nothing.
-
-    Concurrent, because the work is downloading rather than copying. Reading a
-    file iCloud has evicted makes macOS fetch it, and this used to be a loop
-    run before the pool existed: a run with ``-w 64`` was seen pulling PDFs one
-    at a time at about 4.5 MB/s while every worker sat idle (#10).
-
-    Files that could land on one name are copied by one worker, in sorted
-    order, so the first still wins and the rest find its file and skip -- what
-    the loop did. Which of two same-named PDFs reaches the shelf therefore does
-    not depend on which download finishes first. Names are compared the way
-    APFS compares them, since that is where they collide.
-
-    :param plan: The files and the names they take, from :func:`plan_copies`.
-    :param output_dir: Directory to copy into.
-    :param report: Counted into as each file lands, rather than totalled and
-        returned at the end. A Ctrl-C part-way through left the summary saying
-        nothing was copied while the files were already on disk.
-    :param max_workers: Size of the thread pool, as for :func:`export_planned`.
-    """
-    groups = _group_copies(plan, output_dir, report)
-    if not groups:
-        return
-    pool = ThreadPoolExecutor(
-        max_workers=default_workers(max_workers), thread_name_prefix="copy"
-    )
-    try:
-        futures = [pool.submit(_copy_and_record, group, report) for group in groups]
-        # result() re-raises in this thread whatever escaped a worker, so a
-        # surprise still stops the run as it did when the loop ran here.
-        for future in futures:
-            future.result()
-    finally:
-        # As for the exports: copies not yet started are dropped, and the ones
-        # in flight finish, replace atomically and record themselves.
-        pool.shutdown(wait=True, cancel_futures=True)
-
-
 def filter_packages(packages: Sequence[Path], pattern: str | None) -> list[Path]:
     """
     Narrow the package list to those matching a user pattern.
@@ -652,9 +516,10 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
             handle.seek(0)
     except OSError as exc:
         # A read-only output directory got past main's mkdir(exist_ok=True) and
-        # died here with a raw traceback. main already turns this into a clean
-        # exit 5.
-        raise OutputLockedError(f"cannot lock {output_dir}: {exc}") from exc
+        # died here with a raw traceback. main turns this into a clean exit 5.
+        raise OutputLockedError(
+            f"cannot lock {output_dir}: {exc}", contended=False
+        ) from exc
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -675,7 +540,8 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
                 return
             raise OutputLockedError(
                 f"another ibook2epub run is already using {output_dir} "
-                f"({_read_lock_holder(handle)})"
+                f"({_read_lock_holder(handle)})",
+                contended=True,
             ) from exc
 
         # The PID is recorded for diagnostics only. It is deliberately NOT
@@ -683,16 +549,38 @@ def output_lock(output_dir: Path) -> Iterator[bool]:
         # kernel when the holder dies, even on SIGKILL, so a leftover lock
         # file is inert. Checking liveness by PID would add a PID-reuse race
         # to solve a problem that does not exist.
-        handle.seek(0)
-        handle.truncate()
-        handle.write(f"pid={os.getpid()} host={socket.gethostname()}\n")
-        handle.flush()
+        _record_holder(handle, path)
         try:
             yield True
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
     finally:
         handle.close()
+
+
+def _record_holder(handle: TextIO, path: Path) -> None:
+    """
+    Note this run's pid and host in the lock file, for a refused run to quote.
+
+    Diagnostic, so a failure is logged and passed over. It was unguarded: on a
+    full volume the write raised ENOSPC, the buffered handle raised it again as
+    it closed, and the run died with two tracebacks and exit 1 before
+    ``--min-free`` could stop it cleanly. Written to the descriptor rather than
+    through the handle, so nothing is left buffered for ``close()`` to retry.
+
+    :param handle: The open, locked lock file.
+    :param path: Its path, for the log.
+    """
+    # Through the surrogate-safe encoder: a host name is decoded from bytes
+    # the operating system chose, and a plain encode() raises on an escape.
+    line = encode_name(f"pid={os.getpid()} host={socket.gethostname()}\n")
+    try:
+        descriptor = handle.fileno()
+        os.ftruncate(descriptor, 0)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        os.write(descriptor, line)
+    except OSError as exc:
+        logger.debug("Could not record the lock holder in %s: %s", path, exc)
 
 
 def _read_lock_holder(handle: TextIO) -> str:
@@ -823,7 +711,9 @@ def format_summary(
         summary += _clauses(report, failures=False)
         summary += ")."
         if remaining:
-            summary += f" {remaining} remaining."
+            # The same advice a real run gives. A bare count left out that
+            # the cap was what held these back.
+            summary += _remaining_hint(report, remaining)
         return summary
 
     summary = (
@@ -853,13 +743,18 @@ def _remaining_hint(report: Report, remaining: int) -> str:
     fails the same book again (#15). The count itself is unchanged; only the
     advice is split by cause.
 
+    The held-back count is taken first because it is exact: the cap counts it
+    where it is applied. ``report.failed`` also counts failed copies, which
+    are not among the books remaining, and taken first it turned a book the
+    cap held back into one that had failed.
+
     :param report: The run's report.
     :param remaining: Pending books this run did not export.
 
     :return: The sentences to append, each prefixed with a space.
     """
-    failed = min(report.failed, remaining)
-    held = min(report.held_back, remaining - failed)
+    held = min(report.held_back, remaining)
+    failed = min(report.failed, remaining - held)
     unattempted = remaining - failed - held
     parts = [f" {remaining} remaining."]
     if held:

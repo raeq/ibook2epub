@@ -28,7 +28,7 @@ import pytest
 
 from epubconvert.collect import annotations
 from epubconvert.run.run import main
-from tests.conftest import make_metadata_package
+from tests.conftest import make_metadata_package, make_package
 from tests.test_annotations import highlight, library_row, make_databases
 
 
@@ -66,7 +66,7 @@ class TestAnnotationsAreTheReadersOwnWork:
             books=[library_row(path=str(package), title="Locked Book")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -168,7 +168,7 @@ class TestHighlightsThatReachedNoFileAreReported:
             ],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -259,7 +259,7 @@ class TestHighlightsThatReachedNoFileAreReported:
             ],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
 
@@ -279,3 +279,73 @@ class TestHighlightsThatReachedNoFileAreReported:
         main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-ae", "-d"])
 
         assert "reached no file" not in capsys.readouterr().err
+
+
+class TestAHighlightTwoBooksCouldOwnGoesToNeither:
+    """
+    An annotation names its book by package directory name, not by path, so
+    two packages with one name in different folders look alike to it. Only
+    the -ar refresh used to notice: the conversion, a vault and the stranded
+    warning each gave the highlight to both books, one of which never had it.
+    """
+
+    @pytest.fixture(name="twins")
+    def _twins(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        library = tmp_path / "lib"
+        make_package(library / "one", "Book.epub")
+        make_package(library / "two", "Book.epub")
+        mine = {
+            "id": "U1",
+            "book": {"title": "Book", "source": "Book.epub"},
+            "text": "which of the two?",
+            "created": "2018-12-25T22:44:28Z",
+        }
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda **_kwargs: [mine],
+        )
+        return library
+
+    @staticmethod
+    def _embedded(output_dir: Path) -> list[str]:
+        carrying = []
+        for book in sorted(output_dir.glob("*.epub")):
+            with ZipFile(book) as opened:
+                if annotations.EMBEDDED_PATH in opened.namelist():
+                    carrying.append(book.name)
+        return carrying
+
+    def test_the_conversion_embeds_it_in_neither(self, twins, output_dir, capsys):
+        argv = ["-s", str(twins), "-o", str(output_dir), "-m", "0", "-ae"]
+
+        main([*argv, "--on-collision", "suffix"])
+
+        assert len(list(output_dir.glob("*.epub"))) == 2
+        assert self._embedded(output_dir) == []
+        assert "more than one package" in capsys.readouterr().err
+
+    def test_a_refresh_embeds_it_in_neither(self, twins, output_dir):
+        argv = ["-s", str(twins), "-o", str(output_dir), "--on-collision", "suffix"]
+        main([*argv, "-m", "0", "-q"])
+
+        main([*argv, "-ae", "-ar", "-q"])
+
+        assert self._embedded(output_dir) == []
+
+    def test_a_vault_gives_it_to_neither(self, twins, tmp_path):
+        vault = tmp_path / "vault"
+        argv = ["-s", str(twins), "--on-collision", "suffix", "-q"]
+
+        main([*argv, "-ao", str(vault), "--annotations-format", "markdown"])
+
+        assert list(vault.glob("*.md")) == []
+
+    def test_it_is_not_reported_twice_as_stranded(self, twins, output_dir, capsys):
+        # Both books collide and are skipped, so neither is on the shelf. The
+        # highlight was counted once per book: "2 annotation(s) from 2
+        # book(s)", from one highlight that belongs to at most one of them.
+        main(["-s", str(twins), "-o", str(output_dir), "-m", "0", "-ae"])
+
+        warned = capsys.readouterr().err
+        assert "reached no file" not in warned
+        assert "more than one package" in warned

@@ -562,7 +562,7 @@ class TestNothingAlreadyWrittenIsDestroyed:
             books=[library_row(path="/x/Leviathan Wakes.epub")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -704,7 +704,7 @@ class TestADryRunWritesNothing:
             books=[library_row(path="/x/Leviathan Wakes.epub")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         target = output_dir / "Leviathan Wakes.epub"
@@ -724,7 +724,7 @@ class TestADryRunWritesNothing:
         make_metadata_package(library, "One.epub", title="One")
         make_databases(tmp_path / "container")
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         target = tmp_path / "export.json"
@@ -746,7 +746,7 @@ class TestExitCodesMeanOneThing:
         library = tmp_path / "lib"
         make_metadata_package(library, "One.epub", title="One")
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             _unreadable,
         )
 
@@ -759,7 +759,7 @@ class TestExitCodesMeanOneThing:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             _unreadable,
         )
 
@@ -774,7 +774,7 @@ class TestExitCodesMeanOneThing:
         make_metadata_package(library, "One.epub", title="One")
         make_databases(tmp_path / "container")
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
 
@@ -795,7 +795,7 @@ class TestGettingHighlightsOutWithoutTheBooks:
         # another disk could not get their highlights out at all.
         make_databases(tmp_path / "container")
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         target = tmp_path / "out.json"

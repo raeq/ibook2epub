@@ -17,9 +17,10 @@ the gap was that it would not tell you either.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import json
+from pathlib import Path
 
 from epubconvert.export import archive
-from epubconvert.export.naming import PassthroughNaming, StripNaming
+from epubconvert.export.naming import MetadataNaming, PassthroughNaming, StripNaming
 from epubconvert.run import planning, run
 from tests.conftest import make_metadata_package, make_package, remove_tree
 
@@ -201,6 +202,51 @@ class TestMatchDoesNotInventOrphans:
         assert "orphan" not in capsys.readouterr().out
 
 
+class TestMatchNamesAgainstTheWholeLibrary:
+    """A book's name does not depend on which other books --match selected."""
+
+    ARGS = ["--name-by", "author-title", "--on-collision", "suffix", "-q"]
+
+    def _library(self, tmp_path: Path) -> Path:
+        library = tmp_path / "lib"
+        for folder, identifier in (
+            ("Dune (1965)", "urn:uuid:a"),
+            ("Dune (Ace)", "urn:uuid:b"),
+        ):
+            make_metadata_package(
+                library,
+                f"{folder}.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=identifier,
+            )
+        return library
+
+    def test_a_matched_book_keeps_the_name_a_full_run_gave_it(
+        self, tmp_path, output_dir, capsys
+    ):
+        # Regression: names were assigned over the matched subset alone, where
+        # one edition is not crowded and so gets no marker. A book the full
+        # run had already exported as "Dune [digest]" was then pending under
+        # the plain name, written a second time, and the duplicate reported
+        # as an orphan by every later full run.
+        library = self._library(tmp_path)
+        base = ["-s", str(library), "-o", str(output_dir), "-m", "0", *self.ARGS]
+        assert run.main(base) == 0
+        exported = sorted(path.name for path in output_dir.glob("*.epub"))
+        capsys.readouterr()
+
+        assert run.main([*base, "--match", "1965"]) == 0
+
+        assert sorted(path.name for path in output_dir.glob("*.epub")) == exported
+        capsys.readouterr()
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "--list", "--json", *self.ARGS]
+        )
+        listed = json.loads(capsys.readouterr().out)
+        assert sorted(entry["status"] for entry in listed) == ["exported", "exported"]
+
+
 class TestTheListingNamesTheFileItWillWrite:
     """
     The listing printed the source package name, so `--list` under a policy
@@ -306,3 +352,52 @@ class TestTheListingNamesTheFileItWillWrite:
         row = json.loads(capsys.readouterr().out)[0]
         assert row["name"] == "Earthsea.epub"
         assert row["target"].endswith("Le Guin, Ursula K. - A Wizard of Earthsea.epub")
+
+
+class TestAFileHoldingAnotherBookIsNotClaimed:
+    """
+    A file is claimed by the book the planner would call it, not by its name.
+
+    The planner reports a book whose name is held by another book's archive
+    as a collision. The orphan check still counted that file as the book's,
+    so the archive of a book deleted from the library -- likely its last
+    copy -- was reported as nothing at all.
+    """
+
+    def test_a_deleted_editions_archive_is_an_orphan(self, tmp_path, output_dir):
+        library = tmp_path / "lib"
+        for number, folder in enumerate(("Dune (1965)", "Dune (Ace)"), 1):
+            make_metadata_package(
+                library,
+                f"{folder}.epub",
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=f"urn:uuid:{number}",
+            )
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+            + ["--name-by", "author-title"]
+        )
+        remove_tree(library / "Dune (1965).epub")
+
+        orphans = planning.find_orphans(
+            output_dir, MetadataNaming(), archive.collect_package_dirs(library)
+        )
+
+        assert [path.name for path in orphans] == ["Frank Herbert - Dune.epub"]
+
+    def test_a_file_of_another_identity_is_an_orphan(self, tmp_path, output_dir):
+        # One file to a case-insensitive filesystem, two books to passthrough:
+        # the planner calls BOOK.epub a collision with Book.epub.
+        library = tmp_path / "lib"
+        make_package(library, "Book.epub")
+        run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        remove_tree(library / "Book.epub")
+        make_package(library, "BOOK.epub")
+        packages = archive.collect_package_dirs(library)
+
+        orphans = planning.find_orphans(output_dir, PassthroughNaming(), packages)
+
+        [decision] = planning.plan_exports(packages, output_dir, PassthroughNaming())
+        assert decision.status == planning.COLLISION
+        assert [path.name for path in orphans] == ["Book.epub"]

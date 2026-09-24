@@ -368,6 +368,23 @@ class TestLockFailuresAreDistinguished:
         ):
             pass
 
+    @pytest.mark.skipif(not Path("/dev/full").exists(), reason="needs /dev/full")
+    def test_a_full_volume_does_not_stop_the_run_at_the_lock(
+        self, output_dir, monkeypatch
+    ):
+        # The holder's pid is diagnostic, and writing it was unguarded: on a
+        # full volume ENOSPC escaped, again when the buffered handle closed,
+        # and the run died with two tracebacks and exit 1 before --min-free
+        # could stop it cleanly. /dev/full answers every write with ENOSPC; it
+        # also refuses truncation, which a real full volume allows, so that is
+        # let through.
+        (output_dir / convert.LOCK_NAME).symlink_to("/dev/full")
+        monkeypatch.setattr(os, "ftruncate", lambda _fd, _length: None)
+
+        # Locked for real: only the note of who holds it was lost.
+        with convert.output_lock(output_dir) as locked:
+            assert locked
+
 
 class TestUnwritablePathsAreReported:
     """A raw traceback is not an error message."""

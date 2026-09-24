@@ -239,7 +239,7 @@ class TestTheCommandLineMode:
         library = tmp_path / "empty"
         library.mkdir(exist_ok=True)
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -330,7 +330,7 @@ class TestTheCommandLineMode:
         self, tmp_path, monkeypatch
     ):
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "absent", policy),
         )
 
@@ -393,7 +393,7 @@ class TestRefreshingAnnotationsWithoutConverting:
             books=[library_row(path="/x/Leviathan Wakes.epub")],
         )
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -510,7 +510,7 @@ class TestAnnotationsOnly:
         library = tmp_path / "lib"
         make_metadata_package(library, "Leviathan Wakes.epub", title="Leviathan Wakes")
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
@@ -581,7 +581,7 @@ class TestWritingToStandardOutput:
         library = tmp_path / "lib"
         make_metadata_package(library, "Leviathan Wakes.epub", title="Leviathan Wakes")
         monkeypatch.setattr(
-            "epubconvert.run.run.collect_annotations",
+            "epubconvert.run.annotating.collect_annotations",
             lambda policy=None: annotations.collect(tmp_path / "container", policy),
         )
         return library
