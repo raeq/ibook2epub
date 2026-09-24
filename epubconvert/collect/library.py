@@ -291,6 +291,13 @@ def index_assets(directory: Path) -> dict[str, dict[str, Any]]:
     """
     Read the library database, keyed by the id annotations join on.
 
+    Read once for as long as the database is unchanged. A vault run needs it
+    twice -- the highlights' titles, then every book a note's tag may name --
+    and read it twice, so a library that could not be read was reported as
+    two failures. Remembered here rather than handed from one caller to the
+    other, which would thread it through the run to the export: the rule that
+    it is read once belongs to the reader.
+
     :param directory: The container directory.
 
     :return: Asset id to library row. Empty if the library cannot be read,
@@ -304,6 +311,52 @@ def index_assets(directory: Path) -> dict[str, dict[str, Any]]:
         # Not an error, and not Full Disk Access either: the annotation
         # database under the same protected tree has just been read.
         return {}
+    version = _version(database)
+    if version is None or _READ.get("version") != version:
+        _READ.clear()
+        _READ.update(version=version, index=_read_index(database))
+    return dict(_READ["index"])
+
+
+#: The last library read, and the version of the database it was read from.
+_READ: dict[str, Any] = {}
+
+
+def _version(database: Path) -> tuple[object, ...] | None:
+    """
+    Identify what a database holds, as far as its files say.
+
+    Its write-ahead log is included: a write lands there, and reaches the
+    database file itself only when Books checkpoints it.
+
+    :param database: The database file.
+
+    :return: A value that differs once either file has changed, or None if
+        the database cannot be examined, so it is not remembered.
+    """
+    identity: list[object] = [str(database)]
+    for path in (database, database.with_name(f"{database.name}-wal")):
+        try:
+            found = path.stat()
+        except FileNotFoundError:
+            identity.append(None)
+            continue
+        except OSError:
+            return None
+        identity.append(
+            (found.st_ino, found.st_size, found.st_mtime_ns, found.st_ctime_ns)
+        )
+    return tuple(identity)
+
+
+def _read_index(database: Path) -> dict[str, dict[str, Any]]:
+    """
+    Query the library database for every book an annotation may name.
+
+    :param database: The database file.
+
+    :return: Asset id to library row, or empty if it cannot be read.
+    """
     try:
         found = rows(database, BOOK_QUERY)
     except ContainerUnavailableError as exc:

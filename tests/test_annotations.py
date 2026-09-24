@@ -29,6 +29,8 @@ from pathlib import Path
 import pytest
 
 from epubconvert.collect import annotations, coredata, library
+from epubconvert.run import run
+from epubconvert.utils.app_logger import logger
 
 #: Core Data counts seconds from 2001-01-01, not from the Unix epoch.
 APPLE_EPOCH_OFFSET = 978307200
@@ -564,3 +566,62 @@ class TestRerunningUpdatesOnlyWhatChanged:
 
         problems = annotations.schema_problems(annotations.build_document(merged))
         assert problems == [], problems
+
+
+class TestTheLibraryIsReadOnce:
+    """
+    A vault run read ``BKLibrary`` twice: once for the highlights' titles and
+    again for the list of every book a note's tag may name. A library that
+    could not be read was reported twice, as two failures, for one.
+    """
+
+    @staticmethod
+    def _broken(root: Path) -> None:
+        make_databases(root)
+        database = next(root.rglob("BKLibrary*.sqlite"))
+        with open_for_writing(database) as connection:
+            connection.execute("DROP TABLE ZBKLIBRARYASSET")
+
+    def test_a_vault_run_warns_once_about_a_broken_library(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        self._broken(tmp_path / coredata.CONTAINER)
+        (tmp_path / "lib").mkdir()
+        warned: list[str] = []
+        monkeypatch.setattr(
+            logger, "warning", lambda message, *args: warned.append(message % args)
+        )
+
+        run.main(
+            [
+                *("-s", str(tmp_path / "lib"), "-o", str(tmp_path / "out")),
+                *("-ao", str(tmp_path / "vault"), "--annotations-format", "markdown"),
+            ]
+        )
+
+        failed = [text for text in warned if "Reading the Books library failed" in text]
+        assert len(failed) == 1
+
+    def test_an_unchanged_library_is_queried_once(self, tmp_path, monkeypatch):
+        make_databases(tmp_path)
+        queried: list[str] = []
+        real = coredata.rows
+
+        def counted(database, query):
+            queried.append(query)
+            return real(database, query)
+
+        monkeypatch.setattr(library, "rows", counted)
+
+        first = library.index_assets(tmp_path)
+        second = library.index_assets(tmp_path)
+
+        assert first == second
+        assert queried.count(library.BOOK_QUERY) == 1
+
+    def test_a_changed_library_is_read_again(self, tmp_path):
+        make_databases(tmp_path)
+        assert set(library.index_assets(tmp_path)) == {"ASSET1"}
+
+        make_databases(tmp_path, books=[library_row(), library_row(asset="ASSET2")])
+
+        assert set(library.index_assets(tmp_path)) == {"ASSET1", "ASSET2"}
