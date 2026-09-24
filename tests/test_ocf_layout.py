@@ -13,6 +13,7 @@ the writer chose, so it says nothing about what comes first in the file.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 # pylint: disable=protected-access
 
+import io
 import unicodedata
 import warnings
 from pathlib import Path
@@ -21,6 +22,7 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 from epubconvert.collect import validate
+from epubconvert.collect.package import find_opf_path
 from epubconvert.export.archive import replace_annotations, zip_package
 from epubconvert.export.naming import filesystem_key
 from epubconvert.run.run import main
@@ -395,3 +397,62 @@ class TestFoldingIsCanonicalCaselessMatching:
 
     def test_full_folding_is_kept(self):
         assert fold_name("Straße") == fold_name("STRASSE")
+
+
+class TestTheContainerNamesThePackageDocument:
+    """
+    OCF names the package document as the first rootfile whose media type is
+    ``application/oebps-package+xml``. The type was compared whole, so one
+    carrying a parameter was missed, and without a match the first rootfile
+    of any type was taken: a PDF listed ahead of an untyped package document.
+    """
+
+    PDF = '<rootfile full-path="book.pdf" media-type="application/pdf"/>'
+
+    @staticmethod
+    def _opf_path(rootfiles: str) -> str:
+        container = (
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            f"<rootfiles>{rootfiles}</rootfiles></container>"
+        )
+        buffer = io.BytesIO()
+        with ZipFile(buffer, "w") as archive:
+            archive.writestr("META-INF/container.xml", container)
+        with ZipFile(buffer) as archive:
+            return find_opf_path(archive)
+
+    @pytest.mark.parametrize(
+        "media_type",
+        [
+            "application/oebps-package+xml; charset=utf-8",
+            "Application/OEBPS-Package+XML ;charset=UTF-8",
+            " application/oebps-package+xml ",
+        ],
+    )
+    def test_a_parameter_or_case_does_not_hide_the_type(self, media_type):
+        opf = f'<rootfile full-path="content.opf" media-type="{media_type}"/>'
+
+        assert self._opf_path(self.PDF + opf) == "content.opf"
+
+    def test_an_untyped_rootfile_is_preferred_to_one_of_another_type(self):
+        untyped = '<rootfile full-path="content.opf"/>'
+
+        assert self._opf_path(self.PDF + untyped) == "content.opf"
+
+    def test_the_first_untyped_rootfile_is_the_one_taken(self):
+        rootfiles = '<rootfile full-path="a.opf"/><rootfile full-path="b.opf"/>'
+
+        assert self._opf_path(rootfiles) == "a.opf"
+
+    def test_a_typed_one_still_wins_over_an_untyped_one_ahead(self):
+        rootfiles = (
+            '<rootfile full-path="a.opf"/><rootfile full-path="b.opf"'
+            ' media-type="application/oebps-package+xml"/>'
+        )
+
+        assert self._opf_path(rootfiles) == "b.opf"
+
+    def test_with_only_other_types_the_first_is_still_taken(self):
+        other = '<rootfile full-path="c.xml" media-type="text/xml"/>'
+
+        assert self._opf_path(self.PDF + other) == "book.pdf"
