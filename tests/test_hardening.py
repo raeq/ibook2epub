@@ -49,6 +49,26 @@ def records_fixture():
         logger.removeHandler(handler)
 
 
+@pytest.fixture(name="debug_records")
+def debug_records_fixture():
+    """Capture everything the package logger says at -v and above, as rendered."""
+    captured: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    handler = Capture(level=logging.DEBUG)
+    level = logger.level
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        yield captured
+    finally:
+        logger.setLevel(level)
+        logger.removeHandler(handler)
+
+
 #: Encodings expat will not parse: multi-byte ones, which it refuses with
 #: ValueError, and a name Python does not know, which raises LookupError.
 UNPARSABLE_ENCODINGS = ["Shift_JIS", "EUC-JP", "UTF-32", "x-no-such-encoding"]
@@ -248,6 +268,27 @@ class TestControlCharactersDoNotReachTheTerminal:
         assert printable("Ursula K. Le Guin — Earthsea.epub") == (
             "Ursula K. Le Guin — Earthsea.epub"
         )
+
+    def test_the_stub_walk_escapes_a_symlinked_directory_name(
+        self, tmp_path, debug_records
+    ):
+        # has_dataless_files logged the entry's own name raw at -v, so a
+        # directory called ESC[2K could erase the line that reported it.
+        package = make_package(tmp_path / "lib", "Book.epub")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (package / "OEBPS" / "\x1b[2KFAKE").symlink_to(elsewhere)
+
+        assert source.has_dataless_files(package)
+        assert debug_records
+        assert not any("\x1b" in message for message in debug_records)
+
+    def test_the_stub_walk_escapes_a_path_it_could_not_read(
+        self, tmp_path, debug_records
+    ):
+        assert source.has_dataless_files(tmp_path / "\x1b[2KGone.epub")
+        assert debug_records
+        assert not any("\x1b" in message for message in debug_records)
 
 
 class TestExportedFilesHonourTheUmask:

@@ -256,7 +256,11 @@ def has_dataless_files(package: Path) -> bool:
         # Fails closed, like every other unreadable state in this module. A
         # subtree that could not be scanned used to answer "downloaded" for a
         # package that was never examined.
-        logger.debug("Could not inspect %s: %s", exc.filename or package, exc)
+        # Every name here came from the book, so each goes through printable:
+        # logged raw at -v, a directory called ESC[2K erased its own report.
+        logger.debug(
+            "Could not inspect %s: %s", printable(str(exc.filename or package)), exc
+        )
         unreadable = True
 
     # Whether the tree can be examined at all is not a platform question. Only
@@ -277,7 +281,9 @@ def has_dataless_files(package: Path) -> bool:
         for name in dirs:
             if not contains(package, directory / name):
                 logger.debug(
-                    "Symlinked directory in %s: %s", printable(package.name), name
+                    "Symlinked directory in %s: %s",
+                    printable(package.name),
+                    printable(name),
                 )
                 return True
         if not detectable:
@@ -286,7 +292,7 @@ def has_dataless_files(package: Path) -> bool:
             try:
                 stat = (directory / name).stat()
             except OSError as exc:  # pragma: no cover - racing removal
-                logger.debug("Could not stat %s: %s", name, exc)
+                logger.debug("Could not stat %s: %s", printable(name), exc)
                 return True
             if getattr(stat, "st_flags", 0) & SF_DATALESS:
                 return True
