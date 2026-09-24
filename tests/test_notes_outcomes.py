@@ -177,3 +177,47 @@ class TestNothingSavedForABookFailsTheRun:
 
         assert self._run(vault) == exits.SUCCESS
         assert notes.sidecar_for(note).is_file()
+
+
+#: A reader's own note saved in Windows-1252: not UTF-8, so not decodable.
+NOT_UTF8 = "Café notes\n".encode("cp1252")
+
+
+class TestANoteThatIsNotUtf8IsLeftAlone:
+    """
+    A file at a note's path that does not decode raised UnicodeDecodeError,
+    which the read's handler did not name. It ended the whole run, and every
+    later book's note was lost with it.
+    """
+
+    def test_it_is_unreadable_and_later_books_still_get_their_notes(
+        self, tmp_path: Path
+    ):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "Alpha.md").write_bytes(NOT_UTF8)
+        named = [*ALONE, Assignment(Path("Beta.epub"), "Beta.epub", "beta")]
+        found = [_highlight("Alpha.epub", "a"), _highlight("Beta.epub", "b")]
+
+        code = notes.write_vault(found, str(vault), named, copyable=())
+
+        assert code == exits.FAILED
+        assert (vault / "Alpha.md").read_bytes() == NOT_UTF8
+        assert (vault / "Beta.md").is_file()
+
+    def test_one_at_the_sidecar_path_is_left_alone_too(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        found = [_highlight("Alpha.epub", "hl")]
+        notes.write_vault(found, str(vault), ALONE, copyable=())
+        note = vault / "Alpha.md"
+        note.write_text(
+            note.read_text(encoding="utf-8").replace("> hl", "> edited"),
+            encoding="utf-8",
+        )
+        sidecar = notes.sidecar_for(note)
+        sidecar.write_bytes(NOT_UTF8)
+
+        code = notes.write_vault(found, str(vault), ALONE, copyable=())
+
+        assert code == exits.FAILED
+        assert sidecar.read_bytes() == NOT_UTF8

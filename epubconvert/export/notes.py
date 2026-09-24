@@ -749,10 +749,11 @@ def _write_one(  # pylint: disable=too-many-return-statements
             )
             return "unreadable"
         existing = target.read_text(encoding="utf-8-sig") if present else None
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         # Not "foreign": this may well be a note this tool wrote. All that is
         # known is that it could not be checked, and saying otherwise put a
-        # false sentence in the summary.
+        # false sentence in the summary. A file that is not UTF-8 -- a note
+        # saved as Windows-1252 -- raised out of here and ended the run.
         logger.error("Could not read %s: %s", printable(target.name), exc)
         return "unreadable"
 
