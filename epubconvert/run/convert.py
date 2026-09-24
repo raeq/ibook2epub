@@ -408,6 +408,26 @@ async def export_planned(
         if decision.status == PENDING and decision.target is not None
     ]
 
+    if not pending:
+        return report
+
+    # Measured in the dry run too, where the real run measures, before its
+    # first write: a dry run on a volume below the floor said "would export"
+    # every book and exited 0 for a run that wrote none and exited 1. Not
+    # measured again when the copies before this found the volume below it:
+    # it does not get emptier by being asked, and the run said so twice.
+    if report.aborted or not _has_room(output_dir, run.min_free_mb):
+        # Nothing was attempted, so nothing failed. Reporting these as
+        # failures would claim work that never started.
+        logger.warning(
+            "Nothing %s: %d book(s) left unattempted.",
+            "would be exported" if dry_run else "exported",
+            len(pending),
+        )
+        report.aborted = True
+        report.stopped.update(package for package, _ in pending)
+        return report
+
     if dry_run:
         for package, target in pending:
             logger.info(
@@ -416,17 +436,6 @@ async def export_planned(
                 printable(str(target)),
             )
         report.planned += len(pending)
-        return report
-
-    if not pending:
-        return report
-
-    if not _has_room(output_dir, run.min_free_mb):
-        # Nothing was attempted, so nothing failed. Reporting these as
-        # failures would claim work that never started.
-        logger.warning("Nothing exported: %d book(s) left unattempted.", len(pending))
-        report.aborted = True
-        report.stopped.update(package for package, _ in pending)
         return report
 
     progress = _Progress(len(pending), default_workers(max_workers))
@@ -868,7 +877,20 @@ def _has_room(output_dir: Path, min_free_mb: int) -> bool:
     """
     if not min_free_mb:
         return True
-    free = free_megabytes(output_dir)
+    # A dry run's shelf may not be there yet, and the real run makes it on
+    # the volume of the nearest directory that is: measuring the missing one
+    # said the volume could not be measured and let the floor go.
+    # os.path.isdir, which never raises, where Path.is_dir raises for a
+    # directory the run may not search.
+    measured = next(
+        (
+            path
+            for path in (output_dir, *output_dir.parents)
+            if os.path.isdir(path)  # noqa: PTH112
+        ),
+        output_dir,
+    )
+    free = free_megabytes(measured)
     if free < min_free_mb:
         logger.critical(
             "Only %d MiB free on %s, below the --min-free floor of %d MiB.",

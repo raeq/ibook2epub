@@ -453,10 +453,9 @@ def apply_annotations(args: argparse.Namespace, policy: NamingPolicy) -> int:
     # read rather than before it: returning first, the dry run said the
     # annotations "were read" having read nothing, and exited 0 where the
     # real run was refused the container and exited 8. -ao -d reads first.
-    # After the shelf is judged too, which a dry run does as the run does.
+    # After the shelf is judged too, which a dry run does as the run does,
+    # and has said what it would refresh.
     if args.dry_run or not args.annotations_detached:
-        if args.dry_run:
-            logger.info("Dry run: annotations were read but nothing was written.")
         return code
 
     # Each note named after the file the book is placed at, as the
@@ -581,8 +580,6 @@ def _embed_in_shelf(
             # read-only shelf with a lock file that opened failed every book.
             if any(places.get(package) is not None for package in highlighted):
                 check_writable(args.output_dir)
-            if args.dry_run:
-                return exits.SUCCESS
             _refresh_each(args, assignments, index, places, tally)
     except (OutputLockedError, ShelfUnwritableError) as exc:
         logger.critical("%s", exc)
@@ -597,10 +594,10 @@ def _embed_in_shelf(
         # there is one on the shelf is the conversion's business, not known here.
         warn_about_copies(index, copyable, copied=None)
         warn_about_bookless(found)
-    return _refresh_outcome(tally)
+    return _refresh_outcome(tally, dry_run=args.dry_run)
 
 
-def _refresh_outcome(tally: _Tally) -> int:
+def _refresh_outcome(tally: _Tally, *, dry_run: bool = False) -> int:
     """
     Say what a refresh did, and choose its exit code.
 
@@ -609,10 +606,13 @@ def _refresh_outcome(tally: _Tally) -> int:
     so a scheduled refresh that hit ENOSPC on every book reported success.
 
     :param tally: What the refresh did.
+    :param dry_run: Whether it only said what it would do. Its exit code is
+        the real run's, as a dry conversion's is.
 
     :return: 130 if interrupted, 1 if a book was left behind, otherwise 0.
     """
-    parts = [f"Refreshed annotations in {tally.changed} book(s)"]
+    done = "Dry run: would refresh" if dry_run else "Refreshed"
+    parts = [f"{done} annotations in {tally.changed} book(s)"]
     if tally.failed:
         parts.append(f"could not refresh {tally.failed}")
     if tally.stopped:
@@ -635,10 +635,14 @@ def _refresh_outcome(tally: _Tally) -> int:
 class _Tally:
     """What a refresh has done so far, kept where an interrupt cannot lose it."""
 
-    changed: int = 0  # Archives rewritten.
+    changed: int = 0  # Archives rewritten, or that a dry run would rewrite.
     failed: int = 0  # Archives that could not be.
     stopped: bool = False  # The --min-free floor stopped the rest.
     interrupted: bool = False  # Ctrl-C stopped the rest.
+
+
+class _DueError(Exception):
+    """Raised in a dry run, in place of the rebuild an archive is due."""
 
 
 def _refresh_each(
@@ -664,13 +668,25 @@ def _refresh_each(
     :param tally: Counted into as each book is done, so a Ctrl-C leaves it
         saying how many archives were rewritten, how many could not be, and
         whether the floor stopped the refresh before the rest.
+
+    A dry run reads each archive as the refresh does, to tell which are due,
+    and rewrites none. It measures the volume once, at the first archive
+    due, where the refresh first measures: it returned before, and said all
+    was well of a refresh the floor stopped with exit 1.
     """
     # An interval of one: rebuilds run one at a time, so every one is
     # measured, one statvfs per book that is actually rewritten.
     progress = progress_for(len(assignments), 1)
+    measured: list[bool] = []
 
     def room() -> bool:
-        return progress.has_room(args.output_dir, args.min_free)
+        if not args.dry_run:
+            return progress.has_room(args.output_dir, args.min_free)
+        if not measured:
+            measured.append(progress.has_room(args.output_dir, args.min_free))
+        if measured[0]:
+            raise _DueError
+        return False
 
     for item in assignments:
         marker = progress.tick()
@@ -689,6 +705,14 @@ def _refresh_each(
                     len(mine),
                     printable(target.name),
                 )
+        except _DueError:
+            tally.changed += 1
+            logger.info(
+                "%s Would refresh %d annotation(s) in %s",
+                marker,
+                len(mine),
+                printable(target.name),
+            )
         except NoRoomError:
             # Sticky, like the conversions' floor: the volume does not get
             # emptier by asking again, so every book after this one stops too.
