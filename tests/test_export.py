@@ -363,6 +363,46 @@ class TestInterrupt:
 
 
 class TestDiskFloor:
+    def test_nothing_is_copied_onto_a_volume_below_the_floor(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # The floor guarded conversions only: PDFs and zipped epubs were copied
+        # onto an SD card already below it, the very volume it exists for.
+        library = tmp_path / "lib"
+        library.mkdir()
+        (library / "Manual.pdf").write_bytes(b"%PDF-1.4\n" + b"x" * 1000)
+        _zipped(library / "Zipped.epub")
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: 1)
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "--min-free", "100"]
+        )
+
+        assert list(output_dir.glob("*.pdf")) + list(output_dir.glob("*.epub")) == []
+        assert code == 1
+        summary = capsys.readouterr().out.strip().splitlines()[-1]
+        assert summary.startswith("Aborted: not enough free space")
+
+    def test_copies_stop_once_the_floor_is_crossed(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library = tmp_path / "lib"
+        library.mkdir()
+        for index in range(12):
+            (library / f"Manual {index:02}.pdf").write_bytes(b"%PDF-1.4\n")
+        # Room before the copies start; below the floor at the next sample.
+        readings = iter([10_000])
+        monkeypatch.setattr(convert, "free_megabytes", lambda _p: next(readings, 1))
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+            + ["--min-free", "100", "-w", "4"]
+        )
+
+        # Three before the second sample, and at most three already started.
+        assert len(list(output_dir.glob("*.pdf"))) <= 6
+        assert code == 1
+
     def test_a_later_book_is_stopped_when_space_runs_out_mid_run(
         self, tmp_path, output_dir, monkeypatch
     ):
@@ -898,3 +938,9 @@ class TestRewritingASidecarKeepsWhatTheUserSet:
 
         assert stat.S_IMODE(target.stat().st_mode) == 0o444
         assert target.read_text(encoding="utf-8") == "second"
+def _zipped(path: Path) -> None:
+    """Write an already-zipped epub, which a run copies rather than converts."""
+    with ZipFile(path, "w") as opened:
+        opened.writestr("mimetype", "application/epub+zip", compress_type=ZIP_STORED)
+        opened.writestr("META-INF/container.xml", "<container/>")
+        opened.writestr("OEBPS/text.xhtml", "<html/>")

@@ -696,7 +696,11 @@ def _run_export(
         try:
             if not args.dry_run:
                 copy_through_all(
-                    copies, args.output_dir, report, max_workers=args.workers
+                    copies,
+                    args.output_dir,
+                    report,
+                    max_workers=args.workers,
+                    min_free_mb=args.min_free,
                 )
             # Planning is inside the guard too: under --skip-incomplete it
             # walks every package in the library, which is minutes of work on

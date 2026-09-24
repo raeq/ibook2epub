@@ -19,11 +19,16 @@ from ..export.naming import filesystem_key
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.policy import NamingPolicy
-from .convert import _REPORT_LOCK, Report, default_workers
+from .convert import _REPORT_LOCK, Report, _Progress, default_workers, progress_for
 from .planning import copy_name_opens_file, copy_target_name
 
 
-def _copy_and_record(group: Sequence[tuple[Path, Path]], report: Report) -> None:
+def _copy_and_record(
+    group: Sequence[tuple[Path, Path]],
+    report: Report,
+    progress: _Progress,
+    min_free_mb: int,
+) -> None:
     """
     Copy files that could share a name, in order, recording each as it lands.
 
@@ -34,10 +39,24 @@ def _copy_and_record(group: Sequence[tuple[Path, Path]], report: Report) -> None
     :param group: Sources and their targets, whose names a filesystem may
         treat as one.
     :param report: Report to record each copy in.
+    :param progress: The sampler every copy in this run shares, which
+        re-measures the volume and remembers once it is below the floor.
+    :param min_free_mb: The ``--min-free`` floor in MiB. A copy writes to the
+        same volume a conversion does, and the floor guarded only conversions:
+        PDFs went on being copied onto an SD card already below it.
     """
     for source, target in group:
         if target.exists():
             continue
+        if not progress.has_room(target.parent, min_free_mb):
+            # Not started, so not failed, as for a conversion the floor stops.
+            with _REPORT_LOCK:
+                report.aborted = True
+            logger.info(
+                "Not copied, the volume is below --min-free: %s",
+                printable(source.name),
+            )
+            return
         try:
             copy_through(source, target)
         except OSError as exc:
@@ -167,6 +186,7 @@ def copy_through_all(
     report: Report,
     *,
     max_workers: int | None = None,
+    min_free_mb: int = 0,
 ) -> None:
     """
     Put already-valid books on the shelf without converting them.
@@ -193,15 +213,28 @@ def copy_through_all(
         nothing was copied while the files were already on disk.
     :param max_workers: Size of the thread pool, as for
         :func:`~epubconvert.run.convert.export_planned`.
+    :param min_free_mb: The ``--min-free`` floor in MiB; 0 disables it.
+        Measured before the pool starts, as the export measures, and then
+        sampled as each file is copied.
     """
     groups = _group_copies(plan, output_dir, report)
     if not groups:
+        return
+    progress = progress_for(
+        sum(len(group) for group in groups), default_workers(max_workers)
+    )
+    if not progress.has_room(output_dir, min_free_mb):
+        logger.warning("Nothing copied: the volume is below --min-free.")
+        report.aborted = True
         return
     pool = ThreadPoolExecutor(
         max_workers=default_workers(max_workers), thread_name_prefix="copy"
     )
     try:
-        futures = [pool.submit(_copy_and_record, group, report) for group in groups]
+        futures = [
+            pool.submit(_copy_and_record, group, report, progress, min_free_mb)
+            for group in groups
+        ]
         # result() re-raises in this thread whatever escaped a worker, so a
         # surprise still stops the run as it did when the loop ran here.
         for future in futures:
