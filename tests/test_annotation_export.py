@@ -285,6 +285,23 @@ class TestTheCommandLineMode:
         assert code == 5
         assert target.read_text(encoding="utf-8") == "this is not json"
 
+    def test_an_export_holding_a_lone_surrogate_is_refused_not_a_traceback(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # "\ud83d" is valid JSON and decodes to a lone surrogate, which the
+        # merged document then could not encode: UnicodeEncodeError is not an
+        # OSError, so it escaped main as a traceback.
+        library = self._container(monkeypatch, tmp_path)
+        target = tmp_path / "mine.json"
+        content = '{"annotations": [{"id": "OLD", "text": "\\ud83d"}]}'
+        target.write_text(content, encoding="utf-8")
+
+        code = run.main(["-s", str(library), "-ao", str(target)])
+
+        assert code == 5
+        assert target.read_text(encoding="utf-8") == content
+        assert "move it aside" in capsys.readouterr().err
+
     def test_an_unavailable_container_has_its_own_exit_code(
         self, tmp_path, monkeypatch
     ):

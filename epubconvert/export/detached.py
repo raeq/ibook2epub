@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -151,6 +152,18 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
             f"{target.name} is already there and is not an annotation export; "
             "move it aside rather than have this overwrite it"
         )
+    # A "\ud83d" escape is valid JSON and decodes to a lone surrogate, which
+    # UTF-8 cannot encode. Merged, it made the write raise UnicodeEncodeError
+    # -- not an OSError -- out of main as a traceback. Found here, it is
+    # refused like any other file that cannot be read back, before anything
+    # is written. Searched for rather than encoded to find out: a bare
+    # .encode() is what the surrogate-safe naming rule forbids.
+    if LONE_SURROGATE.search(json.dumps(loaded, ensure_ascii=False)):
+        raise ContainerUnavailableError(
+            f"{target.name} is already there and holds a lone surrogate, which "
+            "is not valid Unicode; move it aside rather than have this "
+            "overwrite it"
+        )
     return loaded
 
 
@@ -197,6 +210,10 @@ def _emit(text: str) -> None:
 #: file that is not an export cannot be read into memory whole before the
 #: check that would have refused it.
 MAX_EXPORT_BYTES = 256 * 1024 * 1024
+
+#: A surrogate code point on its own. A paired ``😀`` escape decodes
+#: to one astral character, so only an unpaired half is left to match.
+LONE_SURROGATE = re.compile("[\ud800-\udfff]")
 
 
 def vault_of(args: argparse.Namespace) -> Path | None:
