@@ -197,7 +197,7 @@ Choosing books:
   Which books this run considers.
 
   -m, --max-export-files N
-                        Maximum number of packages to convert; 0=no limit,
+                        Maximum number of packages to convert; 0=unlimited,
                         default=5. Files copied through are not counted.
   -s, --source-dir SOURCE_DIR
                         Path of the source directory containing *.epub/

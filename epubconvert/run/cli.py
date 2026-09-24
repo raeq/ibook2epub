@@ -177,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_EXPORT_FILES,
         metavar="N",
         help=(
-            "Maximum number of packages to convert; 0=no limit, "
+            "Maximum number of packages to convert; 0=unlimited, "
             f"default={DEFAULT_MAX_EXPORT_FILES}. Files copied through are not "
             "counted."
         ),

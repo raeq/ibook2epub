@@ -109,11 +109,15 @@ class TestParseArgs:
 
         assert args.verbose == 2
 
-    def test_help_documents_the_no_limit_sentinel(self):
-        # The README quotes this help text; keep them honest about 0=no limit.
+    @pytest.mark.parametrize("width", [51, 69, 72, 75, 79, 120])
+    def test_help_documents_the_no_limit_sentinel(self, monkeypatch, width):
+        # The README quotes this help text; keep them honest about the
+        # sentinel. "0=no limit" had a space argparse could wrap at, and did
+        # at some widths, which split it across two lines.
+        monkeypatch.setenv("COLUMNS", str(width))
         help_text = cli.build_parser().format_help()
 
-        assert "0=no limit" in help_text
+        assert "0=unlimited" in help_text
 
 
 class TestLoggerConfiguration:
