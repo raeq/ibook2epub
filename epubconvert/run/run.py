@@ -294,7 +294,7 @@ def _run_export(
     args: argparse.Namespace,
     policy: NamingPolicy,
     found: list[dict[str, Any]] | None,
-) -> tuple[Report, int, list[Assignment]]:
+) -> tuple[Report, int, list[Assignment], list[Path]]:
     """
     Collect, select and export, under the output directory lock.
 
@@ -309,7 +309,8 @@ def _run_export(
         names it gave every book it converted. Annotations are applied against
         that same assignment afterwards: naming the library again disagreed
         with it under ``--match`` with a collision suffix, so the archive the
-        refresh looked for did not exist.
+        refresh looked for did not exist. And the library's copyable files,
+        which the annotation step needs for the same reason the embed does.
 
     :raises OutputLockedError: If another run holds the output lock, or the
         lock file could not be opened.
@@ -325,7 +326,7 @@ def _run_export(
         # a traceback with no summary and no 130.
         report.interrupted = True
         logger.warning("Interrupted before anything was written.")
-        return report, 0, []
+        return report, 0, [], []
     if args.force and args.max_export_files and len(packages) > args.max_export_files:
         logger.warning(
             "--force selected %d book(s) but -m limits this run to %d; "
@@ -334,13 +335,14 @@ def _run_export(
             args.max_export_files,
         )
 
+    copyable = _copyable(args, copies) if found is not None else []
     options = ExportOptions(
         covers=args.covers,
         min_free_mb=args.min_free,
         validation=ValidationOptions(enabled=args.validate, epubcheck=args.epubcheck),
         plan=_plan_options(args),
         annotations=(
-            index_by_package(found, packages)
+            index_by_package(found, packages, copyable=copyable)
             if found is not None and args.annotations_embedded and not args.dry_run
             else None
         ),
@@ -406,7 +408,32 @@ def _run_export(
     # off: counting only exports said "-m 0 -d" would leave every book it
     # had just listed.
     done = report.planned if args.dry_run else report.exported
-    return report, max(0, pending_before - done), _selected(assigned, packages)
+    return (
+        report,
+        max(0, pending_before - done),
+        _selected(assigned, packages),
+        copyable,
+    )
+
+
+def _copyable(args: argparse.Namespace, copies: CopyPlan) -> list[Path]:
+    """
+    Every file in the library that is a book without being a package.
+
+    Wanted for the annotations, which name a book only by its name: a zipped
+    ``b/Foo.epub`` and a package ``a/Foo.epub/`` are one key, and counting
+    only the packages gave the zipped book's highlights to the package.
+
+    :param args: Parsed command line arguments.
+    :param copies: The plan this run already made, which walked for them.
+
+    :return: The files, from the plan when it has them. Under
+        ``--no-copy-through`` it has none, but the zipped book is still in the
+        library and still owns its highlights, so the library is walked.
+    """
+    if args.no_copy_through:
+        return collect_copyable(args.source_dir)
+    return [source for source, _name in copies.named]
 
 
 def _selected(
@@ -574,14 +601,14 @@ def _run(args: argparse.Namespace) -> int:
     found = gather_annotations(args, policy)
 
     try:
-        report, remaining, named = _run_export(args, policy, found)
+        report, remaining, named, copyable = _run_export(args, policy, found)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
 
     # After the books are on the shelf, so annotations reach them by the same
     # path --annotations-refresh uses. A dry run writes nothing, here included.
-    annotated = annotations_after_export(args, policy, named, found)
+    annotated = annotations_after_export(args, named, found, copyable=copyable)
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     # Standard output belongs to the document when one is going there; a
     # summary in the middle of it would make the JSON unparsable, which is the

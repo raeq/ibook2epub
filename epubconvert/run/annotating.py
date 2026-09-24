@@ -20,6 +20,7 @@ from ..collect.annotations import for_book as annotations_for_book
 from ..collect.coredata import ContainerUnavailableError
 from ..collect.validate import UNREADABLE_MEMBER, ArchiveInvalidError
 from ..export.archive import (
+    collect_copyable,
     collect_package_dirs,
     index_by_package,
     replace_annotations,
@@ -66,9 +67,10 @@ def gather_annotations(
 
 def annotations_after_export(
     args: argparse.Namespace,
-    policy: NamingPolicy,
     named: Sequence[Assignment],
     found: list[dict[str, Any]] | None,
+    *,
+    copyable: Sequence[Path],
 ) -> int | None:
     """
     Finish the annotation work the conversion could not do itself.
@@ -83,10 +85,12 @@ def annotations_after_export(
     asking for it.
 
     :param args: Parsed command line arguments.
-    :param policy: The naming policy in force.
     :param named: The names the export just used, so the refresh looks for the
         archives the export actually wrote.
     :param found: The annotations this run read, or None.
+    :param copyable: The library's already-zipped books and PDFs, the other
+        half of telling a highlight's book apart; see
+        :func:`~epubconvert.export.archive.index_by_package`.
 
     :return: An exit code when something went wrong, None otherwise.
     """
@@ -94,11 +98,13 @@ def annotations_after_export(
         return None
     code = exits.SUCCESS
     if args.annotations_refresh and found is not None:
-        code = _embed_in_shelf(args, policy, found, True, named)
+        code = _embed_in_shelf(args, found, True, named, copyable)
     if code == exits.SUCCESS and args.annotations_detached and found is not None:
-        code = write_export(args, found, args.annotations_detached, named)
+        code = write_export(
+            args, found, args.annotations_detached, named, copyable=copyable
+        )
     if args.annotations_embedded and not args.annotations_detached and found:
-        _warn_about_stranded(args, found, named)
+        _warn_about_stranded(args, found, named, copyable)
     return None if code == exits.SUCCESS else code
 
 
@@ -106,6 +112,7 @@ def _warn_about_stranded(
     args: argparse.Namespace,
     found: list[dict[str, Any]],
     named: Sequence[Assignment],
+    copyable: Sequence[Path],
 ) -> None:
     """
     Say so when highlights had nowhere to go.
@@ -128,10 +135,13 @@ def _warn_about_stranded(
     :param found: Every annotation this run read.
     :param named: The names the export used, which is the only place that knows
         what each book's archive would be called.
+    :param copyable: The library's already-zipped books and PDFs.
     """
     # Quiet: the conversion before this read the same annotations against
     # the same library and has already said which it could not place.
-    index = index_by_package(found, [item.package for item in named], quiet=True)
+    index = index_by_package(
+        found, [item.package for item in named], copyable=copyable, quiet=True
+    )
     stranded_books: list[str] = []
     stranded = 0
     for item in named:
@@ -190,8 +200,12 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     # -ao reads Apple's container and nothing else, but a note's filename comes
     # from the naming policy, so the library still has to be named. Naming is
     # cheap under the default policy and only reached for markdown.
-    named = _named(args, policy) if args.annotations_format == "markdown" else []
-    return write_export(args, found, args.annotations_only, named)
+    # The copyable files are wanted for the same reason: only a vault matches
+    # highlights to books, and a zipped book shares its name with a package.
+    markdown = args.annotations_format == "markdown"
+    named = _named(args, policy) if markdown else []
+    copyable = collect_copyable(args.source_dir) if markdown else []
+    return write_export(args, found, args.annotations_only, named, copyable=copyable)
 
 
 def apply_annotations(
@@ -250,14 +264,19 @@ def apply_annotations(
     # metadata policy naming re-parses every package document, and computing it
     # in two places is the 2x read this project has already fixed twice.
     assignments = list(named) if named is not None else _named(args, policy)
+    # Walked whether or not a conversion would copy them: a zipped book in the
+    # library shares its name with a package either way.
+    copyable = collect_copyable(args.source_dir)
 
     if args.annotations_embedded:
-        code = _embed_in_shelf(args, policy, found, converted, assignments)
+        code = _embed_in_shelf(args, found, converted, assignments, copyable)
         if code != exits.SUCCESS:
             return code
 
     if args.annotations_detached:
-        return write_export(args, found, args.annotations_detached, assignments)
+        return write_export(
+            args, found, args.annotations_detached, assignments, copyable=copyable
+        )
     return exits.SUCCESS
 
 
@@ -277,19 +296,20 @@ def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
 
 def _embed_in_shelf(
     args: argparse.Namespace,
-    policy: NamingPolicy,
     found: list[dict[str, Any]],
     converted: bool,
-    named: Sequence[Assignment] | None,
+    assignments: Sequence[Assignment],
+    copyable: Sequence[Path],
 ) -> int:
     """
     Put each book's annotations inside the archive already on the shelf.
 
     :param args: Parsed command line arguments.
-    :param policy: The naming policy in force.
     :param found: Every annotation read from Apple.
     :param converted: Whether this run also converted books.
-    :param named: The names the export worked out, or None to work them out.
+    :param assignments: The names every package was given.
+    :param copyable: The library's already-zipped books and PDFs, which
+        answer to a package's name too.
 
     :return: A process exit code.
     """
@@ -300,11 +320,13 @@ def _embed_in_shelf(
         logger.critical("Output directory does not exist: %s", args.output_dir)
         return exits.NO_OUTPUT
 
-    assignments = list(named) if named is not None else _named(args, policy)
     # Quiet after a conversion, which embedded from the same index and has
     # already said which annotations it could not place.
     index = index_by_package(
-        found, [item.package for item in assignments], quiet=converted
+        found,
+        [item.package for item in assignments],
+        copyable=copyable,
+        quiet=converted,
     )
 
     changed = 0

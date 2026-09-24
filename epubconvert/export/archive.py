@@ -626,7 +626,11 @@ def _members(source_dir: Path) -> list[Path]:
 
 
 def index_by_package(
-    found: list[dict[str, Any]], packages: Sequence[Path], *, quiet: bool = False
+    found: list[dict[str, Any]],
+    packages: Sequence[Path],
+    *,
+    copyable: Sequence[Path],
+    quiet: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
     """
     Index annotations by book, leaving out any whose book cannot be told apart.
@@ -640,26 +644,38 @@ def index_by_package(
     an index of their own and gave one highlight to both books. Every one of
     them builds it here now.
 
+    A book that arrived already zipped answers to a name too: ``b/Foo.epub``
+    the file and ``a/Foo.epub/`` the package are one key. Only package
+    directories were counted, so the zipped book's highlights were embedded in
+    the package's archive and written into its vault note. Every caller passes
+    the library's copyable files as well, whether or not this run copies them:
+    the file is in the library either way, and so are its highlights.
+
     :param found: Every annotation collected.
     :param packages: Every package the run knows about, which is the only
         place the paths are known.
+    :param copyable: Every file in the library that
+        :func:`collect_copyable` finds. Keyword-only and required, so a new
+        caller cannot leave the zipped books out by omission, which is how the
+        defect above was written.
     :param quiet: Leave the warning to a caller that has already given it.
 
     :return: What :func:`~epubconvert.collect.annotations.index_by_book`
-        builds, less every name more than one package answers to.
+        builds, less every name more than one book answers to.
     """
     index = index_by_book(found)
     seen: dict[str, Path] = {}
     ambiguous: set[str] = set()
-    for package in packages:
-        if seen.setdefault(package.name, package) != package:
-            ambiguous.add(package.name)
+    for book in (*packages, *copyable):
+        if seen.setdefault(book.name, book) != book:
+            ambiguous.add(book.name)
     for name in sorted(ambiguous & index.keys()):
         dropped = index.pop(name)
         if not quiet:
             logger.warning(
-                "Skipped %d annotation(s) for %s: more than one package directory "
-                "has that name, so which book they belong to cannot be told apart.",
+                "Skipped %d annotation(s) for %s: more than one package or "
+                "already-zipped book in the library has that name, so which "
+                "book they belong to cannot be told apart.",
                 len(dropped),
                 printable(name),
             )

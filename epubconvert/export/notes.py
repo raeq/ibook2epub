@@ -493,6 +493,8 @@ def write_vault(
     found: list[dict[str, Any]],
     destination: str,
     named: Sequence[Assignment],
+    *,
+    copyable: Sequence[Path],
 ) -> int:
     """
     Write one Markdown note per annotated book, into a vault.
@@ -509,6 +511,10 @@ def write_vault(
         naming again with ``.md`` clamps a long title against a budget two
         bytes larger, so a book near the limit would get a stem its epub
         never had.
+    :param copyable: The library's already-zipped books and PDFs, which
+        answer to a name a package may carry too. Left out, a zipped book's
+        highlights were written into the note of the package that shares its
+        name.
 
     :return: A process exit code.
     """
@@ -526,7 +532,7 @@ def write_vault(
         logger.critical("Could not create %s: %s", printable(str(directory)), exc)
         return exits.NO_OUTPUT
 
-    index = index_by_package(found, [item.package for item in named])
+    index = index_by_package(found, [item.package for item in named], copyable=copyable)
     tally: dict[str, list[str]] = {name: [] for name in OUTCOMES}
     for item in named:
         if not item.filename:
