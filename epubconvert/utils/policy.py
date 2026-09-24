@@ -58,6 +58,10 @@ class Assignment:
     #: and its identifier was not read. The file is kept from the orphan
     #: list, and the copy is reported not downloaded rather than copied.
     unverified: bool = False
+    #: A package left unnamed, as not downloaded: under ``--skip-incomplete``
+    #: a package iCloud has evicted, whose policy names it from the package
+    #: document reading would download.
+    unnamed: bool = False
     #: A package that kept a numbered file of its name on the shelf
     #: (claims.kept_numbers), rather than claiming the first free name.
     kept_number: bool = False

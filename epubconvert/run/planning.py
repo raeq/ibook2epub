@@ -64,6 +64,16 @@ ORPHAN: Status = "orphan"
 COPY: Status = "copy"
 COPIED: Status = "copied"
 
+#: Why a book iCloud has evicted is skipped.
+NOT_DOWNLOADED = "not downloaded from iCloud"
+
+#: What a run says of the books it left unnamed rather than download them.
+NOT_NAMED = (
+    "%d book(s) not downloaded from iCloud could not be named without "
+    "downloading them; a copy of one already on the shelf is counted as an "
+    "orphan."
+)
+
 #: How ``--on-collision`` may be set.
 CollisionMode = Literal["skip", "suffix"]
 SKIP: CollisionMode = "skip"
@@ -236,6 +246,9 @@ def assign_names(
     for it, which is what keeps a no-op rerun over thousands of books free of
     any source-side open. A package that cannot be parsed yields no metadata
     rather than an error, and the policy falls back to the directory name.
+    Under ``--skip-incomplete`` a package iCloud has evicted is not read: it
+    is left unnamed, and reported not downloaded, as an evicted zipped book
+    is.
 
     :param packages: Packages to name.
     :param policy: Naming policy supplying filenames and identities.
@@ -252,6 +265,32 @@ def assign_names(
     setup = _Naming(
         policy, on_collision, getattr(policy, "max_bytes", 0), unopened=unopened
     )
+    unnamed = _left_unnamed(packages, policy, unopened)
+    return sorted(
+        [
+            *_assign_all([p for p in packages if p not in unnamed], setup, shelf),
+            *(
+                Assignment(package, "", "", NOT_DOWNLOADED, unnamed=True)
+                for package in sorted(unnamed)
+            ),
+        ],
+        key=lambda item: item.package,
+    )
+
+
+def _assign_all(
+    packages: Sequence[Path], setup: _Naming, shelf: Collection[str]
+) -> list[Assignment]:
+    """
+    Name every package to be named, as :func:`assign_names` describes.
+
+    :param packages: Packages to name.
+    :param setup: The naming configuration.
+    :param shelf: The names of the files on the shelf.
+
+    :return: One :class:`Assignment` per package, in sorted order.
+    """
+    policy = setup.policy
     wanted = _wanted_names(packages, policy)
     crowded = Counter(policy.identity(name) for _, name, _ in wanted)
     claims = Claims()
@@ -271,6 +310,27 @@ def assign_names(
             kept=kept.get(index),
         )
     return [named[index] for index in range(len(wanted))]
+
+
+def _left_unnamed(
+    packages: Sequence[Path], policy: NamingPolicy, unopened: Container[Path]
+) -> frozenset[Path]:
+    """
+    Find the packages that naming them would download.
+
+    Under a policy that names a book from its package document, reading it
+    downloads a package iCloud has evicted; ``--skip-incomplete`` exists to
+    leave such a book where it is, and every one was read to be named.
+
+    :param packages: Packages to name.
+    :param policy: The naming policy.
+    :param unopened: The books not to open.
+
+    :return: The packages to leave unnamed, as not downloaded.
+    """
+    if not getattr(policy, "needs_metadata", False):
+        return frozenset()
+    return frozenset(package for package in packages if package in unopened)
 
 
 def _kept_on_shelf(
@@ -735,6 +795,9 @@ def plan_exports(
             "%d book(s) kept their folder name: no title in the package document.",
             from_folder,
         )
+    unnamed = sum(1 for item in assignments if item.unnamed)
+    if unnamed:
+        logger.warning(NOT_NAMED, unnamed)
     named = {item.package: item for item in assignments}
     # Naming read no package document, so no book carries an identifier to
     # compare against the archive holding its name. See _decide.
@@ -771,6 +834,8 @@ def _decide(
     # Neither "write it", which would replace another book's archive, nor
     # "exported", which would silently drop this one.
     filename, clash, reason = place(assignment, shelf)
+    if assignment.unnamed:
+        return Decision(package, INCOMPLETE, reason=reason)
     if not filename:
         return Decision(package, COLLISION, reason=reason)
     found = clash.path if clash is not None else None

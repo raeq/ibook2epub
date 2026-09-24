@@ -209,6 +209,49 @@ class TestARefreshOpensNoEvictedBook:
         assert not opened
 
 
+class TestAnEvictedPackageNamedFromItsMetadata:
+    """
+    Under ``--name-by author-title`` a package is named from its package
+    document, and under ``--skip-incomplete`` every evicted one was read to
+    be named: downloaded, ahead of the inspection that then called it not
+    downloaded. It is left unnamed, as an evicted zipped book is.
+    """
+
+    @pytest.mark.parametrize("listing", [[], ["--list", "--json"]])
+    def test_it_is_not_read_and_is_not_downloaded(
+        self, tmp_path, output_dir, monkeypatch, capsys, listing
+    ):
+        library = tmp_path / "lib"
+        package = make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:P"
+        )
+        make_metadata_package(
+            library / "b", "Other.epub", title="Other", identifier="urn:uuid:O"
+        )
+        _evict(monkeypatch, *(path for path in package.rglob("*") if path.is_file()))
+        read = _package_reads(monkeypatch)
+        cap = [] if listing else ["-m", "0"]
+
+        code = run.main(
+            ["-s", str(library), "-o", str(output_dir), *cap, *listing]
+            + [*AUTHOR_TITLE, "--skip-incomplete"]
+        )
+        ran = capsys.readouterr()
+
+        assert code == 0
+        assert package not in read
+        assert "1 book(s) not downloaded from iCloud could not be named" in ran.err
+        if listing:
+            rows = {row["name"]: row for row in json.loads(ran.out)}
+            assert rows["Dune.epub"]["status"] == "incomplete"
+            assert rows["Dune.epub"]["reason"] == "not downloaded from iCloud"
+            assert rows["Other.epub"]["status"] == "pending"
+        else:
+            assert "1 not downloaded" in ran.out
+            assert "Skipped, not downloaded from iCloud: Dune.epub" in ran.err
+            assert [path.name for path in output_dir.glob("*.epub")] == ["Other.epub"]
+
+
 class TestAnEvictedPackageBesideACopyOfItsName:
     """
     Under ``--skip-incomplete`` an evicted package is not opened, so it has
