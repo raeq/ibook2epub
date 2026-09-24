@@ -5,7 +5,7 @@ and how it composes with ``--annotations-only``.
 ``test_library.py`` covers reading the database and rendering the two shapes.
 This covers the run around them: the file on disk, standard output, the dry
 run, the flags that contradict it, and the flags a run that converts nothing
-has no use for.
+-- or only reports, as ``--list`` and ``--verify`` do -- has no use for.
 """
 
 # Test names describe the behaviour under test; separate docstrings would only
@@ -654,3 +654,89 @@ class TestTheFlagsRefuseWhatTheyCannotDo:
 
     def test_csv_remains_the_default(self):
         assert cli.parse_args([]).library_format == "csv"
+
+
+class TestAReportingModeWritesNothing:
+    """
+    ``--list`` and ``--verify`` only read. An annotation flag beside one of
+    them asks for a write the run will never make, so it is refused rather
+    than dropped.
+    """
+
+    @pytest.mark.parametrize("report", ["--list", "--verify"])
+    def test_a_refresh_does_not_replace_the_report(self, report):
+        # -ar was dispatched before either report, so "--verify -ae -ar"
+        # rewrote every archive on the shelf and verified none of them.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args([report, "-ae", "-ar"])
+
+        assert refused.value.code == 2
+
+    @pytest.mark.parametrize("report", ["--list", "--verify"])
+    @pytest.mark.parametrize(
+        "write",
+        [
+            ["-ae"],
+            ["-ad", "h.json"],
+            ["-ad"],
+            ["-ad", "vault", "--annotations-format", "markdown"],
+            ["-ao", "h.json"],
+        ],
+    )
+    def test_an_annotation_destination_is_not_dropped(self, report, write):
+        # "--list -ad FILE" listed the library, wrote no file and exited 0.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args([report, *write])
+
+        assert refused.value.code == 2
+
+    def test_a_report_still_runs_alone(self):
+        assert cli.parse_args(["--verify"]).verify
+
+
+class TestARefreshConvertsNothing:
+    """
+    ``-ar`` rewrites the annotations in archives already on the shelf and
+    converts nothing, so a conversion flag beside it is refused as it is
+    beside the other convert-nothing modes.
+    """
+
+    @pytest.mark.parametrize(
+        "other",
+        [
+            ["--covers"],
+            ["--validate"],
+            ["--epubcheck"],
+            ["--refresh"],
+            ["--skip-incomplete"],
+            ["--match", "hobbit"],
+            ["-m", "0"],
+            ["--workers", "3"],
+            ["--min-free", "0"],
+            ["--no-copy-through"],
+            ["--no-shuffle"],
+            ["--force"],
+        ],
+    )
+    def test_a_conversion_flag_is_refused(self, other):
+        # "-ae -ar --match Alpha" rewrote every archive on the shelf: the
+        # refresh walks the whole library and --match was never consulted.
+        with pytest.raises(SystemExit) as refused:
+            cli.parse_args(["-ae", "-ar", *other])
+
+        assert refused.value.code == 2
+
+    @pytest.mark.parametrize(
+        "shaping",
+        [
+            ["--on-collision", "suffix"],
+            ["--name-by", "author-title"],
+            ["-p"],
+            ["-d"],
+            ["-ad", "h.json"],
+        ],
+    )
+    def test_what_shapes_the_refresh_is_still_accepted(self, shaping):
+        # The refresh finds each archive by the name the conversion gave it,
+        # so the naming flags change which archive it opens.
+        assert cli.parse_args(["-ae", "-ar", *shaping]).annotations_refresh

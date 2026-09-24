@@ -37,7 +37,12 @@ from ..utils.app_logger import logger
 from ..utils.display import collapse, printable
 from ..utils.policy import Assignment
 from .archive import write_atomically
-from .naming import encode_name
+from .naming import (
+    MAX_FILENAME_BYTES,
+    disambiguator,
+    encode_name,
+    truncate_bytes,
+)
 
 #: Ends the region this tool owns. Everything after it is the reader's and is
 #: copied through untouched. Written from the first run even when there is
@@ -75,12 +80,52 @@ SIDECAR_SUFFIX = ".md.new"
 #: concern and short enough to read.
 DIGEST_LENGTH = 16
 
-#: Characters that open a block element at the start of a line. A ``> `` prefix
-#: does not neutralise them: inside a blockquote they still open a heading, a
-#: list or a nested quote. An ordered list is numbered in ASCII digits
-#: (CommonMark 5.2); ``\d`` also matches digits in other scripts, which open
-#: nothing, so the backslash in front of them showed in the note.
-BLOCK_OPENERS = re.compile(r"^(\s*)(?:([#>+*-])|([0-9]+)([.)]))")
+#: What opens a block element at the start of a line. A ``> `` prefix does not
+#: neutralise it: inside a blockquote it still opens a heading, a list or a
+#: nested quote. A note's continuation lines have no prefix at all, and only
+#: ``# > + * -`` and list numbers were caught, so an unclosed fence or
+#: ``<!--`` in a note swallowed every highlight after it, ``===`` turned the
+#: line above into a heading, and a link reference definition vanished.
+#:
+#: Each opener is matched as CommonMark (4.1-4.9) and GFM tables define it, not
+#: by its first character, because every backslash shows in Obsidian's source
+#: view and an escaped ``[[`` is no longer a link: ``~~struck~~``,
+#: ``_emphasis_`` and ``<3`` open nothing and are left alone. A link label may
+#: continue onto the next line, so an unfinished one counts.
+#:
+#: Indentation is up to three spaces and nothing else. A fourth column, or a
+#: tab, opens an indented code block (``code``); a line led by any other white
+#: space opens nothing, and escaping behind one showed the backslash. An
+#: ordered list is numbered in ASCII digits (CommonMark 5.2); ``\d`` also
+#: matches digits in other scripts, which open nothing.
+BLOCK_OPENERS = re.compile(
+    r"""
+    ^(?:
+        (?P<code>(?:\ {0,3}\t|\ {4})[ \t]*)(?=[^ \t])   # indented code
+      | (?P<indent>\ {0,3})
+        (?:
+            (?P<mark>
+                [#>+*|-]                    # heading, quote, list, rule, table
+              | `(?=``) | ~(?=~~)            # code fence
+              | <(?=[A-Za-z/!?])            # HTML block, either marker included
+              | =(?==*[ \t]*$)              # setext underline
+              | _(?=(?:[ \t]*_){2}[ \t_]*$)  # thematic break
+              | \[(?=(?:[^\[\]\\]|\\.)*(?:\]:|\\?$))  # link reference definition
+            )
+          | (?P<number>[0-9]+)(?P<delimiter>[.)])  # ordered list
+        )
+    )
+    """,
+    re.VERBOSE,
+)
+
+#: What stands in for a column of indentation. CommonMark counts only spaces
+#: and tabs as indentation, so a no-break space keeps an indented line where
+#: the reader put it without opening a code block.
+INDENT = "\u00a0"
+
+#: CommonMark's tab stop, for turning a tab into columns.
+TAB_WIDTH = 4
 
 #: Frontmatter keys this tool owns, which are safe to emit bare because no book
 #: supplies them.
@@ -110,8 +155,10 @@ def _escape(line: str) -> str:
 
 
 def _escape_opener(match: re.Match[str]) -> str:
-    """Escape the punctuation that makes a block opener: ``\\#``, ``1\\.``."""
-    indent, mark, number, delimiter = match.groups()
+    """Neutralise one block opener: ``\\#``, ``1\\.``, or indentation as text."""
+    code, indent, mark, number, delimiter = match.groups()
+    if code is not None:
+        return INDENT * len(code.expandtabs(TAB_WIDTH))
     if mark is not None:
         return f"{indent}\\{mark}"
     return f"{indent}{number}\\{delimiter}"
@@ -313,11 +360,43 @@ def sidecar_for(target: Path) -> Path:
     """
     Name the copy written when the reader has edited the note itself.
 
+    A note shares its stem with its epub, and an epub name can be the full
+    255 bytes -- ``--name-by author-title`` clamps a long title to exactly
+    that. Its note is then 253 bytes and the plain sidecar name 257, which no
+    filesystem will create, so the reader's new highlights had nowhere to go.
+    Such a name is cut back to fit and marked with a digest of the note's
+    full name: two long titles sharing their first 240 bytes would otherwise
+    share a sidecar, and one book's would be rewritten with the other's
+    highlights.
+
     :param target: The note that is being left alone.
 
     :return: A path beside it that no book can be named.
     """
-    return target.with_name(target.name + SIDECAR_SUFFIX[len(".md") :])
+    name = target.name + SIDECAR_SUFFIX[len(".md") :]
+    if len(encode_name(name)) <= MAX_FILENAME_BYTES:
+        return target.with_name(name)
+    marker = f" {disambiguator(target.name)}"
+    budget = MAX_FILENAME_BYTES - len(encode_name(marker + SIDECAR_SUFFIX))
+    stem = target.name.removesuffix(".md")
+    return target.with_name(truncate_bytes(stem, budget) + marker + SIDECAR_SUFFIX)
+
+
+def _present(target: Path) -> bool:
+    """
+    Report whether *target* exists, raising when that cannot be established.
+
+    :param target: The path to test.
+
+    :return: True if something is there, False if nothing is.
+
+    :raises OSError: For any error other than the ones meaning "absent".
+    """
+    try:
+        target.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
 
 
 def readable(target: Path) -> bool:
@@ -548,16 +627,23 @@ def _write_one(  # pylint: disable=too-many-return-statements
 
     :return: One of :data:`OUTCOMES`.
     """
-    if target.exists() and not readable(target):
-        # A FIFO blocks read_text until a writer appears, which is never; an
-        # oversized file costs twice its size to read. Neither is a note.
-        logger.error(
-            "Skipped %s: not a readable note of a plausible size.",
-            printable(target.name),
-        )
-        return "unreadable"
     try:
-        existing = target.read_text(encoding="utf-8-sig") if target.exists() else None
+        # Inside the handler, and not exists(): a name past NAME_MAX raised
+        # ENAMETOOLONG from exists() outside any handler and took the whole
+        # vault with it, and from Python 3.14 exists() answers False to every
+        # error, which reads "could not check" as "absent". Only the errors
+        # that mean absent are taken as absent here.
+        present = _present(target)
+        if present and not readable(target):
+            # A FIFO blocks read_text until a writer appears, which is never;
+            # an oversized file costs twice its size to read. Neither is a
+            # note.
+            logger.error(
+                "Skipped %s: not a readable note of a plausible size.",
+                printable(target.name),
+            )
+            return "unreadable"
+        existing = target.read_text(encoding="utf-8-sig") if present else None
     except OSError as exc:
         # Not "foreign": this may well be a note this tool wrote. All that is
         # known is that it could not be checked, and saying otherwise put a

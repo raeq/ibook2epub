@@ -9,6 +9,31 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--list` and `--verify` refuse a flag that would write: `-ae -ar` used to
+  run the refresh instead, rewriting every archive on the shelf and neither
+  listing nor verifying anything, and `-ae` or `-ad` wrote nothing and
+  exited 0.
+
+- `--annotations-refresh` refuses `--match`, `--force` and every other
+  conversion-only flag. `-ae -ar --match X` used to refresh every book on
+  the shelf.
+
+- A note whose name is at the filesystem limit gets a sidecar it can write.
+  `<note>.md.new` passed 255 bytes and the whole vault write crashed; a note
+  that cannot be checked now costs that note, not the run.
+
+- A highlight or note that opens a code fence, an HTML block such as
+  `<!--`, a setext underline, a `___` rule, a link reference definition, a
+  table row or an indented code block no longer hides or restyles the rest
+  of the note. Indentation is kept as no-break spaces.
+
+- An existing detached export holding a lone surrogate (`"\ud83d"`) is
+  refused with exit 5 and left as it is, where it crashed with a traceback.
+
+- The README gives exit code 8, not 4, for missing Full Disk Access, and its
+  exit-code table matches `exits.MEANINGS` word for word, which a test now
+  enforces.
+
 - One package the run could not search no longer ends the whole run. A
   directory without search permission -- or, on macOS, one refused by the
   privacy settings -- raised out of the check that keeps every read inside

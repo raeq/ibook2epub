@@ -128,30 +128,34 @@ class TestAVaultNeedsTheLibrary:
         # No book at all was considered, which is what "check -s" is for.
         assert "considered 0 book(s)" in err
 
-    def test_verifying_a_shelf_still_needs_no_library(
+    def test_verifying_beside_a_vault_is_a_usage_error_not_a_missing_library(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
-        # --verify reads the output directory and writes no vault, so the
-        # markdown flags must not make it demand a library.
+        # --verify reads the output directory and writes no vault. The
+        # markdown flags once made it demand a library; then they were
+        # accepted and dropped, exit 0 with no vault written. Refused now,
+        # as the typo it is rather than as a missing library.
         _library(tmp_path, monkeypatch)
         shelf = tmp_path / "shelf"
         shelf.mkdir()
 
-        code = main(
-            [
-                "-s",
-                str(tmp_path / "no-such-library"),
-                "-o",
-                str(shelf),
-                "--verify",
-                "-ad",
-                str(tmp_path / "vault"),
-                "--annotations-format",
-                "markdown",
-            ]
-        )
+        with pytest.raises(SystemExit) as refused:
+            main(
+                [
+                    "-s",
+                    str(tmp_path / "no-such-library"),
+                    "-o",
+                    str(shelf),
+                    "--verify",
+                    "-ad",
+                    str(tmp_path / "vault"),
+                    "--annotations-format",
+                    "markdown",
+                ]
+            )
 
-        assert code == 0
+        assert refused.value.code == 2
+        assert not (tmp_path / "vault").exists()
 
     def test_a_filtered_run_does_not_blame_the_source_directory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys

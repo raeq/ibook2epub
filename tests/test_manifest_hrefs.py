@@ -61,3 +61,30 @@ class TestManifestHrefs:
         path = write_epub(tmp_path / "Book.epub", members)
 
         assert validate.validate_archive(path) == []
+
+    @pytest.mark.parametrize(
+        "href", ["text/chapter1.xhtml?x=1#f", "text/chapter1.xhtml#f?x=1"]
+    )
+    def test_a_query_and_a_fragment_in_either_order_leave_the_name(
+        self, tmp_path, href
+    ):
+        members = dict(MEMBERS)
+        members["OEBPS/content.opf"] = members["OEBPS/content.opf"].replace(
+            'href="text/chapter1.xhtml"', f'href="{href}"'
+        )
+        path = write_epub(tmp_path / "Book.epub", members)
+
+        assert validate.validate_archive(path) == []
+
+    def test_a_colon_in_the_first_segment_is_reached_through_dot_slash(self, tmp_path):
+        # "c:1.xhtml" is an absolute URL with scheme "c" (RFC 3986, 4.2), and
+        # OCF forbids ":" in a file name anyway. The docstring's way to name
+        # such a member is "./c:1.xhtml"; this pins that it still works.
+        members = dict(MEMBERS)
+        members["OEBPS/c:1.xhtml"] = members.pop("OEBPS/text/chapter1.xhtml")
+        members["OEBPS/content.opf"] = members["OEBPS/content.opf"].replace(
+            'href="text/chapter1.xhtml"', 'href="./c:1.xhtml"'
+        )
+        path = write_epub(tmp_path / "Book.epub", members)
+
+        assert validate.validate_archive(path) == []

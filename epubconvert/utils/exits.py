@@ -17,8 +17,10 @@ should retry.
 argparse emits it directly. Everything else moved off it. That is a deliberate
 break with the previous release, made while nothing had shipped to PyPI.
 
-:data:`MEANINGS` is the single source of the table in the README, so the
-documentation cannot drift from the codes.
+:data:`MEANINGS` is the single source of the table in the README, and
+``tests/test_exit_codes.py`` holds every row of that table to it, word for
+word. It once checked only that each number appeared, and five rows' text
+drifted.
 """
 
 from __future__ import annotations
@@ -65,6 +67,10 @@ MEANINGS: dict[int, str] = {
     NO_OUTPUT: "The output directory could not be created, opened or found.",
     MISSING_TOOL: "A required extra or external tool is not installed.",
     DAMAGED: "`--verify` found at least one damaged archive.",
-    NO_PERMISSION: "macOS refused access; the terminal needs Full Disk Access.",
+    # Names what was refused; "refused access" alone did not say to what.
+    NO_PERMISSION: (
+        "macOS refused access to the Books library; the terminal needs Full "
+        "Disk Access."
+    ),
     INTERRUPTED: "Stopped with Ctrl-C. Finished books are intact; rerun to continue.",
 }

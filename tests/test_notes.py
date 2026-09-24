@@ -285,6 +285,82 @@ class TestEscaping:
     def test_digits_that_open_no_list_are_left_alone(self, line):
         assert notes._escape(line) == line
 
+    @pytest.mark.parametrize(
+        ("line", "escaped"),
+        [
+            pytest.param("```", "\\```", id="backtick fence"),
+            pytest.param("~~~ python", "\\~~~ python", id="tilde fence"),
+            pytest.param("<!-- aside", "\\<!-- aside", id="html comment"),
+            pytest.param("<pre>", "\\<pre>", id="html block"),
+            pytest.param("===", "\\===", id="setext underline"),
+            pytest.param("___", "\\___", id="thematic break"),
+            pytest.param(
+                "[x]: https://example.com",
+                "\\[x]: https://example.com",
+                id="link reference definition",
+            ),
+            pytest.param(
+                "[an unfinished label",
+                "\\[an unfinished label",
+                id="label continued on the next line",
+            ),
+            pytest.param("| a | b |", "\\| a | b |", id="table row"),
+            pytest.param("  ```", "  \\```", id="indented fence"),
+        ],
+    )
+    def test_a_line_that_would_swallow_what_follows_is_escaped(self, line, escaped):
+        # Only # > + * - and list numbers were escaped. A note's continuation
+        # lines sit at the top level, so an unclosed fence or "<!--" hid every
+        # highlight after it, "===" turned the line above into a heading, and
+        # a link reference definition vanished from the note.
+        assert notes._escape(line) == escaped
+
+    @pytest.mark.parametrize(
+        ("line", "escaped"),
+        [
+            ("    code", "\u00a0" * 4 + "code"),
+            ("\tcode", "\u00a0" * 4 + "code"),
+            ("  \t  code", "\u00a0" * 6 + "code"),
+            ("        # deep", "\u00a0" * 8 + "# deep"),
+        ],
+    )
+    def test_an_indented_line_keeps_its_indent_as_text(self, line, escaped):
+        # Four columns of indentation open a code block. CommonMark counts
+        # only spaces and tabs as indentation, so a no-break space keeps the
+        # line where the reader put it without opening anything.
+        assert notes._escape(line) == escaped
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "``inline code`` first",
+            "~~struck~~ through",
+            "<3 this chapter",
+            "= a sum",
+            "_emphasis_ first",
+            "[[Another note]] links here",
+            "[a link](https://example.com) first",
+            "   three spaces",
+            "    ",
+            "\u3000# ideographic space",
+        ],
+    )
+    def test_a_line_that_opens_nothing_is_left_alone(self, line):
+        # Every backslash shows in Obsidian's source view, and an escaped
+        # "[[" is no longer a link. Only a line that opens a block is touched.
+        assert notes._escape(line) == line
+
+    def test_a_note_that_opens_a_fence_leaves_the_next_highlight_quoted(self):
+        body = notes.body(
+            [
+                _annotation(id="a", note="mine\n```\nunclosed"),
+                _annotation(id="b", text="the next highlight"),
+            ]
+        )
+
+        assert "\n```" not in body
+        assert "> the next highlight" in body
+
     def test_the_note_reader_accepts_trailing_space_after_its_marker(self):
         # The pattern holds the white space an editor may leave, so the reader
         # and the escaper agree on what a marker is without each stripping it.
@@ -549,6 +625,48 @@ class TestTheSidecarCannotTakeAnotherBooksName:
         # primary note on a later run.
         assert not notes.sidecar_for(Path("Foo.md")).name.endswith(".new.md")
 
+    def test_a_note_at_the_name_limit_still_gets_its_sidecar(self, tmp_path: Path):
+        # A 255-byte "<stem>.epub" -- what --name-by author-title clamps a long
+        # title to -- gives a 253-byte note, and "<note>.new" is 257 bytes.
+        # exists() on it raised ENAMETOOLONG out of the whole vault write.
+        stem = "A" * 250
+        named = [
+            Assignment(Path(f"{stem}.epub"), f"{stem}.epub", "long"),
+            Assignment(Path("Short.epub"), "Short.epub", "short"),
+        ]
+
+        def mine(source: str, text: str) -> dict[str, Any]:
+            return _annotation(id=text, text=text, book={"source": source})
+
+        vault = tmp_path / "vault"
+        notes.write_vault([mine(f"{stem}.epub", "first")], str(vault), named)
+        note = vault / f"{stem}.md"
+        note.write_text(
+            note.read_text(encoding="utf-8").replace("> first", "> mine"),
+            encoding="utf-8",
+        )
+
+        found = [
+            mine(f"{stem}.epub", "first"),
+            mine(f"{stem}.epub", "second"),
+            mine("Short.epub", "short"),
+        ]
+        code = notes.write_vault(found, str(vault), named)
+
+        sidecar = notes.sidecar_for(note)
+        assert code == 0
+        assert "second" in sidecar.read_text(encoding="utf-8")
+        assert sidecar.name.endswith(notes.SIDECAR_SUFFIX)
+        assert (vault / "Short.md").is_file()
+
+    def test_two_long_notes_sharing_a_prefix_do_not_share_a_sidecar(self):
+        # Clamping alone would cut both names back to the same bytes, and one
+        # book's sidecar would be rewritten with the other book's highlights.
+        first = notes.sidecar_for(Path("A" * 250 + "1.md"))
+        second = notes.sidecar_for(Path("A" * 250 + "2.md"))
+
+        assert first != second
+
 
 class TestFailuresThatDoNotNeedAPermissionBit:
     """
@@ -583,6 +701,20 @@ class TestFailuresThatDoNotNeedAPermissionBit:
             raise OSError(5, "Input/output error")
 
         monkeypatch.setattr(Path, "read_text", refuse)
+
+        assert notes._write_one(target, self._annotations()) == "unreadable"
+
+    @pytest.mark.parametrize("exists", ["raises", "answers"])
+    def test_a_name_the_filesystem_refuses_costs_one_note_not_the_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exists: str
+    ):
+        # exists() raised ENAMETOOLONG rather than answering False, and it was
+        # called outside any handler. Python 3.14 made it answer False to every
+        # error instead, which read "cannot check" as "absent": the same note
+        # then came out "failed" there and "unreadable" everywhere else.
+        if exists == "answers":
+            monkeypatch.setattr(Path, "exists", os.path.exists)
+        target = tmp_path / ("A" * 300 + ".md")
 
         assert notes._write_one(target, self._annotations()) == "unreadable"
 

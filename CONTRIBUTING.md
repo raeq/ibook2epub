@@ -68,8 +68,9 @@ line reporting it.
 
 ### Exit codes are a contract
 
-`epubconvert/utils/exits.py` holds every code with its meaning, and the README table
-is generated from `MEANINGS`, so the two cannot drift. A new failure mode gets
+`epubconvert/utils/exits.py` holds every code with its meaning, and a test holds
+each row of the README table to `MEANINGS` word for word, so the two cannot
+drift. Change the wording in `MEANINGS` and copy it into the README. A new failure mode gets
 a new code rather than reusing a near-enough one: five conditions once shared
 `2`, and a scheduled run could not tell a typo from a missing dependency.
 

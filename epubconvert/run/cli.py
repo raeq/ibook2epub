@@ -26,12 +26,14 @@ from ..utils.defaults import (
 from .planning import COLLISION_MODES, SKIP, STATUSES
 
 #: Flags that only mean something when books are converted or the shelf is
-#: read, each with its spelling. A run that converts nothing -- --library-export
-#: or --annotations-only -- refuses every one of them rather than ignoring it,
-#: because a flag the user typed that changes nothing is a run doing something
-#: other than what was asked, silently. One list for both modes, so the next
-#: conversion flag is not forgotten by one of them. --epubcheck comes before
-#: --validate, which it implies, so the flag named is the one typed. Judged
+#: read, each with its spelling. A run that converts nothing -- --library-export,
+#: --annotations-only or --annotations-refresh -- refuses every one of them
+#: rather than ignoring it, because a flag the user typed that changes nothing
+#: is a run doing something other than what was asked, silently. One list for
+#: every such mode, so the next conversion flag is not forgotten by one of
+#: them: -ar was, and "-ae -ar --match X" refreshed every book on the shelf.
+#: --epubcheck comes before --validate, which it implies, so the flag named is
+#: the one typed. Judged
 #: against the parser's defaults rather than by truthiness, so a flag with a
 #: real default -- --min-free, -m -- is caught too; one typed *as* its default
 #: is indistinguishable from untyped and passes, which changes nothing.
@@ -592,6 +594,17 @@ def _check_convert_nothing_flags(
         mode = "--library-export"
     elif args.annotations_only:
         mode = "--annotations-only"
+    elif args.annotations_refresh:
+        # A third convert-nothing mode, and it was missing here: it walks the
+        # whole shelf and consults none of these, so "-ae -ar --match Alpha"
+        # rewrote every archive rather than Alpha's. The two above cannot
+        # reach it -- each refuses -ae, which -ar requires.
+        mode = "--annotations-refresh"
+        if args.force:
+            parser.error(
+                f"{mode} rewrites an archive's annotations only when they "
+                "changed and never converts a book, so --force has nothing to do"
+            )
     else:
         return
     if args.force and args.library_export in (None, "", STDOUT):
@@ -607,6 +620,41 @@ def _check_convert_nothing_flags(
             parser.error(
                 f"{mode} reads Apple's container and converts nothing, so "
                 f"{spelled} has nothing to do"
+            )
+
+
+def _check_reporting_flags(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """
+    Refuse a write beside ``--list`` or ``--verify``, which only read.
+
+    :param parser: The parser, for reporting the refusal.
+    :param args: The parsed arguments.
+    """
+    report = "--list" if args.list_only else "--verify" if args.verify else None
+    if report is None:
+        return
+    if args.annotations_refresh:
+        # run._run_read_only dispatches -ar before either report, so
+        # "--verify -ae -ar" rewrote every archive on the shelf and verified
+        # none of them.
+        parser.error(
+            f"{report} only reads, so it cannot be combined with "
+            "--annotations-refresh, which rewrites the shelf"
+        )
+    # Neither report reads annotations, so "--list -ad FILE" listed the
+    # library, wrote no file and exited 0. -ao is not here: it is a
+    # convert-nothing mode, and CONVERSION_ONLY already refuses both reports
+    # beside it.
+    for held, spelled in (
+        (args.annotations_embedded, "--annotations-embedded"),
+        (args.annotations_detached, "--annotations-detached"),
+    ):
+        if held:
+            parser.error(
+                f"{report} only reads, so {spelled} would write nothing; run "
+                "the annotation export on its own"
             )
 
 
@@ -642,6 +690,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         args.validate = True
 
     _check_annotation_flags(parser, args)
+    _check_reporting_flags(parser, args)
     _check_library_flags(parser, args)
     _check_convert_nothing_flags(parser, args)
 

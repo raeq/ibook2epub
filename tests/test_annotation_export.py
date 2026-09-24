@@ -28,7 +28,7 @@ from zipfile import ZIP_STORED, ZipFile
 import pytest
 
 from epubconvert.collect import annotations, coredata
-from epubconvert.export import archive
+from epubconvert.export import archive, detached
 from epubconvert.export.naming import (
     MetadataNaming,
     PassthroughNaming,
@@ -284,6 +284,47 @@ class TestTheCommandLineMode:
         # NO_OUTPUT, not NO_SOURCE: the unreadable file is the destination.
         assert code == 5
         assert target.read_text(encoding="utf-8") == "this is not json"
+
+    def test_an_export_holding_a_lone_surrogate_is_refused_not_a_traceback(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # "\ud83d" is valid JSON and decodes to a lone surrogate, which the
+        # merged document then could not encode: UnicodeEncodeError is not an
+        # OSError, so it escaped main as a traceback.
+        library = self._container(monkeypatch, tmp_path)
+        target = tmp_path / "mine.json"
+        content = '{"annotations": [{"id": "OLD", "text": "\\ud83d"}]}'
+        target.write_text(content, encoding="utf-8")
+
+        code = run.main(["-s", str(library), "-ao", str(target)])
+
+        assert code == 5
+        assert target.read_text(encoding="utf-8") == content
+        assert "move it aside" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            '{"annotations": [{"id": "OLD", "\\udc80": "key"}]}',
+            '{"annotations": [{"id": "OLD", "book": {"title": ["x", "\\ud83d"]}}]}',
+        ],
+    )
+    def test_a_lone_surrogate_is_found_without_serialising_the_export_again(
+        self, tmp_path, monkeypatch, content
+    ):
+        # The export may be up to 256 MiB. Writing the whole parsed document
+        # back out to one string, only to search it, doubled the peak; the
+        # parsed structure is searched where it lies, keys included.
+        target = tmp_path / "mine.json"
+        target.write_text(content, encoding="utf-8")
+
+        def refuse(*_args, **_kwargs):
+            raise AssertionError("serialised the whole export to search it")
+
+        monkeypatch.setattr(json, "dumps", refuse)
+
+        with pytest.raises(coredata.ContainerUnavailableError, match="surrogate"):
+            detached._existing_annotations(target)  # pylint: disable=protected-access
 
     def test_an_unavailable_container_has_its_own_exit_code(
         self, tmp_path, monkeypatch

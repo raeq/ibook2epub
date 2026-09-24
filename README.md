@@ -642,7 +642,7 @@ standard error, because a run summary in the middle of the JSON would make it
 unparsable.
 
 **On macOS this needs Full Disk Access.** The databases live inside Apple's
-container. Without it you get exit code 4 and a message saying so, not a
+container. Without it you get exit code 8 and a message saying so, not a
 traceback.
 
 #### Straight into an Obsidian vault
@@ -965,14 +965,14 @@ output directory back off disk.
 |------|---------|
 | `0` | Every book that could be converted was. |
 | `1` | At least one book failed to convert. |
-| `2` | The command line was wrong: unknown or contradictory flags. |
-| `3` | Another run holds the output lock. Retry later. |
+| `2` | The command line was wrong: unknown, malformed or contradictory flags. |
+| `3` | Another run holds the output lock. Worth retrying later. |
 | `4` | The source directory does not exist, or no library was found. |
 | `5` | The output directory could not be created, opened or found. |
 | `6` | A required extra or external tool is not installed. |
-| `7` | --verify found at least one damaged archive. |
+| `7` | `--verify` found at least one damaged archive. |
 | `8` | macOS refused access to the Books library; the terminal needs Full Disk Access. |
-| `130` | Stopped with Ctrl-C. Finished books are intact. |
+| `130` | Stopped with Ctrl-C. Finished books are intact; rerun to continue. |
 
 Each code means exactly one thing, so a scheduled run can act on the status
 without reading the message: `3` is worth retrying later, `6` needs something
