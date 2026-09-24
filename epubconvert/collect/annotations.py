@@ -121,7 +121,7 @@ def text_fragment(text: str) -> str:
     if not collapsed:
         return ""
     if len(collapsed) <= FRAGMENT_WHOLE_LIMIT:
-        return f":~:text={quote(collapsed, safe=FRAGMENT_SAFE)}"
+        return f":~:text={_fragment_term(collapsed)}"
 
     start = _leading_words(collapsed, FRAGMENT_END_CHARS)
     end = _trailing_words(collapsed, FRAGMENT_END_CHARS)
@@ -134,10 +134,26 @@ def text_fragment(text: str) -> str:
         or end == collapsed
         or len(start) + len(end) >= len(collapsed)
     ):
-        return f":~:text={quote(collapsed, safe=FRAGMENT_SAFE)}"
-    return (
-        f":~:text={quote(start, safe=FRAGMENT_SAFE)},{quote(end, safe=FRAGMENT_SAFE)}"
-    )
+        return f":~:text={_fragment_term(collapsed)}"
+    return f":~:text={_fragment_term(start)},{_fragment_term(end)}"
+
+
+def _fragment_term(text: str) -> str:
+    """
+    Percent-encode one term of a text directive.
+
+    ``quote`` leaves ``-`` alone, as an unreserved URL character, but in a text
+    directive it is syntax: a leading ``prefix-,`` and a trailing ``,-suffix``
+    are recognised by it, so a highlight reading "-40 degrees" was read as a
+    suffix rather than as the text. The WICG syntax requires ``-``, ``&`` and
+    ``,`` percent-encoded; ``quote`` already does the other two. Every term
+    goes through here, so the three sites cannot disagree.
+
+    :param text: One term: the whole highlight, or one of its ends.
+
+    :return: The term, safe to place in a ``:~:text=`` directive.
+    """
+    return quote(text, safe=FRAGMENT_SAFE).replace("-", "%2D")
 
 
 def _leading_words(text: str, budget: int) -> str:

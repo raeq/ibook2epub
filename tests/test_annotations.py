@@ -286,6 +286,27 @@ class TestTheLocator:
 
         assert found["locator"] == ":~:text=Summary%20roadside%20justice"
 
+    @pytest.mark.parametrize(
+        ("text", "locator"),
+        [
+            ("-40 degrees", ":~:text=%2D40%20degrees"),
+            ("well-known", ":~:text=well%2Dknown"),
+            ("a, b & c", ":~:text=a%2C%20b%20%26%20c"),
+        ],
+    )
+    def test_the_characters_that_are_fragment_syntax_are_encoded(self, text, locator):
+        # A text directive reads a leading "prefix-," and a trailing ",-suffix"
+        # by their dash, so "-40 degrees" left bare was a suffix, not the
+        # highlight. The WICG syntax requires "-", "&" and "," percent-encoded.
+        assert annotations.text_fragment(text) == locator
+
+    def test_a_dash_is_encoded_in_both_ends_of_a_long_highlight(self):
+        text = "-" + " ".join(["word"] * 30) + " end-"
+        start, _, end = annotations.text_fragment(text).partition(",")
+
+        assert "-" not in start.removeprefix(":~:text=")
+        assert "-" not in end
+
     def test_the_original_cfi_is_kept_verbatim(self, tmp_path):
         make_databases(tmp_path)
 
