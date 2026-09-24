@@ -169,9 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_EXPORT_FILES,
         metavar="N",
         help=(
-            "Maximum number of packages to convert, "
-            f"default={DEFAULT_MAX_EXPORT_FILES}, 0=no limit. Files copied "
-            "through are not counted."
+            "Maximum number of packages to convert; 0=no limit, "
+            f"default={DEFAULT_MAX_EXPORT_FILES}. Files copied through are not "
+            "counted."
         ),
     )
     output.add_argument(
