@@ -683,6 +683,20 @@ class TestUnmeasurableFreeSpaceIsAnnounced:
         assert free > 0
         assert any("free space" in text for text in records)
 
+    def test_the_path_it_could_not_measure_is_escaped(
+        self, tmp_path, monkeypatch, records
+    ):
+        # The volume's path is the reader's, and a control character in it
+        # reached the terminal raw.
+        monkeypatch.setattr(inspect_output, "_warned_about_free_space", set())
+        shelf = tmp_path / "\x1b[2Kshelf"
+
+        inspect_output.free_megabytes(shelf)
+
+        [said] = [text for text in records if "free space" in text]
+        assert "\x1b" not in said
+        assert printable(str(shelf)) in said
+
 
 class TestOneBookCannotKillTheRun:
     """A surprise in a worker costs that book, not the summary."""

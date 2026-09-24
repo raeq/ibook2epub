@@ -86,6 +86,32 @@ class TestAFileTheMergeCannotKeyIsRefused:
         assert "move it aside" in reported
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",
+        "[]",
+        json.dumps(_document([], myNotes="mine")),
+        '{"annotations": [{"id": "\\ud83d"}]}',
+    ],
+    ids=["unreadable", "not an export", "unmergeable", "a lone surrogate"],
+)
+def test_a_refused_files_name_is_escaped(
+    tmp_path: Path, content: str, capsys: pytest.CaptureFixture[str]
+):
+    # The name is the reader's, and a control character in it reached the
+    # terminal raw.
+    app_logger.configure(verbosity=0)
+    target = tmp_path / "h\x1b[2K.json"
+    target.write_text(content, encoding="utf-8")
+
+    assert detached._write_detached(FRESH, str(target)) == exits.NO_OUTPUT
+
+    reported = capsys.readouterr().err
+    assert "\x1b" not in reported
+    assert "h\\x1b[2K.json is already there" in reported
+
+
 class TestTheReadersOwnKeyIsNamed:
     @pytest.mark.parametrize(
         ("entry", "named"),

@@ -60,7 +60,7 @@ def free_megabytes(path: Path) -> int:
         _warned_about_free_space.add(True)
         logger.warning(
             "Cannot measure free space on %s (%s); --min-free is not enforced.",
-            path,
+            printable(str(path)),
             exc,
         )
         return 1 << 30

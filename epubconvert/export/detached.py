@@ -149,6 +149,8 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
 
     :raises ContainerUnavailableError: If it is there and is not one of ours.
     """
+    # Escaped: the name is the reader's, and every refusal below says it.
+    name = printable(target.name)
     try:
         text = _read_back(target)
         if text is None:
@@ -158,20 +160,20 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
         # RecursionError is neither: deeply nested JSON raises it out of
         # json.loads, and it used to escape as a traceback.
         raise ContainerUnavailableError(
-            f"{target.name} is already there and could not be read ({exc}); "
+            f"{name} is already there and could not be read ({exc}); "
             "move it aside rather than have this overwrite it"
         ) from exc
     # Checked on the parsed value, never on its truthiness: a file holding
     # "null" parses to None and would otherwise read as nothing to merge into.
     if not isinstance(loaded, dict) or not isinstance(loaded.get("annotations"), list):
         raise ContainerUnavailableError(
-            f"{target.name} is already there and is not an annotation export; "
+            f"{name} is already there and is not an annotation export; "
             "move it aside rather than have this overwrite it"
         )
     unmergeable = _unmergeable(loaded)
     if unmergeable is not None:
         raise ContainerUnavailableError(
-            f"{target.name} is already there and {unmergeable}, which a rerun "
+            f"{name} is already there and {unmergeable}, which a rerun "
             "would drop; move it aside rather than have this overwrite it"
         )
     # A "\ud83d" escape is valid JSON and decodes to a lone surrogate, which
@@ -182,7 +184,7 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
     # .encode() is what the surrogate-safe naming rule forbids.
     if _holds_lone_surrogate(loaded):
         raise ContainerUnavailableError(
-            f"{target.name} is already there and holds a lone surrogate, which "
+            f"{name} is already there and holds a lone surrogate, which "
             "is not valid Unicode; move it aside rather than have this "
             "overwrite it"
         )
