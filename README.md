@@ -197,8 +197,8 @@ Choosing books:
   Which books this run considers.
 
   -m, --max-export-files N
-                        Maximum number of epub files to export, default=5,
-                        0=no limit.
+                        Maximum number of packages to convert, default=5,
+                        0=no limit. Files copied through are not counted.
   -s, --source-dir SOURCE_DIR
                         Path of the source directory containing *.epub/
                         packages. Defaults to whichever known iBooks location

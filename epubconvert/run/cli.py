@@ -169,8 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_EXPORT_FILES,
         metavar="N",
         help=(
-            "Maximum number of epub files to export, "
-            f"default={DEFAULT_MAX_EXPORT_FILES}, 0=no limit."
+            "Maximum number of packages to convert, "
+            f"default={DEFAULT_MAX_EXPORT_FILES}, 0=no limit. Files copied "
+            "through are not counted."
         ),
     )
     output.add_argument(
