@@ -285,8 +285,8 @@ def apply_annotations(
         written = write_export(
             args, found, args.annotations_detached, assignments, copyable=copyable
         )
-        # A failed book outranks the destination's own error: the books on
-        # the shelf are what the run is for, and the error is logged anyway.
+        # A failed book outranks the destination's own error, the order a
+        # conversion run uses too: see run._outcome.
         return code if code != exits.SUCCESS else written
     return code
 

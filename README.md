@@ -1001,6 +1001,12 @@ case, because nothing was attempted.
 
 A book that fails to convert is logged and the run continues with the rest.
 
+When more than one applies, a run exits with the first of these: `130` if it
+was stopped with Ctrl-C, `1` if a book failed or the run could not proceed,
+then the code for wherever the highlights were to go — `5` for a destination
+it could not write, for example. The summary line describes the books, so the
+code that leads is the one that agrees with it; the other reason is on stderr.
+
 Name collisions do **not** change the exit code. If you run this from a script
 or a cron job and need to know that books were skipped, check the summary line
 or watch for `Name collision, skipping:` in the log — a run that skips books

@@ -661,4 +661,31 @@ def _run(args: argparse.Namespace) -> int:
         report.failed + report.copies_failed,
     )
 
-    return annotated if annotated is not None else exit_code(report)
+    return _outcome(report, annotated)
+
+
+def _outcome(report: Report, annotated: int | None) -> int:
+    """
+    Choose the one exit code for a run that converted and then annotated.
+
+    The first of these that applies: 130 if the run was stopped with Ctrl-C;
+    1 if a book failed or the run could not proceed; the annotation step's
+    own code, such as 5 for a destination it could not write; otherwise 0.
+    The README's exit-code section states the same order.
+
+    The annotation code used to win outright, so a run stopped with Ctrl-C,
+    or one whose book had failed, exited 5 under a summary that said
+    "Interrupted" or "failed 1". The summary describes the books, and the
+    books are what the run is for, so their outcome comes first; the
+    annotation step has already logged its own reason on stderr.
+
+    :param report: The export's report.
+    :param annotated: The annotation step's exit code, or None when it had
+        nothing to report.
+
+    :return: A process exit code.
+    """
+    converted = exit_code(report)
+    if converted != exits.SUCCESS or annotated is None:
+        return converted
+    return annotated

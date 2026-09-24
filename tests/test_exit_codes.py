@@ -419,3 +419,47 @@ class TestAnInterruptedRunLeavesTheHighlightsAlone:
         run.main(["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-ae"])
 
         assert "reached no file" not in capsys.readouterr().err
+
+
+class TestTheExitCodeAgreesWithTheSummary:
+    """
+    An annotation destination's error replaced the run's own code, so a run
+    stopped with Ctrl-C, or one whose book failed, exited 5 under a summary
+    that said "Interrupted" or "failed 1".
+    """
+
+    @pytest.fixture(name="unwritable")
+    def _unwritable(self, tmp_path: Path) -> Path:
+        # Not JSON, so the detached export will not merge into it.
+        destination = tmp_path / "highlights.json"
+        destination.write_text("not json", encoding="utf-8")
+        return destination
+
+    def test_the_destination_alone_gives_its_own_code(
+        self, annotated, output_dir, unwritable
+    ):
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-q"]
+
+        assert run.main([*argv, "-ad", str(unwritable)]) == exits.NO_OUTPUT
+
+    def test_an_interrupt_outranks_the_destination(
+        self, annotated, output_dir, unwritable, monkeypatch
+    ):
+        monkeypatch.setattr(run, "export_planned", _interrupt)
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0", "-q"]
+
+        assert run.main([*argv, "-ad", str(unwritable)]) == exits.INTERRUPTED
+
+    def test_a_failed_book_outranks_the_destination(
+        self, annotated, output_dir, unwritable, monkeypatch, capsys
+    ):
+        def broken(*_args, **_kwargs):
+            raise OSError("disk error")
+
+        monkeypatch.setattr(convert, "zip_package", broken)
+        argv = ["-s", str(annotated), "-o", str(output_dir), "-m", "0"]
+
+        code = run.main([*argv, "-ad", str(unwritable)])
+
+        assert code == exits.FAILED
+        assert "failed 2" in capsys.readouterr().out.strip().splitlines()[-1]
