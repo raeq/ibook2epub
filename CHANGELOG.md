@@ -9,6 +9,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- One annotation whose style is an infinity no longer ends the whole
+  annotation export; it loses its style. A book whose recorded path holds a
+  NUL byte loses only its package metadata, not its highlights or its
+  catalogue entry.
+
+- `--verify` and `--validate` escape control characters in the names they
+  report -- manifest hrefs, item ids, spine idrefs, member names, rootfile
+  paths -- so a percent-encoded `%1B` in a book can no longer erase the line
+  reporting it.
+
+- The annotation export no longer writes entries that break its own schema:
+  an empty id is skipped, a negative style left out, a CFI stored after a
+  book address written bare as `epubcfi(...)`, and a location that is not a
+  CFI left out.
+
+- `encryption.xml` is read with the same bound as its size check, so a file
+  that grows in between fails closed.
+
+- In `--on-collision skip`, the archive of a book that lost its name to an
+  edition added later -- its only copy -- is no longer listed as an orphan.
+
+- Under `--name-by author-title`, each archive on the shelf is read once per
+  run instead of twice.
+
 - A run without `-s` no longer crashes with a traceback when macOS refuses
   to let it look into the second place Apple has kept the library; that
   place is passed over and the first is used.
