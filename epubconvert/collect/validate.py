@@ -27,7 +27,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import unquote, urldefrag
+from urllib.parse import unquote
 from xml.etree import ElementTree
 from xml.parsers import expat
 from zipfile import ZIP_STORED, BadZipFile, ZipFile
@@ -117,10 +117,7 @@ def usable_identifier(package: Package | None) -> str | None:
 
 
 #: A UUID, whatever case it is written in.
-_UUID = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
+_UUID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 #: The prefixes publishers put in front of the value itself. ``urn:`` scheme
 #: names are case-insensitive by RFC 8141, and this library holds both
@@ -255,12 +252,9 @@ def isbn10_of(isbn13: str | None) -> str | None:
         thirteen ASCII digits: a prefix test alone made ``"978"`` into ``"0"``
         and raised ValueError on ``"978abc..."``.
     """
-    if (
-        isbn13 is None
-        or len(isbn13) != 13
-        or not _ascii_digits(isbn13)
-        or not isbn13.startswith("978")
-    ):
+    if isbn13 is None or len(isbn13) != 13 or not isbn13.startswith("978"):
+        return None
+    if not _ascii_digits(isbn13):
         return None
     body = isbn13[3:12]
     check = (11 - _isbn10_sum(body) % 11) % 11
@@ -602,8 +596,8 @@ def _resolve(base: str, href: str) -> str:
 
     :return: The archive path the href points at.
     """
-    target, _ = urldefrag(href)
-    target = unquote(target.partition("?")[0])
+    # By hand: urldefrag parses the URL, and raised ValueError for " //[x".
+    target = unquote(href.partition("#")[0].partition("?")[0])
     if not target:
         return target
     directory = posixpath.dirname(base)
@@ -636,7 +630,10 @@ def _package(members: _Members) -> Package:
     :raises ValidationError: If the package document is missing or unparsable.
     """
     opf_path = _opf_path(members)
-    return _package_from_root(_element(members, opf_path), opf_path)
+    try:
+        return _package_from_root(_element(members, opf_path), opf_path)
+    except ValueError as exc:  # Every reader catches ValidationError, not this.
+        raise ValidationError(f"unreadable package document: {exc}") from exc
 
 
 def _canonical_identifier(root: ElementTree.Element) -> str | None:
