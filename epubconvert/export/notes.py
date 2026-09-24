@@ -566,6 +566,7 @@ def _write_notes(
         claimants=books,
         vault=Vault(directory),
         known=known.tags,
+        library=known.of_package,
     )
     collided: list[str] = []
     for item, mine in wanted:

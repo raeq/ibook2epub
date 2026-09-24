@@ -44,9 +44,12 @@ def _write(
     *,
     suffix: bool,
     library: tuple[str, ...] = (EPUB, PDF),
+    assets: dict[str, str | None] | None = None,
 ) -> int:
     named = [Assignment(Path(name), name, name) for name in library]
-    return notes.write_vault(found, str(vault), named, copyable=(), suffix=suffix)
+    return notes.write_vault(
+        found, str(vault), named, copyable=(), suffix=suffix, assets=assets
+    )
 
 
 def _notes(vault: Path) -> dict[str, str]:
@@ -138,6 +141,55 @@ class TestABookLosingItsLastHighlight:
             assert MINE in pdfs
         else:
             assert list(_notes(vault)) == ["Dune.md"]
+
+
+class TestABookWithoutHighlightsToday:
+    """
+    Its tagged note is its own whether or not it has highlights today, so a
+    namesake's outcome does not turn on them. Only the books with highlights
+    looked for their tagged notes, so without suffix the other book took the
+    name and was refused the note, exiting 1, on exactly the runs the note's
+    own book had nothing to write.
+    """
+
+    ASSETS: dict[str, str | None] = {"EPUBASSET": EPUB, "PDFASSET": PDF}
+
+    @pytest.mark.parametrize("pdf_has_highlights", [True, False])
+    def test_without_suffix_the_namesake_loses_the_collision_either_way(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        pdf_has_highlights: bool,
+    ):
+        app_logger.configure(verbosity=0)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "Dune.md").write_text(notes.compose(PDF_ONLY) + MINE)
+        found = BOTH if pdf_has_highlights else BOTH[:1]
+
+        code = _write(vault, found, suffix=False, assets=self.ASSETS)
+
+        assert code == exits.SUCCESS
+        reported = capsys.readouterr().err
+        assert "lost a name collision" in reported
+        assert "another book" not in reported
+        held = _notes(vault)
+        assert list(held) == ["Dune.md"]
+        assert "epub highlight" not in held["Dune.md"]
+        assert MINE in held["Dune.md"]
+
+    def test_under_suffix_it_keeps_a_numbered_note(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "Dune (2).md").write_text(notes.compose(PDF_ONLY) + MINE)
+        before = (vault / "Dune (2).md").read_bytes()
+        library = (PDF, EPUB)
+
+        code = _write(vault, BOTH[:1], suffix=True, library=library, assets=self.ASSETS)
+
+        assert code == exits.SUCCESS
+        assert (vault / "Dune (2).md").read_bytes() == before
+        assert "epub highlight" in _notes(vault)["Dune.md"]
 
 
 class TestANamesakeLeavingTheLibrary:

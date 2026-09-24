@@ -275,6 +275,7 @@ def note_names(
     claimants: Mapping[Path, Claimant],
     vault: Vault,
     known: Collection[str] | None,
+    library: Mapping[str, Collection[str]] | None = None,
 ) -> dict[Path, str | None]:
     """
     Give each book a note that no other book of the run writes.
@@ -288,7 +289,8 @@ def note_names(
 
     Three passes. A note already a book's -- tagged for it, or holding its
     highlights -- stays its own, before anything else is named: a note is
-    the book's it was written for, whichever book has highlights today. Then
+    the book's it was written for, whichever book has highlights today, and
+    a book with none today keeps the note tagged for it too. Then
     every book's own note name, in the order given, which is the run's own
     order, so the same book wins each run. Then, under suffix, a number for
     each book left without one, never onto a name another book's file gives
@@ -308,11 +310,19 @@ def note_names(
     :param vault: The notes already there.
     :param known: The tags of every book this run knows of; see
         :func:`holding`.
+    :param library: The tags of each package the library lists, by package
+        name, highlighted or not.
 
     :return: Each package's note name, or None when it has none.
     """
     names = _Names()
-    _reserve(named, claimants, vault, names, suffix=suffix, known=known)
+    tagged = {
+        item.package: Claimant(frozenset(tags), frozenset(), frozenset())
+        for item in named
+        if item.package not in claimants
+        and (tags := (library or {}).get(item.package.name))
+    }
+    _reserve(named, {**tagged, **claimants}, vault, names, suffix=suffix, known=known)
     for item in named:
         if item.package in names.given:
             continue
@@ -348,7 +358,7 @@ def _reserve(
     known: Collection[str] | None,
 ) -> None:
     """
-    Give each book with highlights the note already its own, if one is.
+    Give each book the note already its own, if one is.
 
     Looked for among the names the book could be given: its own, and under
     suffix its numbered ones. A note tagged for the book first, over every
@@ -357,8 +367,14 @@ def _reserve(
     a note never goes to one book while another's tagged note is still to
     be found.
 
+    A book with no highlights today keeps the note tagged for it. Only the
+    books with highlights looked, so without suffix a namesake took the name
+    and was refused the note, exiting 1, on exactly the runs its own book
+    had nothing to write, and lost the collision, exiting 0, on the others.
+
     :param named: Every book of the run with a name, in the run's order.
-    :param claimants: Each book with highlights.
+    :param claimants: Each book with highlights, and each book without
+        whose tags the library knows.
     :param vault: The notes already there.
     :param names: The names given so far, added to in place.
     :param suffix: Whether a book's numbered names are its too.
