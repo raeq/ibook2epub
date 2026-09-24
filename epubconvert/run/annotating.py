@@ -79,6 +79,7 @@ def annotations_after_export(
     found: list[dict[str, Any]] | None,
     *,
     copyable: Sequence[Path],
+    held_back: Collection[Path] = frozenset(),
 ) -> int | None:
     """
     Finish the annotation work the conversion could not do itself.
@@ -101,6 +102,8 @@ def annotations_after_export(
     :param copyable: The library's already-zipped books and PDFs, the other
         half of telling a highlight's book apart; see
         :func:`~epubconvert.export.archive.index_by_package`.
+    :param held_back: The books ``-m`` held back for a later run, which will
+        embed their highlights: not converted is not unconvertible.
 
     :return: An exit code when something went wrong, None otherwise.
     """
@@ -117,7 +120,7 @@ def annotations_after_export(
         # A file copied through is copied as it is, with nothing embedded.
         kept = set(copyable)
         packages = [item for item in named if item.package not in kept]
-        _warn_about_stranded(args, policy, found, packages, copyable)
+        _warn_about_stranded(args, policy, found, packages, copyable, held_back)
         _warn_about_copies(
             index_by_package(
                 found, [item.package for item in named], copyable=copyable, quiet=True
@@ -175,6 +178,7 @@ def _warn_about_stranded(
     found: list[dict[str, Any]],
     named: Sequence[Assignment],
     copyable: Sequence[Path],
+    held_back: Collection[Path] = frozenset(),
 ) -> None:
     """
     Say so when highlights had nowhere to go.
@@ -193,11 +197,18 @@ def _warn_about_stranded(
     Not called when ``-ad`` is also in force: those highlights are already in a
     file, so there is nothing to warn about.
 
+    A book ``-m`` held back is left out, as a run stopped with Ctrl-C leaves
+    out the books it did not reach: the summary says it is held back, and
+    the next run embeds its highlights. It was counted here, and the reader
+    of a plain ``-ae`` under the default cap was told those books' highlights
+    reached no file and pointed at DRM. One line says they wait instead.
+
     :param args: Parsed command line arguments.
     :param policy: The naming policy the names came from.
     :param found: Every annotation this run read.
     :param named: The names the export used.
     :param copyable: The library's already-zipped books and PDFs.
+    :param held_back: The books ``-m`` held back for a later run.
     """
     # Quiet: the conversion before this read the same annotations against
     # the same library and has already said which it could not place.
@@ -209,15 +220,23 @@ def _warn_about_stranded(
     # warning, seeing a file there, said nothing.
     places = placed(named, args.output_dir, policy)
     stranded_books: list[str] = []
-    stranded = 0
+    stranded = waiting = 0
     for item in named:
         if places.get(item.package) is not None:
             continue
         mine = annotations_for_book(item.package.name, index)
-        if mine:
+        if item.package in held_back:
+            waiting += len(mine)
+        elif mine:
             stranded_books.append(item.package.name)
             stranded += len(mine)
 
+    if waiting:
+        logger.info(
+            "%d annotation(s) wait for books -m held back; they go in when those "
+            "are converted.",
+            waiting,
+        )
     if not stranded:
         return
 

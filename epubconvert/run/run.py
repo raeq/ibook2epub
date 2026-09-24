@@ -78,6 +78,7 @@ from .copynames import Names, claim_copies
 from .placing import settled
 from .planning import (
     COLLISION,
+    PENDING,
     Decision,
     PlanOptions,
     assign_names,
@@ -455,7 +456,7 @@ def _run_export(
     args: argparse.Namespace,
     policy: NamingPolicy,
     found: list[dict[str, Any]] | None,
-) -> tuple[Report, int, list[Assignment], list[Path]]:
+) -> tuple[Report, int, list[Assignment], list[Path], frozenset[Path]]:
     """
     Collect, select and export, under the output directory lock.
 
@@ -470,8 +471,9 @@ def _run_export(
         names it gave every book it converted. Annotations are applied against
         that same assignment afterwards: naming the library again disagreed
         with it under ``--match`` with a collision suffix, so the archive the
-        refresh looked for did not exist. And the library's copyable files,
+        refresh looked for did not exist. The library's copyable files,
         which the annotation step needs for the same reason the embed does.
+        And the books ``-m`` held back, which a later run converts.
 
     :raises OutputLockedError: If another run holds the output lock, or the
         lock file could not be opened.
@@ -487,7 +489,7 @@ def _run_export(
         # a traceback with no summary and no 130.
         report.interrupted = True
         logger.warning("Interrupted before anything was written.")
-        return report, 0, [], []
+        return report, 0, [], [], frozenset()
     if args.force and args.max_export_files and len(packages) > args.max_export_files:
         logger.warning(
             "--force selected %d book(s) but -m limits this run to %d; "
@@ -515,6 +517,7 @@ def _run_export(
     # run move the output directory underneath the decisions.
     pending_before = 0
     decisions: list[Decision] = []
+    held: frozenset[Path] = frozenset()
     # The guard covers taking the lock and the sweep too. They were outside
     # it, and a Ctrl-C there escaped to main's last resort: 130, but no
     # summary, and nothing on stdout at all under -q.
@@ -550,6 +553,7 @@ def _run_export(
             # Counted where the cap is applied, so the summary can tell books
             # it held back from books that failed rather than infer it.
             report.held_back = pending_before - count_pending_decisions(selected)
+            held = _pending(decisions) - _pending(selected)
             asyncio.run(
                 export_planned(
                     selected,
@@ -586,6 +590,14 @@ def _run_export(
             policy,
         ),
         copyable,
+        held,
+    )
+
+
+def _pending(decisions: Sequence[Decision]) -> frozenset[Path]:
+    """Return the packages of the decisions that still have an export ahead."""
+    return frozenset(
+        decision.package for decision in decisions if decision.status == PENDING
     )
 
 
@@ -850,6 +862,7 @@ def _after_export(
     named: Sequence[Assignment],
     found: list[dict[str, Any]] | None,
     copyable: Sequence[Path],
+    held_back: frozenset[Path] = frozenset(),
 ) -> int | None:
     """
     Do the annotation work the export leaves over, unless the run was stopped.
@@ -866,6 +879,7 @@ def _after_export(
     :param named: The names the export used.
     :param found: The annotations this run read, or None.
     :param copyable: The library's already-zipped books and PDFs.
+    :param held_back: The books ``-m`` held back for a later run.
 
     :return: What :func:`~epubconvert.run.annotating.annotations_after_export`
         returns, or None when the run was stopped, before this or during it.
@@ -875,7 +889,7 @@ def _after_export(
     if not report.interrupted:
         try:
             return annotations_after_export(
-                args, policy, named, found, copyable=copyable
+                args, policy, named, found, copyable=copyable, held_back=held_back
             )
         except KeyboardInterrupt:
             # A Ctrl-C while the detached file or the vault was written
@@ -933,7 +947,7 @@ def _run(args: argparse.Namespace) -> int:
     found = gather_annotations(args, policy)
 
     try:
-        report, remaining, named, copyable = _run_export(args, policy, found)
+        report, remaining, named, copyable, held = _run_export(args, policy, found)
     except OutputLockedError as exc:
         logger.critical("%s", exc)
         return exc.exit_code
@@ -941,7 +955,13 @@ def _run(args: argparse.Namespace) -> int:
     # After the books are on the shelf, so annotations reach them by the same
     # path --annotations-refresh uses. A dry run writes nothing, here included.
     annotated = _after_export(
-        args, policy, report, named=named, found=found, copyable=copyable
+        args,
+        policy,
+        report,
+        named=named,
+        found=found,
+        copyable=copyable,
+        held_back=held,
     )
     summary = format_summary(report, args.output_dir, args.dry_run, remaining)
     # Standard output belongs to the document when one is going there; a
