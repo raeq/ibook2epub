@@ -14,14 +14,18 @@ book, a copy and a package of one book, or two files of one size.
 
 import json
 import os
+from itertools import product
 from pathlib import Path
+from typing import NamedTuple
 from zipfile import ZipFile
 
 import pytest
 
+from epubconvert.collect import annotations
 from epubconvert.export.naming import disambiguator
 from epubconvert.run import run
 from tests.conftest import make_metadata_package, remove_tree
+from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import (
     SUFFIX,
     identifier_of,
@@ -339,3 +343,172 @@ class TestAPackageZippedInPlaceKeepsItsMarkedArchive:
             for row in rows
             if row["source"] == str(package)
         ] == [("copied", marked)]
+
+
+class Case(NamedTuple):
+    """A copy on the shelf and a package added under its name."""
+
+    mode: str
+    #: The naming flags, and the name they give both books.
+    policy: list[str]
+    name: str
+    #: The copy's identifier and the package's.
+    ids: tuple[str, str] = ("none", "urn:uuid:P")
+    #: The copy's folder name and the package's.
+    folders: tuple[str, str] = ("Dune.epub", "Dune.epub")
+
+    @property
+    def flags(self) -> list[str]:
+        return ["--on-collision", self.mode, *self.policy]
+
+
+#: Every mode and policy, each with one of the two declaring no identifier.
+_UNIDENTIFIED = [
+    Case(mode, policy, name, ids)
+    for mode, (policy, name), ids in product(
+        ["skip", "suffix"],
+        [
+            ([], "Dune.epub"),
+            (["--name-by", "author-title"], "Frank Herbert - Dune.epub"),
+        ],
+        [("none", "urn:uuid:P"), ("urn:uuid:Z", "none")],
+    )
+]
+
+#: Each mode, under a policy that gives two folder names one name, so a
+#: highlight is the package's alone.
+_TWO_FOLDERS = [
+    Case(mode, policy, name, folders=folders)
+    for mode, (policy, name, folders) in product(
+        ["skip", "suffix"],
+        [
+            (["-p", "romanize"], "Cafe.epub", ("Café.epub", "Cafe.epub")),
+            (
+                ["--name-by", "author-title"],
+                "Frank Herbert - Dune.epub",
+                ("X.epub", "Y.epub"),
+            ),
+        ],
+    )
+]
+
+
+def _rows(argv: list[str], capsys) -> list[dict[str, str]]:
+    capsys.readouterr()
+    run.main([*argv, "--list", "--json"])
+    rows: list[dict[str, str]] = json.loads(capsys.readouterr().out)
+    return rows
+
+
+def _copied_then_package(tmp_path: Path, output_dir: Path, case: Case) -> list[str]:
+    """
+    Copy a zipped book to the shelf, then add a package of its name.
+
+    :return: The arguments that run over them.
+    """
+    library = tmp_path / "lib"
+    zipped_book(tmp_path, library / "a" / case.folders[0], case.ids[0], "Dune")
+    argv = ["-s", str(library), "-o", str(output_dir), *case.flags]
+    run.main([*argv, "-m", "0", "-q"])
+    make_metadata_package(
+        library / "b",
+        case.folders[1],
+        title="Dune",
+        creator="Frank Herbert",
+        identifier=case.ids[1],
+    )
+    return argv
+
+
+class TestAPackageBesideACopyNothingTellsApart:
+    """
+    A zipped book copied, then a package of its name added, where one of the
+    two declares no usable identifier. The claim pass kept the file as the
+    copy's own bytes, by its size and modification time, and placing then
+    put the package at it too, trusting the name: two rows at one file, and
+    the package never exported. ``--force`` wrote it over the copy, and
+    ``-ae -ar`` wrote its highlights into the copy's archive.
+    """
+
+    MARKDOWN = ["--annotations-format", "markdown", "-q"]
+
+    @pytest.mark.parametrize("case", _UNIDENTIFIED)
+    def test_the_package_is_not_placed_at_the_copys_file(
+        self, tmp_path, output_dir, capsys, case
+    ):
+        argv = _copied_then_package(tmp_path, output_dir, case)
+        package = str(tmp_path / "lib" / "b" / case.folders[1])
+        copied = (output_dir / case.name).read_bytes()
+
+        rows = _rows(argv, capsys)
+        run.main([*argv, "-m", "0", "-q"])
+        again = _rows(argv, capsys)
+
+        [mine] = [row for row in rows if row["source"] == package]
+        targets = [row["target"] for row in rows if row["target"]]
+        assert len(targets) == len(set(targets))
+        assert "orphan" not in {row["status"] for row in again}
+        assert (output_dir / case.name).read_bytes() == copied
+        if case.mode == "skip":
+            assert mine["status"] == "collision"
+            assert mine["reason"].startswith(
+                f"{case.name} holds another book, {case.ids[0]}"
+                if case.ids[0] != "none"
+                else f"{case.name} already holds this name"
+            )
+        else:
+            assert mine["status"] == "pending"
+            assert Path(mine["target"]).name != case.name
+            [written] = [row for row in again if row["source"] == package]
+            assert written["status"] == "exported"
+            assert identifier_of(Path(written["target"])) == case.ids[1]
+
+    @pytest.mark.parametrize("case", _UNIDENTIFIED)
+    @pytest.mark.parametrize("rewrite", ["--force", "--refresh"])
+    def test_a_rewrite_does_not_write_the_package_over_the_copy(
+        self, tmp_path, output_dir, case, rewrite
+    ):
+        argv = _copied_then_package(tmp_path, output_dir, case)
+        package = tmp_path / "lib" / "b" / case.folders[1]
+        os.utime(package, ns=(LATER, LATER))
+        copied = (output_dir / case.name).read_bytes()
+
+        run.main([*argv, "-m", "0", "-q", rewrite])
+
+        assert (output_dir / case.name).read_bytes() == copied
+
+    @pytest.mark.parametrize("case", _TWO_FOLDERS)
+    def test_a_refresh_of_annotations_does_not_write_into_the_copy(
+        self, tmp_path, output_dir, monkeypatch, case
+    ):
+        if "romanize" in case.policy:
+            # romanize is the disarm extra's; the test-minimal job has none.
+            pytest.importorskip("disarm", reason="romanize needs the disarm extra")
+        argv = _copied_then_package(tmp_path, output_dir, case)
+        run.main([*argv, "-m", "0", "-q"])
+        container = tmp_path / "container"
+        package = tmp_path / "lib" / "b" / case.folders[1]
+        make_databases(
+            container,
+            rows=[highlight(asset="P", uuid="UP", text="PACKAGE HIGHLIGHT")],
+            books=[library_row(asset="P", path=str(package), title="Dune")],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(container, policy),
+        )
+        copied = (output_dir / case.name).read_bytes()
+
+        run.main([*argv, "-ae", "-ar", "-q"])
+        run.main([*argv, "-ao", str(tmp_path / "vault"), *self.MARKDOWN])
+
+        assert (output_dir / case.name).read_bytes() == copied
+        # A note is named after the package's own archive, never the copy's;
+        # in skip mode the package lost its name, and has none.
+        notes = [note.stem for note in (tmp_path / "vault").glob("*.md")]
+        if case.mode == "skip":
+            assert notes == []
+        else:
+            [note] = notes
+            assert note != Path(case.name).stem
+            assert identifier_of(output_dir / f"{note}.epub") == "urn:uuid:P"

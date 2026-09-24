@@ -81,8 +81,9 @@ def claim_copies(
     at a name: a copy that finds its own bytes under the name another book
     holds -- copied before the package arrived -- keeps that file in either
     mode, rather than being copied again under a suffix, and the package that
-    now wants it has its identifier read, as a folder-named book about to be
-    written has, so it is not reported exported from the other book's file.
+    now wants it claims another name, or in skip mode loses it
+    (:meth:`_Claiming.reclaim`), so it is not reported exported from the
+    other book's file whatever the identifiers can say.
 
     :param assigned: The whole library's package names, from
         :func:`~epubconvert.run.planning.assign_names`.
@@ -157,6 +158,10 @@ class _Claiming:
     packaged: dict[str, Assignment] = field(default_factory=dict)
     #: The shelf's files a copy has kept as its own, each by one copy only.
     taken: set[Path] = field(default_factory=set)
+    #: Those of them stat says are the copy's own bytes, whatever any
+    #: identifier says, with the copy's identifier when it was read: no
+    #: package is placed at one (:meth:`reclaim`).
+    own_bytes: dict[Path, str | None] = field(default_factory=dict)
     #: The modification time of every file the pass copies, in nanoseconds.
     stamps: frozenset[int] = frozenset()
 
@@ -203,7 +208,7 @@ class _Claiming:
 
     def reclaim(self, item: Assignment) -> Assignment:
         """
-        Name a package again that kept a numbered file a copy keeps.
+        Name a package again whose file a copy keeps.
 
         A package keeps a numbered file of its name (claims.kept_numbers):
         one declaring its identifier, or with none to go by, the one
@@ -217,20 +222,36 @@ class _Claiming:
         the package claims the first free name of its own, as before it kept
         any.
 
+        So too for any package given a name whose file stat says is a copy's
+        own bytes (:meth:`keep_all`), however it came by the name. Placing
+        asks the identifiers whose file it is, and where either says nothing
+        it trusts the name: the package was placed at the copy's file, two
+        rows at one file, and never exported; ``--force`` wrote it over the
+        copy, and ``-ae -ar`` wrote its highlights into the copy's archive.
+        In skip mode it has no other name to claim, and loses this one.
+
         :param item: A package's assignment.
 
-        :return: It, or when a copy keeps the numbered file it kept, its
-            first free name, or no name and the reason.
+        :return: It, or when a copy keeps the file it was given, its first
+            free name, or no name and the reason.
         """
-        if not item.kept_number or item.marked is None:
+        if not item.filename:
             return item
         key = filesystem_key(item.identity)
-        policy = self.setup.policy
-        if not any(
-            filesystem_key(policy.identity(found.name)) == key for found in self.taken
-        ):
+        held = self._kept_at(key, self.own_bytes) or (
+            self._kept_at(key, self.taken) if item.kept_number else None
+        )
+        if held is None:
             return item
         self.packaged.pop(key, None)
+        policy = self.setup.policy
+        if item.marked is None:
+            return replace(
+                item,
+                filename="",
+                reason=self._held_by_copy(held, item.identifier),
+                kept_number=False,
+            )
         wanted = item.marked
         taken = _claim(self.claims, wanted, policy.identity(wanted), setup=self.setup)
         if taken is None:  # pragma: no cover - every " (n)" spoken for
@@ -246,6 +267,36 @@ class _Claiming:
         self.holders[filesystem_key(identity)] = filename
         self.packaged[filesystem_key(identity)] = item
         return replace(item, filename=filename, identity=identity, kept_number=False)
+
+    def _held_by_copy(self, held: Path, identifier: str | None) -> str:
+        """
+        Say why a package may not have the name of a copy's own file.
+
+        :param held: The copy's file.
+        :param identifier: The package's usable identifier, when read.
+
+        :return: The reason, naming the copy's book where its identifier
+            was read and is not the package's.
+        """
+        other = self.own_bytes.get(held)
+        reason = (
+            f"{held.name} holds another book, {other}"
+            if other is not None and other != identifier
+            else f"{held.name} already holds this name"
+        )
+        return f"{reason}; this book is {identifier}" if identifier else reason
+
+    def _kept_at(self, key: str, files: Collection[Path]) -> Path | None:
+        """The file of *files* whose name has the filesystem key *key*, if any."""
+        policy = self.setup.policy
+        return next(
+            (
+                found
+                for found in files
+                if filesystem_key(policy.identity(found.name)) == key
+            ),
+            None,
+        )
 
     def settle(
         self,
@@ -375,6 +426,8 @@ class _Claiming:
             return None
         mine, identity, identifier = kept
         self.taken.add(mine)
+        if exact:
+            self.own_bytes[mine] = identifier
         # Refused only where a package was given the name, since no other
         # copy's file gets here: the copy's own bytes, which it keeps while
         # that package moves on.

@@ -40,8 +40,9 @@
  *       mode, and a copy with its own file under its name claims first. A
  *       copy that lost its name keeps a file of its own under it (_lost)
  *       either way. A copy has no digest marker: in suffix mode it moves on
- *       to its own name, numbered
- *   _identified                a package's identifier is read when a copy
+ *       to its own name, numbered. With KeepOwn, one whose name holds a
+ *       file not its own is placed at no file on the shelf (not_own)
+ *   _identified               a package's identifier is read when a copy
  *       wants its name, whatever the policy
  *   _own                       a copy's own file is its own bytes, which the
  *       size and modification time tell (_same_file); where it and the file
@@ -62,8 +63,10 @@
  * the policy, or the file of its marked name once its crowd has left it;
  * with no usable identifier, the one numbered file when no other package
  * wants its name and nothing holds the plain name. One that kept a file a
- * copy keeps claims a name again (_Claiming.reclaim). TakesArchive stands for a person deleting a book's
- * archive with the book: nothing in the tool deletes one.
+ * copy keeps claims a name again (_Claiming.reclaim), and with ReclaimOwn so
+ * does one given the name of a file the claim pass kept as a copy's own
+ * bytes, whoever's identifier is unusable. TakesArchive stands for a person
+ * deleting a book's archive with the book: nothing in the tool deletes one.
  *
  * find_orphans is modelled too: an archive on the shelf is an orphan when no
  * book is placed at it, no book that lost its name may hold it, and it is not
@@ -109,8 +112,10 @@ CONSTANTS
     SharedId,      \* books declaring one usable identifier between them
     KeepOne,       \* a file is kept by one copy at most, its own bytes first
     KeepNumbered,  \* claims.kept_numbers: a package keeps its numbered file
-    TakesArchive   \* with AllowRemovals, a book leaves with its archive, as a
+    TakesArchive,  \* with AllowRemovals, a book leaves with its archive, as a
                    \* person deletes both; otherwise the archive stays
+    ReclaimOwn     \* _Claiming.reclaim: a package given the name of a file
+                   \* that is a copy's own bytes claims a name again
 
 Books == 1..N
 
@@ -302,14 +307,22 @@ Kept(C, pkgs) ==
 
 (* Every book's name: the packages', then the copies keep their files,
    then _Claiming.reclaim names again a package that kept a numbered file a
-   copy keeps, and the other copies claim names after them all. *)
+   copy keeps, and with ReclaimOwn any package given the name of a file the
+   exact pass kept as a copy's own bytes; the other copies claim names after
+   them all. In skip mode a package named again has no name left. *)
 Assigned(L) ==
     LET P      == Packages(L)
         first  == PackageClaim(P)
         kept   == Kept(CopiesOf(L), first)
         held   == {kept[c] : c \in DOMAIN kept}
+        exact  == IF KeepOne /\ ReclaimOwn
+                    THEN KeepPass(ClaimOrder(CopiesOf(L)), first, TRUE,
+                                  [c \in {} |-> ""])
+                    ELSE [c \in {} |-> ""]
+        own    == {exact[c] : c \in DOMAIN exact}
         again  == {b \in P : /\ first[b] \in held
-                             /\ Numbered(P, Sorted(P), {})[b] # ""}
+                             /\ \/ Numbered(P, Sorted(P), {})[b] # ""
+                                \/ first[b] \in own}
         redo   == Claim(P, Sorted(again),
                         ({first[b] : b \in P \ again} \ {""}) \cup held)
         pkgs   == [b \in P |-> IF b \in again THEN redo[b] ELSE first[b]]
@@ -352,15 +365,27 @@ Target(b) ==
     ELSE IF KeepOwn THEN Wanted[b]
     ELSE ""
 
+(* _Claiming.name's not_own, with KeepOwn: a copy not kept at a file of its
+   own, whose claimed name holds a file that is not its own (_own). Every
+   file it is placed at is another book's, whatever the identifiers can say:
+   its size says so where they cannot. *)
+Strange(L, asg) ==
+    IF ~KeepOwn THEN {}
+    ELSE {c \in CopiesOf(L) : /\ asg[c] # ""
+                              /\ shelf[asg[c]] # 0
+                              /\ ~OwnBy(c, asg[c])}
+
 (* place, over books in order: a book stays at its name unless the file
-   there holds another book whose identifier the plan read; then, under
-   suffix, it takes the first position of its target that no book is named
-   and no other book's archive holds. Each name moved on to is spoken for. *)
-RECURSIVE Place(_, _, _, _)
-Place(order, start, spoken, known) ==
+   there holds another book whose identifier the plan read, or the book is
+   a strange copy; then, under suffix, it takes the first position of its
+   target that no book is named and no other book's archive holds. Each
+   name moved on to is spoken for. *)
+RECURSIVE Place(_, _, _, _, _)
+Place(order, start, spoken, known, strange) ==
     IF order = <<>> THEN [b \in {} |-> ""]
     ELSE LET b        == Head(order)
-             Other(n) == shelf[n] # 0 /\ b \in known /\ Holds(b, n)
+             Other(n) == /\ shelf[n] # 0
+                         /\ b \in strange \/ (b \in known /\ Holds(b, n))
              open     == IF Target(b) = "" THEN {}
                          ELSE {k \in 1..MoveLimit :
                                  LET n == Suffixed(Target(b), k)
@@ -373,7 +398,7 @@ Place(order, start, spoken, known) ==
              rest     == Place(Tail(order), start,
                                IF final \notin {"", start[b]}
                                  THEN spoken \cup {final} ELSE spoken,
-                               known)
+                               known, strange)
          IN [x \in {b} \cup DOMAIN rest |-> IF x = b THEN final ELSE rest[x]]
 
 \* Every name any selection could produce: the shelf's domain.
@@ -429,14 +454,15 @@ RemoveBook(b) ==
 Run(S, refresh, newer, done) ==
     \E asg \in {Assigned(lib)} :
     \E known \in {Known(lib, asg)} :
+    \E strange \in {Strange(lib, asg)} :
     \E all \in {Place(Sorted(Packages(lib)) \o Sorted(CopiesOf(lib)), asg,
-                      {asg[b] : b \in lib} \ {""}, known)} :
+                      {asg[b] : b \in lib} \ {""}, known, strange)} :
     \E spoken \in {({asg[b] : b \in Packages(lib)}
                      \cup {all[c] : c \in CopiesOf(lib)}) \ {""}} :
-    \E planned \in {Place(Sorted(Packages(S)), asg, spoken, known)} :
+    \E planned \in {Place(Sorted(Packages(S)), asg, spoken, known, strange)} :
     \E again \in {Place(Sorted(Packages(lib)) \o Sorted(CopiesOf(lib)),
                         [b \in lib |-> IF b \in Copies THEN all[b] ELSE asg[b]],
-                        spoken, known)} :
+                        spoken, known, strange)} :
     LET
         \* Whose archive is compared before a write: a book whose identifier
         \* the plan read, and one --refresh would write.
