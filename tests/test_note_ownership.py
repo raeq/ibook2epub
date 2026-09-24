@@ -255,6 +255,63 @@ class TestANoteWrittenBeforeNotesWereTagged:
         if suffix:
             assert "epub highlight" in (vault / "Dune (2).md").read_text()
 
+    @staticmethod
+    def _legacy(vault: Path, found: list[dict[str, Any]]) -> bytes:
+        vault.mkdir()
+        untagged = noteformat.BOOK_TAG.sub("", notes.compose(found), count=1)
+        (vault / "Dune.md").write_text(untagged + MINE, encoding="utf-8")
+        return (vault / "Dune.md").read_bytes()
+
+    @pytest.mark.parametrize("suffix", [False, True])
+    def test_it_goes_to_the_book_holding_every_one_of_its_highlights(
+        self, tmp_path: Path, suffix: bool
+    ):
+        # Both editions highlighted one passage. The note was the first
+        # book's that held any of its highlights, and was re-tagged for it.
+        vault = tmp_path / "vault"
+        pdf = [_highlight(PDF, "shared"), _highlight(PDF, "only in the pdf")]
+        self._legacy(vault, pdf)
+        found = [_highlight(EPUB, "shared"), *pdf, _highlight(PDF, "new")]
+
+        for _ in range(2):
+            assert _write(vault, found, suffix=suffix) == exits.SUCCESS
+
+        held = _notes(vault)
+        pdfs = noteformat.split(held["Dune.md"])
+        assert pdfs is not None
+        assert pdfs.book == disambiguator("PDFASSET")
+        assert "> new" in held["Dune.md"]
+        assert MINE in held["Dune.md"]
+        assert sorted(held) == (["Dune (2).md", "Dune.md"] if suffix else ["Dune.md"])
+
+    def test_without_suffix_one_both_hold_alike_is_refused(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        # Nothing tells whose it is, so neither book is handed it.
+        app_logger.configure(verbosity=0)
+        vault = tmp_path / "vault"
+        before = self._legacy(vault, [_highlight(PDF, "shared")])
+        found = [_highlight(EPUB, "shared"), _highlight(PDF, "shared")]
+
+        assert _write(vault, found, suffix=False) == exits.FAILED
+
+        assert (vault / "Dune.md").read_bytes() == before
+        assert "another book" in capsys.readouterr().err
+
+    def test_under_suffix_one_both_hold_alike_is_numbered_past(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        before = self._legacy(vault, [_highlight(PDF, "shared")])
+        found = [_highlight(EPUB, "shared"), _highlight(PDF, "shared")]
+
+        for _ in range(2):
+            assert _write(vault, found, suffix=True) == exits.SUCCESS
+
+        assert (vault / "Dune.md").read_bytes() == before
+        held = _notes(vault)
+        assert sorted(held) == ["Dune (2).md", "Dune (3).md", "Dune.md"]
+        assert "shared" in held["Dune (2).md"]
+        assert "shared" in held["Dune (3).md"]
+
     @pytest.mark.parametrize("tagged_for_a_book_gone", [False, True])
     def test_a_books_tagged_note_comes_before_one_its_highlights_give_it(
         self, tmp_path: Path, tagged_for_a_book_gone: bool

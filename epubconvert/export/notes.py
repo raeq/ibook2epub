@@ -560,7 +560,7 @@ def _write_notes(
         for item, mine in wanted
         if mine
     }
-    names = note_names(
+    naming = note_names(
         [item for item, _ in wanted if item.filename],
         suffix=suffix,
         claimants=books,
@@ -572,7 +572,7 @@ def _write_notes(
     for item, mine in wanted:
         if not mine:
             continue
-        name = names[item.package] if item.filename else None
+        name = naming.given[item.package] if item.filename else None
         if name is None:
             # Lost a name collision: the book's own, which leaves it no stem to
             # share -- under -ao no planner runs to report that, and these
@@ -581,7 +581,11 @@ def _write_notes(
             collided.append(item.package.name)
             continue
         written = _write_one(
-            directory / name, mine, book=books[item.package], known=known.tags
+            directory / name,
+            mine,
+            book=books[item.package],
+            known=known.tags,
+            theirs=item.package in naming.refused,
         )
         tally[written].append(name)
     return tally, collided
@@ -653,6 +657,7 @@ def _write_one(  # pylint: disable=too-many-return-statements
     book: Claimant | None = None,
     known: Collection[str] | None = None,
     beside: Path | None = None,
+    theirs: bool = False,
 ) -> str:
     """
     Put one book's note in place, without touching what the reader wrote.
@@ -669,6 +674,8 @@ def _write_one(  # pylint: disable=too-many-return-statements
         any tag as a known book's (:func:`~.notenames.holding`).
     :param beside: The note *target* is the sidecar of, or None when it is
         a note itself.
+    :param theirs: Whether naming found the note another book's on evidence
+        the note alone does not carry, such as two books holding it alike.
 
     Each branch returns rather than threading one variable through, because
     every one of them is a different thing to tell the reader and collapsing
@@ -708,7 +715,7 @@ def _write_one(  # pylint: disable=too-many-return-statements
     if not wrote_it(existing):
         return "foreign"
     book = book if book is not None else claimant(mine)
-    if holding(parse(existing), book, known) is Holding.ANOTHER:
+    if theirs or holding(parse(existing), book, known) is Holding.ANOTHER:
         # A name is worked out afresh each run, and a note tagged for another
         # book is that book's whatever this run named it. Checked before the
         # sidecar, which would carry this book's highlights beside it.

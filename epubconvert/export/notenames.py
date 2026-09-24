@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -224,9 +224,12 @@ def holding(held: Held, book: Claimant, known: Collection[str] | None) -> Holdin
     and neither does a note an older version wrote with no tag at all.
 
     Then the other evidence. A frontmatter naming another identifier is
-    another edition's note. A note holding the book's highlights is its
-    own. Holding none -- every one of them deleted in Books -- it says
-    nothing, and goes with its name, as it always did.
+    another edition's note. A note holding the book's highlights, every one
+    of its quoted blocks, is its own -- though another book may hold them
+    too (:func:`_by_evidence`). Holding only some of them proves nothing:
+    two editions share a passage, and the note of one held the other's
+    highlight. Holding none -- every one of them deleted in Books -- it
+    says nothing either.
 
     :param held: The file, as :class:`Vault` read it.
     :param book: The book that wants its name.
@@ -248,15 +251,33 @@ def holding(held: Held, book: Claimant, known: Collection[str] | None) -> Holdin
         and not held.identifiers & book.identifiers
     ):
         return Holding.ANOTHER
-    return Holding.MINE if held.quoted & book.words else Holding.UNCLAIMED
+    mine = held.quoted and held.quoted <= book.words
+    return Holding.MINE if mine else Holding.UNCLAIMED
+
+
+@dataclass
+class Naming:
+    """Which note each book of a run writes, as :func:`note_names` decides."""
+
+    #: Each package's note name, or None when it has none.
+    given: dict[Path, str | None] = field(default_factory=dict)
+    #: The packages given a name whose note is another book's all the same:
+    #: without suffix a book keeps its name, and writing it reports the note.
+    refused: set[Path] = field(default_factory=set)
 
 
 class _Names:
-    """The names given so far, and every filesystem key they take."""
+    """The names given so far, and what is known of the notes at them."""
 
-    def __init__(self) -> None:
-        self.given: dict[Path, str | None] = {}
+    def __init__(self, vault: Vault, known: Collection[str] | None) -> None:
+        self.vault = vault
+        self.known = known
+        self.naming = Naming()
+        self.given = self.naming.given
         self.taken: set[str] = set()
+        #: Each note the evidence gives a book, by its listed name: the
+        #: package it is the note of, or None when two books hold it alike.
+        self.owners: dict[str, Path | None] = {}
 
     def free(self, name: str) -> bool:
         """Whether no book has been given *name*, as the filesystem compares."""
@@ -267,6 +288,13 @@ class _Names:
         self.taken.add(filesystem_key(name))
         self.given[item.package] = name
 
+    def judge(self, listed: str, item: Assignment, book: Claimant) -> Holding:
+        """What the file listed as *listed* is, to *item*: see :func:`holding`."""
+        if listed in self.owners:
+            mine = self.owners[listed] == item.package
+            return Holding.MINE if mine else Holding.ANOTHER
+        return holding(self.vault.held(listed), book, self.known)
+
 
 def note_names(
     named: Sequence[Assignment],
@@ -276,7 +304,7 @@ def note_names(
     vault: Vault,
     known: Collection[str] | None,
     library: Mapping[str, Collection[str]] | None = None,
-) -> dict[Path, str | None]:
+) -> Naming:
     """
     Give each book a note that no other book of the run writes.
 
@@ -313,16 +341,17 @@ def note_names(
     :param library: The tags of each package the library lists, by package
         name, highlighted or not.
 
-    :return: Each package's note name, or None when it has none.
+    :return: Each package's note name, and which of them to refuse.
     """
-    names = _Names()
+    names = _Names(vault, known)
     tagged = {
         item.package: Claimant(frozenset(tags), frozenset(), frozenset())
         for item in named
         if item.package not in claimants
         and (tags := (library or {}).get(item.package.name))
     }
-    _reserve(named, {**tagged, **claimants}, vault, names, suffix=suffix, known=known)
+    _reserve(named, {**tagged, **claimants}, names, suffix=suffix)
+    _by_evidence(named, claimants, names, suffix=suffix)
     for item in named:
         if item.package in names.given:
             continue
@@ -330,42 +359,53 @@ def note_names(
         own = Path(item.filename).stem + ".md"
         if not names.free(own):
             continue
+        listed = vault.spelling(own)
         book = claimants.get(item.package)
-        if suffix and book is not None and _not_its(vault.held(own), book, known):
+        verdict = names.judge(listed, item, book) if listed and book else None
+        if suffix and verdict in (Holding.ANOTHER, Holding.FOREIGN):
             continue
         # The spelling on disk: the book's own on a case-sensitive volume is
         # a second file beside the note it adopted.
-        names.give(item, vault.spelling(own) or own)
+        names.give(item, listed or own)
+        if verdict is Holding.ANOTHER:
+            names.naming.refused.add(item.package)
+    if suffix:
+        _number(named, names)
+    return names.naming
+
+
+def _number(named: Sequence[Assignment], names: _Names) -> None:
+    """
+    Number each book left without a name, as ``--on-collision suffix`` asks.
+
+    :param named: Every book of the run with a name, in the run's order.
+    :param names: The names given so far, added to in place.
+    """
     for item in named:
-        if names.given[item.package] is not None or not suffix:
+        if names.given[item.package] is not None:
             continue
         stem = Path(item.filename).stem
         for position in range(2, MAX_NOTE_SUFFIX + 1):
             candidate = _numbered(stem, position)
-            if names.free(candidate) and vault.spelling(candidate) is None:
+            if names.free(candidate) and names.vault.spelling(candidate) is None:
                 names.give(item, candidate)
                 break
-    return names.given
 
 
 def _reserve(
     named: Sequence[Assignment],
     claimants: Mapping[Path, Claimant],
-    vault: Vault,
     names: _Names,
     *,
     suffix: bool,
-    known: Collection[str] | None,
 ) -> None:
     """
-    Give each book the note already its own, if one is.
+    Give each book the note tagged for it, if one is.
 
     Looked for among the names the book could be given: its own, and under
-    suffix its numbered ones. A note tagged for the book first, over every
-    book, and only then one the other evidence gives it -- untagged, or
-    tagged for no book the run knows, and holding its highlights -- so such
-    a note never goes to one book while another's tagged note is still to
-    be found.
+    suffix its numbered ones. Every book's tagged note first, and only then
+    one the other evidence gives it (:func:`_by_evidence`), so such a note
+    never goes to one book while another's tagged note is still to be found.
 
     A book with no highlights today keeps the note tagged for it. Only the
     books with highlights looked, so without suffix a namesake took the name
@@ -375,31 +415,69 @@ def _reserve(
     :param named: Every book of the run with a name, in the run's order.
     :param claimants: Each book with highlights, and each book without
         whose tags the library knows.
-    :param vault: The notes already there.
     :param names: The names given so far, added to in place.
     :param suffix: Whether a book's numbered names are its too.
-    :param known: The tags of every book this run knows of.
     """
-    for by_tag in (True, False):
-        for item in named:
-            book = claimants.get(item.package)
-            if book is None or item.package in names.given:
+    for item in named:
+        book = claimants.get(item.package)
+        if book is None or item.package in names.given:
+            continue
+        for name in _candidates(item, suffix=suffix):
+            listed = names.vault.spelling(name)
+            if listed is None or not names.free(listed):
                 continue
-            for name in _candidates(item, suffix=suffix):
-                listed = vault.spelling(name)
-                if listed is None or not names.free(listed):
-                    continue
-                held = vault.held(listed)
-                if by_tag and held.tag not in book.tags:
-                    continue
-                if holding(held, book, known) is Holding.MINE:
-                    names.give(item, listed)
-                    break
+            held = names.vault.held(listed)
+            mine = holding(held, book, names.known) is Holding.MINE
+            if mine and held.tag in book.tags:
+                names.give(item, listed)
+                break
 
 
-def _not_its(held: Held, book: Claimant, known: Collection[str] | None) -> bool:
-    """Whether a file is another book's note, or not a note at all."""
-    return holding(held, book, known) in (Holding.ANOTHER, Holding.FOREIGN)
+def _by_evidence(
+    named: Sequence[Assignment],
+    claimants: Mapping[Path, Claimant],
+    names: _Names,
+    *,
+    suffix: bool,
+) -> None:
+    """
+    Give each book the note its highlights say is its own, if one is.
+
+    A note untagged, or tagged for no book the run knows, holding a book's
+    highlights. It went to the first book holding any one of them, so two
+    editions that share a passage handed one's note to the other for good,
+    re-tagged. Every book's claim is gathered first, and a note goes to the
+    one book holding every one of its highlights (:func:`holding`). Two
+    books holding them all are a guess, and it goes to neither: to both it
+    is another book's, so each is numbered past it, or without suffix is
+    refused it.
+
+    :param named: Every book of the run with a name, in the run's order.
+    :param claimants: Each book with highlights.
+    :param names: The names given so far, added to in place.
+    :param suffix: Whether a book's numbered names are its too.
+    """
+    claims: dict[str, list[Path]] = {}
+    sought: dict[Path, list[str]] = {}
+    for item in named:
+        book = claimants.get(item.package)
+        if book is None or item.package in names.given:
+            continue
+        for name in _candidates(item, suffix=suffix):
+            listed = names.vault.spelling(name)
+            if listed is None or not names.free(listed):
+                continue
+            held = names.vault.held(listed)
+            if holding(held, book, names.known) is Holding.MINE:
+                claims.setdefault(listed, []).append(item.package)
+                sought.setdefault(item.package, []).append(listed)
+    for listed, claim in claims.items():
+        names.owners[listed] = claim[0] if len(claim) == 1 else None
+    for item in named:
+        for listed in sought.get(item.package, ()):
+            if names.owners[listed] == item.package:
+                names.give(item, listed)
+                break
 
 
 def _candidates(item: Assignment, *, suffix: bool) -> list[str]:
