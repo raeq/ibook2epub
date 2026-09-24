@@ -220,11 +220,9 @@ ISBN13_PREFIXES = ("978", "979")
 
 def _is_isbn13(digits: str) -> bool:
     """Whether *digits* is a book's EAN-13: 978 or 979, and a valid check digit."""
-    if len(digits) != 13 or not _ascii_digits(digits):
+    if len(digits) != 13 or not digits.startswith(ISBN13_PREFIXES):
         return False
-    if not digits.startswith(ISBN13_PREFIXES):
-        return False
-    return _isbn13_sum(digits) % 10 == 0
+    return _ascii_digits(digits) and _isbn13_sum(digits) % 10 == 0
 
 
 def _is_isbn10(digits: str) -> bool:
@@ -796,6 +794,8 @@ def validate_archive(path: Path) -> list[str]:
     problems: list[str] = []
 
     try:
+        if not stat.S_ISREG(path.stat().st_mode):  # Opening a FIFO waits for ever.
+            return ["not a regular file"]
         with ZipFile(path) as archive:
             names = archive.namelist()
             members = set(names)
