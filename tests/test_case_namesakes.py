@@ -292,3 +292,40 @@ class TestForeign:
 
         assert claimed == "dune.epub already holds this name"
         assert trusted is None
+
+
+class TestAShelfFileWhoseExtensionIsUppercase:
+    """
+    The shelf was read with ``glob("*.epub")``, which is case-sensitive, so a
+    zipped book copied through as ``Foo.EPUB`` was invisible to the plan, the
+    orphan check and the placing: a package ``Foo.epub`` was judged free and,
+    on a case-insensitive volume, written over it.
+    """
+
+    def test_a_package_is_not_written_over_it(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "b" / "Foo.EPUB", "urn:uuid:ZIPPED")
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0"]
+        run.main([*argv, "-q"])
+        make_metadata_package(library / "a", "Foo.epub", title="F", identifier="urn:p")
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys)
+        run.main(argv)
+        captured = capsys.readouterr()
+
+        assert ("Foo.epub", "collision") in listed
+        assert "holds another book, urn:uuid:ZIPPED" in captured.err
+        assert sorted(path.name for path in output_dir.iterdir()) == [
+            ".ibook2epub.lock",
+            "Foo.EPUB",
+        ]
+
+    def test_one_no_book_claims_is_an_orphan(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Dune.epub", title="Dune")
+        zipped_book(tmp_path, output_dir / "Old.EPUB", "urn:uuid:OLD")
+        (output_dir / "Old.PDF").write_bytes(b"%PDF-1.4 old")
+
+        assert ("Old.EPUB", "orphan") in listing(library, output_dir, capsys)
+        assert ("Old.PDF", "orphan") in listing(library, output_dir, capsys)

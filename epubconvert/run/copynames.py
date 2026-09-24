@@ -17,10 +17,9 @@ from typing import NamedTuple
 
 from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package
-from ..export.archive import COPYABLE_SUFFIXES
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
-from .claims import Claims, claim_order, lost_to, shelf_names
+from .claims import Claims, claim_order, lost_to, shelf_files, shelf_names
 from .holders import identifier_on_shelf
 from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
 
@@ -299,12 +298,11 @@ def _on_shelf(output_dir: Path | None, policy: NamingPolicy) -> dict[str, Path]:
 
     :return: The files, by filesystem key.
     """
-    if output_dir is None or not output_dir.is_dir():
+    if output_dir is None:
         return {}
     return {
         filesystem_key(policy.identity(found.name)): found
-        for found in output_dir.iterdir()
-        if found.suffix.lower() in COPYABLE_SUFFIXES and found.is_file()
+        for found in shelf_files(output_dir)
     }
 
 

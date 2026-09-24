@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..collect.identifiers import usable_identifier
+from ..export.archive import COPYABLE_SUFFIXES, PARTIAL_PREFIX
 from ..export.naming import encode_name, filesystem_key, split_extension, truncate_bytes
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -136,6 +137,36 @@ def lost_to(holder: str | None, metadata: Package | None) -> str:
     )
     identifier = usable_identifier(metadata)
     return f"{reason}; this book is {identifier}" if identifier else reason
+
+
+def shelf_files(output_dir: Path) -> list[Path]:
+    """
+    Find every file on the shelf a run could have put there.
+
+    Every kind :func:`~epubconvert.export.archive.collect_copyable` takes
+    along, whatever the case of the extension, and no partial. The shelf was
+    read with ``glob("*.epub")``, which is case-sensitive, so a zipped book
+    copied through as ``Foo.EPUB`` was invisible to the plan, the orphan
+    check and the placing: a package ``Foo.epub`` was judged free and, on a
+    case-insensitive volume, written over it. PDFs were invisible the same
+    way.
+
+    :param output_dir: Directory holding exported files.
+
+    :return: The files, sorted; none when the directory is missing, which is
+        what a dry run or a first run finds.
+    """
+    try:
+        entries = sorted(output_dir.iterdir())
+    except OSError:
+        return []
+    return [
+        found
+        for found in entries
+        if found.suffix.lower() in COPYABLE_SUFFIXES
+        and not found.name.startswith(PARTIAL_PREFIX)
+        and found.is_file()
+    ]
 
 
 def shelf_names(output_dir: Path | None) -> frozenset[str]:

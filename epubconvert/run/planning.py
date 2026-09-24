@@ -31,6 +31,7 @@ from .claims import (
     claim_order,
     lost_to,
     marked,
+    shelf_files,
     shelf_names,
     suffixed,
 )
@@ -493,9 +494,8 @@ def find_orphans(
     live = {item.identifier for item in assigned if item.identifier}
     return sorted(
         found
-        for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-        if found.is_file()
-        and (key := filesystem_key(policy.identity(found.name))) not in claimed
+        for found in shelf_files(output_dir)
+        if (key := filesystem_key(policy.identity(found.name))) not in claimed
         and not (live and key in shelf.spoken and identifier_on_shelf(found) in live)
     )
 

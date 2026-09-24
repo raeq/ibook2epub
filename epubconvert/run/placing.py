@@ -21,8 +21,7 @@ from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_package_dir
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
-from ..utils.spec import PACKAGE_SUFFIX
-from .claims import MAX_SUFFIX, suffixed
+from .claims import MAX_SUFFIX, shelf_files, suffixed
 from .holders import foreign, holds_another_book
 
 
@@ -80,8 +79,7 @@ def read_shelf(
         filesystem_key(policy.identity(found.name)): Existing(
             path=found, identity=policy.identity(found.name)
         )
-        for found in output_dir.glob(f"*{PACKAGE_SUFFIX}")
-        if found.is_file()
+        for found in shelf_files(output_dir)
     }
     spoken = {filesystem_key(item.identity) for item in assigned if item.filename}
     live = frozenset(unicodedata.normalize("NFC", item.identity) for item in assigned)
