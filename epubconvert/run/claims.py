@@ -98,6 +98,8 @@ class Claims:
         self.paths: set[str] = set()
         self.positions: dict[str, int] = {}
         self.holders: dict[str, str] = {}
+        #: The name that took each filesystem key.
+        self.held: dict[str, str] = {}
 
     def resume(self, group: str) -> int:
         """Return the first position worth trying for this group."""
@@ -112,6 +114,7 @@ class Claims:
         self.paths.add(path_key)
         self.positions[group] = position + 1
         self.holders.setdefault(group, candidate)
+        self.held[path_key] = candidate
         return True
 
     def keep(self, group: str, key: str, candidate: str) -> bool:
@@ -128,11 +131,19 @@ class Claims:
         self.identities.add(key)
         self.paths.add(path_key)
         self.holders.setdefault(group, candidate)
+        self.held[path_key] = candidate
         return True
 
-    def holder(self, group: str) -> str | None:
-        """Return the name that took this group, if anything did."""
-        return self.holders.get(group)
+    def holder(self, group: str, name: str = "") -> str | None:
+        """
+        Return the name that took this group, or the file *name* is, if any.
+
+        By the file too: two identities can be one file, as ``Dune.epub``
+        and ``dune.epub`` are to the default policy and a case-insensitive
+        volume, and a book that lost to its namesake was told only that
+        "another book already claims this name".
+        """
+        return self.holders.get(group) or self.held.get(filesystem_key(name))
 
     def exhaust(self, group: str, limit: int) -> None:
         """Record that this group has no positions left to try."""

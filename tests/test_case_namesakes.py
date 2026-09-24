@@ -79,6 +79,22 @@ class TestTheBookOnTheShelfKeepsItsName:
             ("dune.epub", "exported"),
         ]
 
+    def test_the_collision_names_the_file_that_holds_the_name(
+        self, tmp_path, output_dir, capsys
+    ):
+        # The default policy gives the two different identities, so the
+        # holder was looked up by identity, found nothing, and the reason
+        # said "another book already claims this name".
+        _, argv = _exported_then_namesake(tmp_path, output_dir, "skip")
+        capsys.readouterr()
+
+        run.main([*argv, "-m", "0"])
+
+        assert (
+            "Name collision, skipping: Dune.epub (dune.epub already holds this name"
+            in capsys.readouterr().err
+        )
+
     @pytest.mark.parametrize("mode", ["skip", "suffix"])
     def test_a_refresh_finds_the_books_archive(
         self, tmp_path, output_dir, monkeypatch, mode

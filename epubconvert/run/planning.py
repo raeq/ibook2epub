@@ -354,7 +354,7 @@ def _assign_one(
     if taken is None:
         # Carries its identifier though it has no name, so an archive of it
         # already on the shelf is still recognised as a live book's.
-        reason = lost_to(claims.holder(group), metadata)
+        reason = lost_to(claims.holder(group, base), metadata)
         return Assignment(
             package, "", group, reason, identifier=usable_identifier(metadata)
         )
