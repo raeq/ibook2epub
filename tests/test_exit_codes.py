@@ -83,6 +83,16 @@ class TestEachFailureHasItsOwnCode:
 
         assert code == exits.NO_SOURCE
 
+    def test_a_source_that_is_a_file_is_called_one(self, tmp_path, capsys):
+        # "Source directory does not exist" of a file that plainly does.
+        source = tmp_path / "Book.epub"
+        source.write_bytes(b"PK")
+
+        code = run.main(["-s", str(source), "-o", str(tmp_path / "out"), "-q"])
+
+        assert code == exits.NO_SOURCE
+        assert f"Source path is not a directory: {source}" in (capsys.readouterr().err)
+
     def test_a_missing_extra_has_its_own_code(self, tmp_path, monkeypatch):
         monkeypatch.setattr(naming, "disarm", None)
         library = tmp_path / "lib"

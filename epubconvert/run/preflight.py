@@ -166,10 +166,9 @@ def _check_source(args: argparse.Namespace) -> int | None:
         # but "absent": a library in a directory the run may not search --
         # behind Full Disk Access, on macOS -- was a traceback and exit 1.
         # os.stat, not Path.stat, which on 3.10 and 3.14 is its own binding.
-        mode = os.stat(args.source_dir).st_mode  # noqa: PTH116
-        found = stat.S_ISDIR(mode)
+        mode: int | None = os.stat(args.source_dir).st_mode  # noqa: PTH116
     except (FileNotFoundError, NotADirectoryError):
-        found = False
+        mode = None
     except OSError as exc:
         refused = isinstance(exc, PermissionError)
         logger.critical(
@@ -179,7 +178,7 @@ def _check_source(args: argparse.Namespace) -> int | None:
             f". {FULL_DISK_ACCESS}." if refused else "",
         )
         return exits.NO_PERMISSION if refused else exits.NO_SOURCE
-    if found:
+    if mode is not None and stat.S_ISDIR(mode):
         return None
     if args.source_auto:
         # Both known homes were probed and neither held books. Naming only
@@ -190,6 +189,12 @@ def _check_source(args: argparse.Namespace) -> int | None:
             "No Apple Books library found. Looked in:\n%s\n"
             "If your books are somewhere else, pass -s DIR.",
             probed,
+        )
+    elif mode is not None:
+        # There, and something else: "does not exist" of a file that plainly
+        # did sent the reader looking for a typo.
+        logger.critical(
+            "Source path is not a directory: %s", printable(str(args.source_dir))
         )
     else:
         logger.critical(
