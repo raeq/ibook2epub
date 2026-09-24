@@ -24,6 +24,8 @@ otherwise forge the marker that ends the generated region.
 
 from __future__ import annotations
 
+import errno
+import os
 import re
 from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
@@ -695,7 +697,7 @@ def _gather(
         elif _present(sidecar):
             reason = f"{printable(sidecar.name)} beside it is still to be merged"
         else:
-            old.rename(target)
+            _move(old, target)
             logger.info(
                 "Moved %s to %s, the name its book has now.",
                 printable(old.name),
@@ -713,6 +715,36 @@ def _gather(
         printable(name),
     )
     return False
+
+
+def _move(old: Path, target: Path) -> None:
+    """
+    Move a note to a name that is free, and never onto one that is not.
+
+    Checking the name and then renaming left a window: ``rename`` replaces
+    whatever is there, so a note saved at that name in between was lost. A
+    hard link claims the name only if it is still free (EEXIST otherwise),
+    and the old name is removed once it has. A volume without hard links,
+    or a rename that only changes case, falls back to ``rename``.
+
+    :param old: The note under the name its book had before.
+    :param target: The name its book has now.
+
+    :raises OSError: If the note could not be moved, the target included.
+    """
+    if filesystem_key(old.name) == filesystem_key(target.name):
+        old.rename(target)
+        return
+    try:
+        os.link(old, target, follow_symlinks=False)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        if exc.errno not in (errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EXDEV):
+            raise
+        old.rename(target)
+        return
+    old.unlink()
 
 
 def _write_one(  # pylint: disable=too-many-return-statements

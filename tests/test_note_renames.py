@@ -152,10 +152,11 @@ class TestANoteThatCannotBeMoved:
     ):
         app_logger.configure(verbosity=0)
 
-        def refuse(*_: object) -> None:
+        def refuse(*_: object, **__: object) -> None:
             raise PermissionError("read-only")
 
         monkeypatch.setattr(Path, "rename", refuse)
+        monkeypatch.setattr("os.link", refuse)
 
         assert _write(vault, RENAMED, "x", "y") == exits.FAILED
 
@@ -190,3 +191,24 @@ class TestWhatIsLookedFor:
         assert code == exits.FAILED
         assert MINE in (vault / "Dune.md").read_text()
         assert _names(vault) == ["Dune.md"]
+
+
+def test_a_note_appearing_at_the_new_name_mid_move_is_not_replaced(
+    tmp_path, monkeypatch
+):
+    # The move checked the new name was free and then renamed, and rename
+    # replaces whatever is there: a note the reader saved at that name in
+    # between was lost. Linked, the new name is claimed only if still free.
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "Old.md").write_text("the book's note", encoding="utf-8")
+    (vault / "New.md").write_text("the reader's own", encoding="utf-8")
+    monkeypatch.setattr(notes, "_present", lambda _: False)  # as if not yet
+
+    moved = notes._gather(  # pylint: disable=protected-access
+        vault, ["Old.md"], "New.md", ["New.md"]
+    )
+
+    assert not moved
+    assert (vault / "New.md").read_text(encoding="utf-8") == "the reader's own"
+    assert (vault / "Old.md").read_text(encoding="utf-8") == "the book's note"
