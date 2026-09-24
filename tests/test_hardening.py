@@ -22,6 +22,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 from epubconvert.collect import source, validate
+from epubconvert.collect.library import read_package_once
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import StripNaming
 from epubconvert.run import convert, run
@@ -145,6 +146,36 @@ class TestAMemberThatIsNotAFileIsNotOpened:
         raised = _within(5, fifo, lambda: contained.open_contained(fifo))
 
         assert isinstance(raised, OSError)
+
+
+def _symlink_loop(parent: Path, name: str) -> Path:
+    """A package path that is a symlink to itself, or a skip where none can be."""
+    loop = parent / name
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("this filesystem cannot hold a symlink")
+    return loop
+
+
+class TestASymlinkLoopCostsOneBook:
+    """
+    Python 3.10 to 3.12 raise RuntimeError, not OSError, resolving a symlink
+    loop. Every reader of a package caught ValidationError and OSError, so one
+    looped package took down the library export, the annotation export and
+    metadata naming, where each should have lost one book.
+    """
+
+    def test_a_looped_package_is_an_unreadable_package(self, tmp_path):
+        loop = _symlink_loop(tmp_path, "Loop.epub")
+
+        with pytest.raises(validate.ValidationError):
+            validate.read_package_dir(loop)
+
+    def test_the_library_reads_a_looped_package_as_nothing(self, tmp_path):
+        loop = _symlink_loop(tmp_path, "Loop.epub")
+
+        assert read_package_once(loop, {}) is None
 
 
 class TestMimetypeIsNotReadWhole:

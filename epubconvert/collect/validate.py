@@ -397,7 +397,15 @@ class _DirectoryMembers:  # pylint: disable=too-few-public-methods
         self.root = root
         # Resolved once: resolving walks every component, and it does not
         # change across a package.
-        self.resolved_root = root.resolve()
+        try:
+            self.resolved_root = root.resolve()
+        except RuntimeError as exc:
+            # Python 3.10 to 3.12 raise RuntimeError, not OSError, for a
+            # symlink loop. Every reader of a package catches ValidationError,
+            # so this one package took the whole library export, annotation
+            # export or naming pass down with it. Translated here, at the one
+            # place a package directory is opened, so no caller can miss it.
+            raise ValidationError(f"{printable(root.name)} is a symlink loop") from exc
 
     def read(self, name: str) -> bytes:
         """
