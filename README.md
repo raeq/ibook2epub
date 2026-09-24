@@ -1135,6 +1135,14 @@ contradict each other.
 reasons: `4` that there is none where it was looked for, `8` that macOS would
 not let this run look. Every failure prints its reason on stderr as well.
 
+`5` also covers a report that could not be written. When `--list`, `--verify`
+or a run's summary cannot be written to standard output — a full disk behind
+`> report.txt`, say — the run says so on stderr and exits `5` rather than `0`,
+so a script does not take a lost report for a clean run. A reader that closes
+the pipe early, as `| head` does, has seen what it wanted and changes no exit
+code. Any other code a run has earned leads: `--verify` still exits `7` for a
+damaged shelf.
+
 `1` also covers a run that could not proceed at all — for example when the
 output volume is below `--min-free`. Nothing is counted as *failed* in that
 case, because nothing was attempted.

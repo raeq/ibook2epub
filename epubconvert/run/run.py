@@ -37,7 +37,7 @@ from ..export.naming import (
     StripNaming,
     build_policy,
 )
-from ..utils import app_logger, exits
+from ..utils import app_logger, display, exits
 from ..utils.app_logger import logger
 from ..utils.display import emit, printable
 from ..utils.policy import Assignment, NamingPolicy
@@ -540,8 +540,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     verbosity = 0 if args.quiet else 1 + args.verbose
     app_logger.configure(verbosity=verbosity, log_file=args.log_file)
 
+    display.start_report()
     try:
-        return _run(args)
+        code = _run(args)
     except KeyboardInterrupt:
         # The export stops cleanly and says what it finished. Everything else
         # -- reading the highlights, --list, --verify, the -ar refresh -- has
@@ -549,6 +550,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Each writes by atomic replace, so nothing is left half-written.
         logger.warning("Interrupted; rerun to continue.")
         return exits.INTERRUPTED
+    # A report that could not be written -- a listing, a verdict, a summary
+    # -- is a destination the run could not use, and a script that reads
+    # only the status would otherwise take a lost report for a clean run.
+    # Any other failure outranks it, as it outranks a detached file's.
+    if code == exits.SUCCESS and display.report_lost():
+        return exits.NO_OUTPUT
+    return code
 
 
 def _run(args: argparse.Namespace) -> int:
