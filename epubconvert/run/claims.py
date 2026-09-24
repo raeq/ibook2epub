@@ -333,8 +333,8 @@ def kept_numbers(
 
     for position, book in enumerate(books):
         numbers = forms(book.base)
-        marked = forms(book.stable) if book.stable != book.base else []
-        if directory is None or (all(n == 1 for n, _ in numbers) and not marked):
+        marked_forms = forms(book.stable) if book.stable != book.base else []
+        if directory is None or (all(n == 1 for n, _ in numbers) and not marked_forms):
             continue
         identifier = book.identifier
         if identifier is None and book.unread and not is_evicted(book.unread):
@@ -342,7 +342,7 @@ def kept_numbers(
         if identifier is not None:
             found = [
                 name
-                for _, name in [*numbers, *marked]
+                for _, name in [*numbers, *marked_forms]
                 if identifier_on_shelf(directory / name) == identifier
             ]
             if found:

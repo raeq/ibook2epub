@@ -257,30 +257,12 @@ def assign_names(
     claims = Claims()
 
     bases = [_bases(name, metadata, setup, crowded) for _, name, metadata in wanted]
-    first = [base for base, _ in bases]
-    read = getattr(policy, "needs_metadata", False)
-    kept = (
-        kept_numbers(
-            [
-                Wanting(
-                    base,
-                    stable,
-                    usable_identifier(metadata),
-                    crowded[policy.identity(name)] == 1,
-                    None if read else package,
-                )
-                for (base, stable), (package, name, metadata) in zip(
-                    bases, wanted, strict=True
-                )
-            ],
-            shelf,
-            policy,
-        )
-        if on_collision == SUFFIX
-        else {}
-    )
+    kept = _kept_on_shelf(wanted, bases, crowded, setup, shelf)
     named: dict[int, Assignment] = {}
-    for index in [*kept, *(i for i in claim_order(first, shelf) if i not in kept)]:
+    for index in [
+        *kept,
+        *(i for i in claim_order([b for b, _ in bases], shelf) if i not in kept),
+    ]:
         package, name, metadata = wanted[index]
         named[index] = _assign_one(
             package,
@@ -292,6 +274,50 @@ def assign_names(
             kept=kept.get(index),
         )
     return [named[index] for index in range(len(wanted))]
+
+
+def _kept_on_shelf(
+    wanted: Sequence[tuple[Path, str, Package | None]],
+    bases: Sequence[tuple[str, str]],
+    crowded: Counter[str],
+    setup: _Naming,
+    shelf: Collection[str],
+) -> dict[int, str]:
+    """
+    Find the books that keep a numbered or marked file of theirs on the shelf.
+
+    Only under :data:`SUFFIX`; see :func:`~epubconvert.run.claims.kept_numbers`.
+
+    :param wanted: Package, wanted name and metadata, in sorted order.
+    :param bases: Each book's base and stable name, in the same order.
+    :param crowded: How many books want each identity.
+    :param setup: The naming configuration.
+    :param shelf: The names of the files on the shelf.
+
+    :return: The file each such book keeps, by its index in *wanted*.
+    """
+    if setup.on_collision != SUFFIX:
+        return {}
+    policy = setup.policy
+    # A policy that reads no package document leaves the identifier to be
+    # read here, and only for a name with numbered files on the shelf.
+    unread = not getattr(policy, "needs_metadata", False)
+    return kept_numbers(
+        [
+            Wanting(
+                base,
+                stable,
+                usable_identifier(metadata),
+                crowded[policy.identity(name)] == 1,
+                package if unread else None,
+            )
+            for (base, stable), (package, name, metadata) in zip(
+                bases, wanted, strict=True
+            )
+        ],
+        shelf,
+        policy,
+    )
 
 
 @dataclass(frozen=True)

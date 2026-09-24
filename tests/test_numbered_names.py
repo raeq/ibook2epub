@@ -23,6 +23,7 @@ from epubconvert.collect import package as package_reader
 from epubconvert.run import run
 from tests.conftest import make_metadata_package, make_package, remove_tree
 from tests.test_copy_claims import SUFFIX, identifier_of, listing, shelf, zipped_book
+from tests.test_efficiency import _named
 
 AUTHOR_TITLE = ["--name-by", "author-title"]
 
@@ -138,7 +139,9 @@ class TestNamedFromTheFolder:
         original_read = package_reader.read_package_dir
 
         def zip_counting(self, file, *args, **kwargs):
-            opened[Path(str(file)).name] += 1
+            # A book's metadata is read from a stream opened without blocking
+            # (a FIFO cannot hang it); the shelf is where these files live.
+            opened[_named(file, output_dir).name] += 1
             original_zip(self, file, *args, **kwargs)
 
         def read_counting(package: Path):
