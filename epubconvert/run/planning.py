@@ -494,6 +494,7 @@ def find_orphans(
     *,
     assigned: Sequence[Assignment] | None = None,
     unopened: Container[Path] = frozenset(),
+    copied: bool = True,
 ) -> list[Path]:
     """
     Find archives on the shelf that no book in the library claims.
@@ -540,6 +541,12 @@ def find_orphans(
         (:func:`~epubconvert.run.copynames.claim_copies`): a copy claims
         the file it is placed at, as a package does.
     :param unopened: The books not to open for their identifier.
+    :param copied: Whether the run copies the files it takes along. A file
+        a copy left unopened cannot tell from its own
+        (:attr:`~epubconvert.utils.policy.Assignment.unverified`) is kept
+        from the list only where the copy is reported, and says why: under
+        ``--no-copy-through`` nothing else named it, and a deleted book's
+        archive left the list without a word.
 
     :return: Archives no book accounts for, sorted by path.
     """
@@ -551,6 +558,8 @@ def find_orphans(
     claimed: set[str] = set()
     for item in assigned:
         clash = place(item, shelf).clash
+        if item.unverified and not copied:
+            continue
         if clash is None and not item.filename:
             clash = _held_by_loser(item, shelf)
         if clash is not None:
@@ -587,16 +596,36 @@ def _held_by_loser(item: Assignment, shelf: Shelf) -> Existing | None:
     return found if holds_another_book(found.path, item.identifier) is None else None
 
 
-def orphan_decisions(orphans: Sequence[Path]) -> list[Decision]:
+def orphan_decisions(
+    orphans: Sequence[Path], assigned: Sequence[Assignment] = ()
+) -> list[Decision]:
     """
     Render orphans as decisions so one listing can carry both.
 
     :param orphans: Archives no book accounts for.
+    :param assigned: The names the orphans were found against, so one a
+        file copied through may be the copy of, unopened, says so
+        (:func:`find_orphans`).
 
     :return: One decision per orphan.
     """
+    doubted = {
+        item.filename: item.package
+        for item in assigned
+        if item.unverified and item.filename
+    }
     return [
-        Decision(path, ORPHAN, path, reason="no book in the library claims this name")
+        Decision(
+            path,
+            ORPHAN,
+            path,
+            reason=(
+                f"{doubted[path.name].name} is not downloaded from iCloud; "
+                "cannot tell whether this is its copy"
+                if path.name in doubted
+                else "no book in the library claims this name"
+            ),
+        )
         for path in orphans
     ]
 

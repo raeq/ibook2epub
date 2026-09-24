@@ -21,6 +21,7 @@ import pytest
 
 from epubconvert.collect import package as package_reader
 from epubconvert.run import run
+from epubconvert.utils.display import printable
 from tests.conftest import make_metadata_package, remove_tree
 from tests.test_copy_claims import zipped_book
 from tests.test_copy_through import _evict
@@ -245,3 +246,80 @@ class TestAnEvictedPackageBesideACopyOfItsName:
         assert Path(mine["target"]).name == "Dune A (2).epub"
         assert "orphan" not in {row["status"] for row in rows}
         assert "orphaned" not in ran
+
+
+class TestAnEvictedZippedBookUnderADeletedBooksName:
+    """
+    A zipped book copied, then deleted from the library with its copy left on
+    the shelf, and another zipped book of its name added and evicted. Left
+    unopened, the newcomer declares nothing to tell the file from its own
+    copy, and a copy whose target exists was taken as copied: it was listed
+    as copied from the deleted book's file and never copied, and under
+    ``--no-copy-through`` the deleted book's archive left the orphan list.
+    """
+
+    @staticmethod
+    def _replaced(
+        tmp_path: Path, output_dir: Path, monkeypatch, mode: str, name: str
+    ) -> list[str]:
+        library = tmp_path / "lib"
+        old = zipped_book(tmp_path, library / "a" / name, "urn:uuid:OLD", "Old")
+        argv = ["-s", str(library), "-o", str(output_dir), "--on-collision", mode]
+        run.main([*argv, "-m", "0", "-q"])
+        old.unlink()
+        added = zipped_book(
+            tmp_path, library / "b" / name, "urn:uuid:NEW", "A different title"
+        )
+        assert added.stat().st_size != (output_dir / name).stat().st_size
+        _evict(monkeypatch, added)
+        return argv
+
+    @pytest.mark.parametrize(
+        "case",
+        [
+            (mode, name)
+            for mode in ("skip", "suffix")
+            for name in ("Dune.epub", "Dune\x1b[2K\r.epub")
+        ],
+    )
+    def test_skip_incomplete_says_it_cannot_tell(
+        self, tmp_path, output_dir, monkeypatch, capsys, case
+    ):
+        mode, name = case
+        argv = self._replaced(tmp_path, output_dir, monkeypatch, mode, name)
+        before = (output_dir / name).read_bytes()
+        capsys.readouterr()
+
+        run.main([*argv, "--list", "--json", "--skip-incomplete"])
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "--list", "--skip-incomplete"])
+        table = capsys.readouterr().out
+        run.main([*argv, "-m", "0", "--skip-incomplete"])
+        ran = capsys.readouterr()
+
+        reason = f"not downloaded from iCloud; cannot tell whether {name} is its copy"
+        assert [(row["status"], row["reason"]) for row in rows] == [
+            ("incomplete", reason)
+        ]
+        assert printable(reason) in table
+        assert "\x1b" not in table + ran.err
+        assert "1 not downloaded" in ran.out
+        assert f"Skipped, {printable(reason)}: {printable(name)}" in ran.err
+        assert (output_dir / name).read_bytes() == before
+
+    @pytest.mark.parametrize("mode", ["skip", "suffix"])
+    def test_no_copy_through_still_lists_the_deleted_books_archive(
+        self, tmp_path, output_dir, monkeypatch, capsys, mode
+    ):
+        argv = self._replaced(tmp_path, output_dir, monkeypatch, mode, "Dune.epub")
+        capsys.readouterr()
+
+        run.main([*argv, "--list", "--json", "--no-copy-through"])
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-m", "0", "--no-copy-through"])
+        ran = capsys.readouterr()
+
+        [row] = rows
+        assert (row["status"], Path(row["target"]).name) == ("orphan", "Dune.epub")
+        assert "Dune.epub is not downloaded from iCloud" in row["reason"]
+        assert "1 orphaned" in ran.out

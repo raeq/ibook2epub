@@ -243,7 +243,9 @@ def _run_listing(args: argparse.Namespace, policy: NamingPolicy) -> int:
             args.on_collision,
             assigned=everything,
             unopened=copies.unopened,
-        )
+            copied=not args.no_copy_through,
+        ),
+        everything,
     )
     emit(render_listing(decisions + orphans, args.as_json))
     ignored = count_ignored(args.source_dir, discovered) - len(copies.sources)
@@ -311,6 +313,7 @@ def _survey(
             args.on_collision,
             assigned=everything,
             unopened=copies.unopened,
+            copied=not args.no_copy_through,
         )
     )
     return packages, copies, everything

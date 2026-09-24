@@ -474,6 +474,9 @@ class _Claiming:
             # under its name, once the book copied there left the library,
             # was placed at that file and never copied.
             not_own=not (own or doubt),
+            # Nothing says, and the file may be a deleted book's: it was
+            # reported copied from that file, and never copied.
+            unverified=doubt and not own,
         )
 
     def _lost(self, source: Path, group: str) -> Assignment:

@@ -52,6 +52,12 @@ class Assignment:
     #: shelf under its name, or any of its numbers: every file it is placed
     #: at is another book's, whatever the identifiers can say.
     not_own: bool = False
+    #: A file copied through, left unopened because iCloud evicted it, whose
+    #: name holds a file the claim pass could not tell from its copy: a size
+    #: that differs says nothing of a zipped book Apple may have rewritten,
+    #: and its identifier was not read. The file is kept from the orphan
+    #: list, and the copy is reported not downloaded rather than copied.
+    unverified: bool = False
     #: A package that kept a numbered file of its name on the shelf
     #: (claims.kept_numbers), rather than claiming the first free name.
     kept_number: bool = False
