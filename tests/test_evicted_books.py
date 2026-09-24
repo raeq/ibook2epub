@@ -12,6 +12,7 @@ one.
 # pylint: disable=missing-function-docstring,missing-class-docstring
 # pylint: disable=too-few-public-methods
 
+import json
 import os
 from pathlib import Path
 from zipfile import ZipFile
@@ -205,3 +206,42 @@ class TestARefreshOpensNoEvictedBook:
 
         assert code == 0
         assert not opened
+
+
+class TestAnEvictedPackageBesideACopyOfItsName:
+    """
+    Under ``--skip-incomplete`` an evicted package is not opened, so it has
+    no identifier to go by. A zipped book copied first keeps its file under
+    the name both want, and the package moved on to a number of its own:
+    with the package evicted, the name was trusted, and the package was
+    reported exported from the copy's file while its own archive was listed
+    as an orphan. The claim pass needs no identifier to know the copy's own
+    bytes.
+    """
+
+    @pytest.mark.parametrize("policy", [[], ["-p", "strip"]])
+    def test_it_is_still_exported_from_its_own_archive(
+        self, tmp_path, output_dir, monkeypatch, capsys, policy
+    ):
+        library = tmp_path / "lib"
+        zipped_book(tmp_path, library / "b" / "Dune A.epub", "urn:uuid:Z", "Dune")
+        argv = ["-s", str(library), "-o", str(output_dir), "--on-collision"]
+        argv += ["suffix", *policy]
+        run.main([*argv, "-m", "0", "-q"])
+        package = make_metadata_package(
+            library / "a", "Dune A.epub", title="dune", identifier="urn:uuid:P"
+        )
+        run.main([*argv, "-m", "0", "-q"])
+        _evict(monkeypatch, *(path for path in package.rglob("*") if path.is_file()))
+        capsys.readouterr()
+
+        run.main([*argv, "--list", "--json", "--skip-incomplete"])
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-m", "0", "--skip-incomplete"])
+        ran = capsys.readouterr().out
+
+        [mine] = [row for row in rows if row["source"] == str(package)]
+        assert mine["status"] == "exported"
+        assert Path(mine["target"]).name == "Dune A (2).epub"
+        assert "orphan" not in {row["status"] for row in rows}
+        assert "orphaned" not in ran
