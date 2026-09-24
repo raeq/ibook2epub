@@ -14,8 +14,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import NamedTuple
 
-from ..collect.identifiers import usable_identifier
-from ..collect.package import ValidationError, read_archive_package
 from ..export.naming import disambiguator, filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -28,8 +26,8 @@ from .claims import (
     shelf_files,
     shelf_names,
 )
-from .holders import identifier_on_shelf
-from .planning import SUFFIX, CollisionMode, _claim, _metadata_of, _Naming
+from .holders import identifier_on_shelf, source_identifier
+from .planning import SUFFIX, CollisionMode, _claim, _Naming
 
 
 class Names(NamedTuple):
@@ -140,8 +138,6 @@ class _Claiming:
     claims: Claims = field(default_factory=Claims)
     #: The name that took each filesystem key.
     holders: dict[str, str] = field(default_factory=dict)
-    #: Each copy's identifier, once read.
-    read: dict[Path, str | None] = field(default_factory=dict)
     #: The shelf's files by the key of their name less any " (n)", with n.
     numbered: dict[str, list[tuple[int, Path]]] = field(default_factory=dict)
     #: The shelf's files by the key of their name less any digest marker and
@@ -484,8 +480,14 @@ class _Claiming:
         key = filesystem_key(group)
         found = self.existing.get(key)
         # The file under the name is not its own (kept): read what this book
-        # is, for the reason.
-        identifier = None if found is None else self._own(source, found, key)[1]
+        # is, for the reason. Not where a package of this pass has the name,
+        # which says enough: that read was all a no-op rerun opened the copy
+        # for.
+        identifier = (
+            None
+            if found is None or key in self.packaged
+            else self._own(source, found, key)[1]
+        )
         return Assignment(
             source,
             "",
@@ -566,11 +568,7 @@ class _Claiming:
 
     def _identifier(self, source: Path) -> str | None:
         """Read a file's identifier, unless opening it would download it."""
-        if source not in self.read:
-            self.read[source] = (
-                None if source in self.unopened else _copy_identifier(source)
-            )
-        return self.read[source]
+        return None if source in self.unopened else source_identifier(source)
 
 
 def _on_shelf(output_dir: Path | None, policy: NamingPolicy) -> dict[str, Path]:
@@ -628,19 +626,14 @@ def _package_identifier(package: Path, unopened: Container[Path]) -> str | None:
 
     Asked before the read: under ``--skip-incomplete`` the package document
     of a book iCloud had evicted was downloaded to be compared, before the
-    inspection that calls the book not downloaded.
+    inspection that calls the book not downloaded. Remembered while the
+    book is unchanged (:func:`~epubconvert.run.holders.source_identifier`):
+    the claim pass asked at each look, and a no-op rerun read the package
+    document three times.
     """
     if package in unopened:
         return None
-    return usable_identifier(_metadata_of(package, True))
-
-
-def _copy_identifier(source: Path) -> str | None:
-    """Read an already-zipped book's usable identifier; None for anything else."""
-    try:
-        return usable_identifier(read_archive_package(source))
-    except ValidationError:
-        return None
+    return source_identifier(package)
 
 
 def _stamp(path: Path) -> tuple[int, int]:
