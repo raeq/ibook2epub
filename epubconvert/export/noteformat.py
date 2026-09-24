@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -361,3 +362,65 @@ def _yaml_escape(match: re.Match[str]) -> str:
     """Render one character as a double-quoted YAML escape: ``\\x92``."""
     code = ord(match.group())
     return f"\\x{code:02X}" if code <= 0xFF else f"\\u{code:04X}"
+
+
+#: A double-quoted YAML scalar, and a single-quoted one, each alone on the
+#: rest of its line but for a comment.
+DOUBLE_QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"[ \t]*(?:#.*)?')
+SINGLE_QUOTED = re.compile(r"'((?:[^']|'')*)'[ \t]*(?:#.*)?")
+
+#: One escape of a double-quoted scalar: a code point in hex, or one letter.
+ESCAPE = re.compile(
+    r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))", re.DOTALL
+)
+
+#: YAML 1.2's one-letter escapes (5.7) but for the controls no identifier
+#: holds; one not listed is left as written.
+ESCAPED = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    " ": " ",
+    "t": "\t",
+    "n": "\n",
+    "N": "\x85",
+    "_": "\xa0",
+}
+
+#: Where a plain scalar's comment starts: a hash after white space.
+COMMENT = re.compile(r"[ \t]#")
+
+
+def scalar(written: str) -> str:
+    """
+    Read the value of one frontmatter line, as YAML would.
+
+    The inverse of :func:`quoted`, and of whatever else writes the
+    frontmatter back: Obsidian's property editor and YAML linters write a
+    plain scalar unquoted, or single-quote it. Only the three forms a value
+    on one line takes; anything else is returned as it stands, so it
+    compares equal to nothing it does not spell.
+
+    :param written: What follows ``key:`` on the line.
+
+    :return: The value.
+    """
+    written = written.strip()
+    double = DOUBLE_QUOTED.fullmatch(written)
+    if double:
+        return ESCAPE.sub(_unescape, double.group(1))
+    single = SINGLE_QUOTED.fullmatch(written)
+    if single:
+        return single.group(1).replace("''", "'")
+    if written[:1] in ("'", '"'):
+        return written
+    return COMMENT.split(written, maxsplit=1)[0].rstrip()
+
+
+def _unescape(match: re.Match[str]) -> str:
+    """Read one escape of a double-quoted scalar; an unknown one stays."""
+    code = next((group for group in match.groups()[:3] if group), None)
+    if code is None:
+        return ESCAPED.get(match.group(4), match.group())
+    point = int(code, 16)
+    return chr(point) if point <= sys.maxunicode else match.group()

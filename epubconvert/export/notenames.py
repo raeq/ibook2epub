@@ -23,6 +23,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from ..collect.identifiers import canonical_identifier
+from ..utils.display import collapse
 from ..utils.policy import Assignment
 from .naming import MAX_FILENAME_BYTES, encode_name, filesystem_key, truncate_bytes
 from .noteformat import (
@@ -30,8 +32,8 @@ from .noteformat import (
     book_tags,
     first_start,
     normalise,
-    quoted,
     readable,
+    scalar,
 )
 
 #: Highest ``" (n)"`` a note is numbered with before its book is reported as
@@ -44,6 +46,9 @@ MAX_NOTE_SUFFIX = 99
 #: the quote marks, and the backslashes the escaper puts before an opener.
 #: What is left is the words, which is what says whose highlights they are.
 UNQUOTED = re.compile(r"[\s>\\]+")
+
+#: A frontmatter line naming the book's identifier, and its value.
+IDENTIFIER = re.compile(r"identifier:[ \t]+(.+)")
 
 
 class Holding(Enum):
@@ -78,7 +83,11 @@ class Held:
     tag: str | None = None
     #: Each quoted block of the generated region, as :func:`_words` has it.
     quoted: frozenset[str] = frozenset()
-    #: The ``identifier:`` lines of the frontmatter above the marker.
+    #: The ``identifier:`` values of the frontmatter above the marker, each
+    #: read as YAML would and canonicalised. The line was compared as this
+    #: tool writes it, double-quoted; Obsidian's property editor writes a
+    #: plain scalar back unquoted, and the book's own note then named
+    #: "another edition" and was refused on every run.
     identifiers: frozenset[str] = frozenset()
 
 
@@ -90,8 +99,7 @@ class Claimant:
     tags: frozenset[str]
     #: Its highlights, as :func:`_words` has them.
     words: frozenset[str]
-    #: Its ``identifier:`` line, as :func:`~.noteformat.quoted` writes it,
-    #: in each form an older version could have written.
+    #: Its identifier and its declared one, canonicalised.
     identifiers: frozenset[str]
 
 
@@ -111,7 +119,7 @@ def claimant(found: list[dict[str, Any]], also: Iterable[str] = ()) -> Claimant:
         for key in ("identifier", "declaredIdentifier"):
             value = book.get(key) if isinstance(book, dict) else None
             if value:
-                identifiers.add(f"identifier: {quoted(value)}")
+                identifiers.add(canonical_identifier(collapse(value)))
     return Claimant(
         frozenset(book_tags(found)) | frozenset(also),
         frozenset(_words(str(item.get("text", ""))) for item in found),
@@ -188,12 +196,14 @@ def parse(text: str) -> Held:
                 blocks.append([])
             blocks[-1].append(line)
     quoted_blocks = (_words("\n".join(block)) for block in blocks)
-    identifiers = (line.rstrip() for line in lines[:index])
+    identifiers = (IDENTIFIER.fullmatch(line.rstrip()) for line in lines[:index])
     return Held(
         Holding.UNCLAIMED,
         marker.group(2),
         frozenset(filter(None, quoted_blocks)),
-        frozenset(line for line in identifiers if line.startswith("identifier: ")),
+        frozenset(
+            canonical_identifier(scalar(line.group(1))) for line in identifiers if line
+        ),
     )
 
 
