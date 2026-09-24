@@ -194,3 +194,58 @@ class TestARefreshFindsABookMovedOnPastACopy:
 
         assert _embedded(output / "Dune A (2).epub") == ["U1"]
         assert _embedded(output / "Dune A.epub") is None
+
+
+class TestAHighlightRecordedAgainstNoBookIsReported:
+    """
+    Apple records some highlights against no asset. Those name no book, so
+    ``-ae`` puts them in none, and only a detached file carries them; ``-ae``
+    and ``-ae -ar`` said nothing of them at all.
+    """
+
+    WARNING = (
+        "2 highlight(s) Apple recorded against no book were not embedded; "
+        "use -ad FILE or -ao FILE"
+    )
+
+    @staticmethod
+    def _library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        library = tmp_path / "lib"
+        book = make_metadata_package(
+            library, "Book.epub", title="Book", identifier="urn:uuid:1"
+        )
+        make_databases(
+            tmp_path / "container",
+            rows=[
+                highlight(uuid="U1", asset="A1"),
+                highlight(uuid="U2", asset=None),
+                highlight(uuid="U3", asset=""),
+            ],
+            books=[library_row(asset="A1", title="Book", path=str(book))],
+        )
+        monkeypatch.setattr(
+            "epubconvert.run.annotating.collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+        return library
+
+    @pytest.mark.parametrize("how", [["-m", "0"], ["-ar"]])
+    def test_embedding_says_so(self, tmp_path, monkeypatch, capsys, how):
+        library, output = self._library(tmp_path, monkeypatch), tmp_path / "out"
+        main(["-s", str(library), "-o", str(output), "-m", "0", "-q"])
+        capsys.readouterr()
+
+        code = main(["-s", str(library), "-o", str(output), "-ae", *how])
+
+        assert code == 0
+        assert self.WARNING in capsys.readouterr().err
+
+    def test_a_detached_file_is_where_they_went(self, tmp_path, monkeypatch, capsys):
+        library, output = self._library(tmp_path, monkeypatch), tmp_path / "out"
+
+        main(
+            ["-s", str(library), "-o", str(output), "-m", "0", "-ae"]
+            + ["-ad", str(tmp_path / "highlights.json")]
+        )
+
+        assert "recorded against no book" not in capsys.readouterr().err

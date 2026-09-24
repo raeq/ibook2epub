@@ -139,6 +139,7 @@ def annotations_after_export(
             [item.package for item in named if item.package in kept],
             copied=not args.no_copy_through,
         )
+        _warn_about_bookless(found)
     return None if code == exits.SUCCESS else code
 
 
@@ -190,6 +191,31 @@ def _warn_about_copies(
         how,
         shown,
     )
+
+
+def _warn_about_bookless(found: Sequence[dict[str, Any]]) -> None:
+    """
+    Say so when highlights were recorded against no book at all.
+
+    Apple records some highlights with no asset id. They name no book, so
+    none is embedded anywhere (index_by_package leaves them out), and only a
+    detached file carries them; ``-ae`` and ``-ae -ar`` said nothing of
+    them. Like the copies' warning, this one is not given under ``-ad`` and
+    changes no exit code.
+
+    :param found: Every annotation this run read.
+    """
+    bookless = sum(
+        1
+        for item in found
+        if not (isinstance(book := item.get("book"), dict) and book.get("assetId"))
+    )
+    if bookless:
+        logger.warning(
+            "%d highlight(s) Apple recorded against no book were not embedded; "
+            "use -ad FILE or -ao FILE.",
+            bookless,
+        )
 
 
 def _warn_about_stranded(
@@ -682,6 +708,7 @@ def _embed_in_shelf(
         # Rewritten are the packages' archives; a copy is not rebuilt. Whether
         # there is one on the shelf is the conversion's business, not known here.
         _warn_about_copies(index, copyable, copied=None)
+        _warn_about_bookless(found)
     return _refresh_outcome(tally, converted=converted)
 
 
