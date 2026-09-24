@@ -835,28 +835,24 @@ def format_summary(
         summary = (
             f"Dry run: would export {report.planned} epub file(s) to "
             f"{shelf} (skipped {report.skipped} already present"
+            f"{_clauses(report, failures=False)})."
         )
-        summary += _clauses(report, failures=False)
-        summary += ")."
-        if remaining:
-            # The same advice a real run gives. A bare count left out that
-            # the cap was what held these back.
-            summary += _remaining_hint(report, remaining)
-        return summary
-
-    summary = (
-        f"Exported {report.exported} epub file(s) "
-        f"({report.files_written} member files) to {shelf}"
-    )
-    if report.skipped:
-        summary += f", skipped {report.skipped}"
-    summary += _clauses(report, failures=True)
-    summary += "."
+    else:
+        summary = (
+            f"Exported {report.exported} epub file(s) "
+            f"({report.files_written} member files) to {shelf}"
+        )
+        if report.skipped:
+            summary += f", skipped {report.skipped}"
+        summary += _clauses(report, failures=True) + "."
+    # A dry run too: stopped, its summary read as a finished rehearsal.
     if report.interrupted:
         summary = f"Interrupted. {summary}"
     if report.aborted:
         summary = f"Aborted: not enough free space on {shelf}. {summary}"
     if remaining:
+        # The same advice from a dry run as from a real one. A bare count
+        # left out that the cap was what held these back.
         summary += _remaining_hint(report, remaining)
     return summary
 

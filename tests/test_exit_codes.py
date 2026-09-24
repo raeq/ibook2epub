@@ -739,6 +739,21 @@ class TestAnInterruptAfterTheBooksStillReportsThem:
         assert code == exits.INTERRUPTED
         assert capsys.readouterr().out.startswith("Interrupted. Exported 0")
 
+    def test_an_interrupted_dry_run_says_so(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Its summary read as a finished rehearsal: "would export 0" of a
+        # library it had not finished looking at.
+        make_package(tmp_path / "lib", "Book.epub")
+        monkeypatch.setattr(run, "plan_exports", _interrupt)
+
+        code = run.main(
+            ["-s", str(tmp_path / "lib"), "-o", str(output_dir), "-d", "-q"]
+        )
+
+        assert code == exits.INTERRUPTED
+        assert capsys.readouterr().out.startswith("Interrupted. Dry run: would")
+
 
 class TestAnInterruptedRefreshSaysWhatItDid:
     """
