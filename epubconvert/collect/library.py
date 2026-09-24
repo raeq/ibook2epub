@@ -184,7 +184,11 @@ def read_package_once(
     if package not in parsed:
         try:
             parsed[package] = read_package_dir(package)
-        except (ValidationError, OSError):
+        except (ValidationError, OSError, ValueError):
+            # ValueError as a backstop: a path the OS cannot name -- a NUL in
+            # ZPATH -- raised it into the per-row guard, which dropped the row
+            # rather than this one book's metadata. read_package_dir
+            # translates the case it knows of; this catches the next one.
             parsed[package] = None
     return parsed[package]
 

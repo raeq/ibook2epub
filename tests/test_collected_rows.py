@@ -16,8 +16,15 @@ the other half of the contract: what comes out must be what the schema says.
 from pathlib import Path
 from typing import Any
 
-from epubconvert.collect import annotations
-from tests.test_annotations import highlight, make_databases
+import pytest
+
+from epubconvert.collect import annotations, library, validate
+from epubconvert.utils.opf import Package
+from tests.test_annotations import highlight, library_row, make_databases
+
+#: A ZPATH holding a NUL. Nothing on disk can be called that, and Path.resolve
+#: raises ValueError for it rather than OSError.
+NUL_PATH = "/Users/someone/Books/a\x00b/Leviathan Wakes.epub"
 
 
 def _collected(tmp_path: Path, rows: list[tuple[object, ...]]) -> list[dict[str, Any]]:
@@ -55,3 +62,40 @@ class TestAnInfiniteNumberCostsOneRowAtMost:
         )
 
         assert [item["id"] for item in found] == ["GOOD"]
+
+
+class TestANulInThePathCostsOnlyTheBook:
+    def test_the_highlight_survives_without_its_package(self, tmp_path):
+        # Path.resolve raises ValueError("embedded null byte"). Only
+        # RuntimeError was translated into the ValidationError that
+        # read_package_once takes for unreadable metadata, so the row was
+        # dropped: a bad ZPATH cost every highlight in the book.
+        make_databases(tmp_path, books=[library_row(path=NUL_PATH)])
+
+        found = annotations.collect(tmp_path)
+
+        assert len(found) == 1
+        assert found[0]["book"]["title"] == "Leviathan Wakes"
+
+    def test_the_catalogue_keeps_the_book(self, tmp_path):
+        make_databases(tmp_path, books=[library_row(path=NUL_PATH)])
+
+        found = library.collect(tmp_path)
+
+        assert [entry["title"] for entry in found] == ["Leviathan Wakes"]
+
+    def test_reading_such_a_package_is_a_validation_error(self):
+        with pytest.raises(validate.ValidationError, match="cannot be resolved"):
+            validate.read_package_dir(Path(NUL_PATH))
+
+    def test_a_value_error_from_a_package_is_unreadable_metadata(self, monkeypatch):
+        # The backstop: whatever else a path can raise ValueError for is still
+        # the one book's metadata, never its row.
+        def refusing(_package: Path) -> Package:
+            raise ValueError("embedded null byte")
+
+        monkeypatch.setattr(library, "read_package_dir", refusing)
+        parsed: dict[Path, Package | None] = {}
+
+        assert library.read_package_once(Path("Dune.epub"), parsed) is None
+        assert parsed == {Path("Dune.epub"): None}
