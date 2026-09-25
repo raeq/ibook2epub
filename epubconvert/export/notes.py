@@ -604,7 +604,9 @@ def _write_notes(
             continue
         theirs = item.package in naming.refused
         strays = naming.strays.get(item.package)
-        if strays and not _gather(directory, strays, name, writing, theirs=theirs):
+        if strays and not _gather(
+            directory, strays, name, writing, theirs=theirs, pinned=naming.pinned
+        ):
             tally["left"].extend(strays)
             continue
         written = _write_one(
@@ -692,6 +694,7 @@ def _gather(
     given: Collection[str | None],
     *,
     theirs: bool = False,
+    pinned: Collection[str] = (),
 ) -> bool:
     """
     Move a book's note from the name it had before to the one it is given.
@@ -708,7 +711,9 @@ def _gather(
     and the run exited 1 every time, though the PDF writes nothing and the
     note is not its. Moved, it leaves that name free for the PDF's own note,
     started the day it has a highlight. Nor is a note ever moved onto a
-    name such a book is given: no two books are given one name.
+    name such a book is given: no two books are given one name. A note only
+    its highlights say is the book's does count (*pinned*): the PDF, its
+    highlights deleted in Books, cannot say that note is not its own.
 
     :param directory: The vault.
     :param strays: The book's notes under other names.
@@ -716,6 +721,9 @@ def _gather(
     :param given: Every note name the run gives a book with highlights.
     :param theirs: Whether the note at *name* is another book's, as naming
         found it.
+    :param pinned: The notes that lie at a name another book is given with
+        nothing but their highlights to say whose they are: that book's, it
+        may be, so they are never moved (:class:`~.notenames.Naming`).
 
     :return: True when the note is at *name* now, False when it was left,
         which is logged.
@@ -732,6 +740,15 @@ def _gather(
             advice = f"Merge them into {printable(name)} yourself and rerun."
         elif filesystem_key(old.name) in others:
             reason = "another book is given that name"
+        elif old.name in pinned:
+            reason = (
+                "another book in the library is given that name, whose note it "
+                "may be: only the highlights in it say otherwise"
+            )
+            advice = (
+                f"If it is not that book's, move it to {printable(name)} "
+                "yourself and rerun."
+            )
         elif _present(sidecar):
             reason = f"{printable(sidecar.name)} beside it is still to be merged"
         else:

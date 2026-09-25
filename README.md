@@ -816,7 +816,9 @@ metadata is corrected — takes its note with it: the note is renamed to the
 new name, with everything of yours in it. If it cannot be, because something
 is already at the new name or the note's `.md.new` is still beside it, the
 run names it and exits `1` until you move it yourself; no second note is
-started beside it.
+started beside it. So does a note written before notes named their book
+that lies at the name of another book in your library, highlighted or not:
+only its highlights say it is not that book's, and it is left where it is.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 

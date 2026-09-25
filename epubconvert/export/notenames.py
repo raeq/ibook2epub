@@ -294,6 +294,10 @@ class Naming:
     #: lists them, when the one it is given is not its own
     #: (:meth:`_Names.owner`).
     strays: dict[Path, list[str]] = field(default_factory=dict)
+    #: The strays only their highlights say are their book's that lie at
+    #: the name another book of the run is given: that book's note, for
+    #: all anyone can tell, and never moved (:func:`_at_anothers_name`).
+    pinned: set[str] = field(default_factory=set)
 
 
 class _Names:
@@ -666,6 +670,36 @@ def _strays(
         ]
         if mine:
             names.naming.strays[item.package] = mine
+            pinned = (note for note in mine if _at_anothers_name(note, item, names))
+            names.naming.pinned.update(pinned)
+
+
+def _at_anothers_name(listed: str, item: Assignment, names: _Names) -> bool:
+    """
+    Whether a stray is silent and lies at the name another book is given.
+
+    Such a note may be that book's, whatever it holds: ``Dune.pdf``, every
+    highlight deleted in Books, has nothing to say its note ``Dune.md`` is
+    its, and when another edition highlighted its one passage the note was
+    moved to that edition's name and tagged for it, the reader's writing on
+    the PDF with it. Only a book with highlights to write kept the note in
+    place; every book of the run does now, idle or not. A note tagged for
+    its book, or naming its file, says whose it is whatever name it lies
+    at, and moves.
+
+    :param listed: The stray, as the vault lists it.
+    :param item: The book whose note the highlights say it is.
+    :param names: The names given.
+
+    :return: True when it is to be left where it is.
+    """
+    if not names.silent(names.vault.held(listed)):
+        return False
+    key = filesystem_key(listed)
+    return any(
+        package != item.package and name and filesystem_key(name) == key
+        for package, name in names.given.items()
+    )
 
 
 def _reserve(
