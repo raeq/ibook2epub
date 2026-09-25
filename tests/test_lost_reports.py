@@ -26,6 +26,7 @@ import pytest
 from epubconvert.collect import annotations
 from epubconvert.run import run
 from epubconvert.utils import exits
+from epubconvert.utils.display import emit
 from tests.conftest import make_metadata_package, make_package
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -187,6 +188,63 @@ class TestAReportThatCannotBeWritten:
 
         assert code == exits.NO_OUTPUT
         assert "No space left on device" in capsys.readouterr().err
+
+
+class _AsciiText:
+    """A text stream with no bytes beneath it that holds only ASCII."""
+
+    encoding = "ascii"
+
+    def __init__(self) -> None:
+        self.written: list[str] = []
+
+    def write(self, text: str) -> int:
+        str(bytes(text, "ascii"), "ascii")  # Raises as an ASCII stream does.
+        self.written.append(text)
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+class TestAReportUnderAnEncodingThatIsNotUTF8:
+    """
+    Under ``PYTHONIOENCODING=ascii`` or a Latin-1 locale, the first title in
+    another script ended --list, --verify and a run's summary in a
+    UnicodeEncodeError traceback and exit 1, after the books were written.
+    The report goes out as UTF-8, as the documents on standard output do.
+    """
+
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            pytest.param(["--list"], id="list"),
+            pytest.param(["--list", "--json"], id="json"),
+            pytest.param(["--verify"], id="verify"),
+            pytest.param(["-m", "0", "--force"], id="convert"),
+        ],
+    )
+    def test_it_is_written_as_utf8(self, tmp_path, monkeypatch, mode):
+        library = tmp_path / "lib"
+        make_metadata_package(library, "Café 日本.epub", title="Café 日本")
+        base = ["-s", str(library), "-o", str(tmp_path / "Café 日本")]
+        assert run.main([*base, "-m", "0", "-q"]) == exits.SUCCESS
+        written = io.BytesIO()
+        monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(written, "ascii"))
+
+        code = run.main([*base, *mode])
+
+        sys.stdout.flush()
+        assert code == exits.SUCCESS
+        assert "Café 日本" in str(written.getvalue(), "utf-8")
+
+    def test_a_stream_with_no_bytes_beneath_it_is_escaped(self, monkeypatch):
+        stream = _AsciiText()
+        monkeypatch.setattr(sys, "stdout", stream)
+
+        emit("Café 日本")
+
+        assert "".join(stream.written) == "Caf\\xe9 \\u65e5\\u672c\n"
 
 
 class TestAStreamThatIsClosed:

@@ -123,6 +123,7 @@ def annotations_after_export(
     :return: An exit code when something went wrong, None otherwise.
     """
     if args.dry_run:
+        _unopened_notes(args)
         return None
     # -ar never reaches here: it is its own route, apply_annotations, which
     # converts nothing.
@@ -155,6 +156,26 @@ def annotations_after_export(
     return None if code == exits.SUCCESS else code
 
 
+def _unopened_notes(args: argparse.Namespace) -> None:
+    """
+    Say that a dry run leaves a vault's notes unopened, if it writes a vault.
+
+    What the real run finds in a note -- a file ibook2epub did not write at
+    its name, one it cannot read, an edited sidecar -- leaves that book's
+    highlights unwritten and exits 1. A dry run opens none of them, so it
+    exited 0 without a word about any of it.
+
+    :param args: Parsed command line arguments.
+    """
+    vault = vault_of(args)
+    if args.dry_run and vault is not None:
+        logger.info(
+            "Dry run: the notes in %s were not opened, so a note the real run "
+            "would leave alone, and exit 1 for, is not named here.",
+            printable(str(vault)),
+        )
+
+
 def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
     """
     Write the detached file and stop.
@@ -179,6 +200,7 @@ def _annotations_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
         # site: this route composes with --library-export, whose dry run was
         # honoured while this one went on to write the file.
         logger.info("Dry run: %d annotation(s) read; nothing was written.", len(found))
+        _unopened_notes(args)
         return exits.SUCCESS
     # -ao reads Apple's container and nothing else, but a note's filename comes
     # from the naming policy, so the library still has to be named. Naming is
@@ -462,6 +484,7 @@ def apply_annotations(args: argparse.Namespace, policy: NamingPolicy) -> int:
     # After the shelf is judged too, which a dry run does as the run does,
     # and has said what it would refresh.
     if args.dry_run or not args.annotations_detached:
+        _unopened_notes(args)
         return code
 
     # Each note named after the file the book is placed at, as the

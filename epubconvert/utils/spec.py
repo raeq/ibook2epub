@@ -14,6 +14,9 @@ import unicodedata
 #: The archive member that must come first, uncompressed.
 MIMETYPE_NAME = "mimetype"
 
+#: That name as its local header holds it: the bytes a reader sniffs at 30.
+MIMETYPE_BYTES = b"mimetype"
+
 #: The exact bytes that member must contain.
 MIMETYPE_CONTENT = b"application/epub+zip"
 

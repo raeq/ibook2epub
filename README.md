@@ -407,7 +407,10 @@ ibook2epub -s "$HOME/iBooks/" -o "$HOME/Downloads/epubs/" -d
 
 A dry run refuses what the real run would refuse, with the same exit code: a
 shelf it cannot write, a volume below `--min-free`, a highlights file or vault
-it cannot write, a `--library-export` file it may not write.
+it cannot write, a `--library-export` file it may not write. It does not open
+the notes already in a vault, though, and says so: a note the real run leaves
+alone and exits `1` for — a file ibook2epub did not write at a note's name, one
+it cannot read, an edited `.md.new` — is found only by the real run.
 
 Verbose run, also written to a log file:
 
@@ -1020,7 +1023,10 @@ before the highlights too, since both destinations are judged before either is
 written. The catalogue's directory is judged as the highlights file's is: one
 that is not there, that the run may not write into or search, or that is on a
 read-only volume stops the run with exit code 5 before the library is read, in
-a dry run too.
+a dry run too. A symlink is judged where it leads, where the catalogue is
+written; so is a name too long for its filesystem, and one that is the vault
+the same run makes (`-ao out/vault --library-export out`), or a directory
+above it.
 
 It converts nothing, like `-ao`, and the two compose: the reader who wants
 their catalogue out is the reader who wants their highlights out. It needs no
@@ -1159,6 +1165,11 @@ not let this run look. Every failure prints its reason on stderr as well.
 but readers open anyway — an extra field in the `mimetype` member's local
 header, which `zip` writes unless given `-X` — is said on stderr and changes
 no exit code: a book copied through keeps its bytes, so no rerun would mend it.
+A member's name is the one its header holds, or the UTF-8 name a Unicode
+Path extra field (0x7075) gives it, but never `mimetype` by a field alone, and
+a field never renames `mimetype`. A field Python 3.14's zipfile refuses —
+shorter than its version and CRC, or vouching for the name in bytes that are
+not UTF-8 — is damage on every Python.
 
 `5` also covers a report that could not be written. When `--list`, `--verify`
 or a run's summary cannot be written to standard output — a full disk behind
@@ -1167,10 +1178,12 @@ so a script does not take a lost report for a clean run. The same goes for a
 standard output closed before the run started (`>&-`), and for the document
 `-ao -` or `--library-export -` writes there. A reader that closes the pipe
 early, as `| head` does, has seen what it wanted and changes no exit code, and
-so does a standard error that is closed. Any other code a run has earned
-leads: `--verify` still exits `7` for a damaged shelf. A `--log-file` that
-cannot be opened, or stops taking writes partway, is said once on stderr and
-changes no exit code: it is a copy of what the console shows.
+so does a standard error that is closed. A report goes out as UTF-8 whatever
+the locale or `PYTHONIOENCODING` says, as the documents do. Any other code a
+run has earned leads: `--verify` still exits `7` for a damaged shelf. A
+`--log-file` that cannot be opened, or stops taking writes partway, is said
+once on stderr and changes no exit code: it is a copy of what the console
+shows.
 
 `1` also covers a run that could not proceed at all — for example when the
 output volume is below `--min-free`. Nothing is counted as *failed* in that

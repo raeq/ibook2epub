@@ -36,8 +36,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 MAX_SUFFIX = 99
 
 #: A name numbered by :func:`suffixed`, as a filesystem key: its stem, the
-#: number, and the extension.
-NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
+#: number, and the extension. From 2 and without a leading zero, as it
+#: numbers: ``Dune (1).epub``, a book's folder, was taken for the first
+#: number of ``Dune``, and so for its plain file.
+NUMBERED = re.compile(
+    r"(?P<stem>.*) \((?P<position>[2-9]|[1-9]\d+)\)(?P<extension>\.[^.]*)?"
+)
 
 #: The place in :func:`kept_numbers`'s forms of a file found under a book's
 #: own name where that name looks numbered (``Dune (2)``), which the shelf's

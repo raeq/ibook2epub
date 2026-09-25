@@ -115,6 +115,11 @@ def emit(text: str, *, stderr: bool = False) -> None:
     landed in the JSON on standard output. Standard output closed is a report
     lost; standard error closed ends as a closed pipe there does.
 
+    Written as UTF-8, whatever the stream is set to: under
+    ``PYTHONIOENCODING=ascii`` or a Latin-1 locale, the first title in
+    another script ended the listing, the verdict or the summary in a
+    UnicodeEncodeError traceback and exit 1, after the books were written.
+
     :param text: What to print; a newline is added.
     :param stderr: Print it on standard error instead: a summary goes there
         when ``-ad -`` has standard output for its document, and
@@ -127,7 +132,7 @@ def emit(text: str, *, stderr: bool = False) -> None:
             lose_report(OSError(errno.EBADF, os.strerror(errno.EBADF)))
         return
     try:
-        print(text, file=target, flush=True)
+        _write(target, f"{text}\n")
     except OSError as exc:
         # The stream is pointed at the null device, so neither the next line
         # nor the interpreter's flush at exit can raise again.
@@ -139,6 +144,30 @@ def emit(text: str, *, stderr: bool = False) -> None:
         # Standard error is where it would be said, so a lost summary there
         # goes unsaid; the exit code still tells.
         lose_report(exc, said=target is sys.stderr)
+
+
+def _write(stream: TextIO, text: str) -> None:
+    """
+    Write text beneath a text stream as UTF-8, as the documents are written.
+
+    A stream with no bytes beneath it -- one a caller swapped in -- is written
+    as text, anything it cannot encode escaped.
+
+    :param stream: Standard output or standard error.
+    :param text: What to write.
+    """
+    raw = getattr(stream, "buffer", None)
+    if raw is None:
+        try:
+            stream.write(text)
+        except UnicodeEncodeError:
+            encoding = getattr(stream, "encoding", None) or "utf-8"
+            stream.write(str(bytes(text, encoding, "backslashreplace"), encoding))
+    else:
+        stream.flush()  # Whatever went through the text layer goes out first.
+        raw.write(bytes(text, "utf-8", "backslashreplace"))
+        raw.flush()
+    stream.flush()
 
 
 def lose_report(exc: OSError, *, said: bool = False) -> None:

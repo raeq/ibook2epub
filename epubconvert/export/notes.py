@@ -738,6 +738,12 @@ def _gather(
         elif len(strays) > 1:
             reason = "another note is the same book's"
             advice = f"Merge them into {printable(name)} yourself and rerun."
+            if held := [printable(stray) for stray in strays if stray in pinned]:
+                advice += (
+                    f" Only the highlights in {', '.join(held)} say it is this "
+                    "book's, and another book in the library is given its name: "
+                    "leave it out if it is that book's."
+                )
         elif filesystem_key(old.name) in others:
             reason = "another book is given that name"
         elif old.name in pinned:
@@ -765,8 +771,8 @@ def _gather(
     except OSError as exc:
         reason = f"it could not be moved: {printable(str(exc))}"
     logger.error(
-        "Left %s alone: it is the note of the book now given %s, under the "
-        "name it had before, and %s. %s",
+        "Left %s alone: it holds the highlights of the book now given %s, "
+        "under the name it had before, and %s. %s",
         ", ".join(printable(stray) for stray in strays),
         printable(name),
         reason,

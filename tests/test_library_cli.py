@@ -14,11 +14,14 @@ run, the flags that contradict it, and the flags a run that converts nothing
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from epubconvert.collect import annotations, library
+from epubconvert.export import detached
 from epubconvert.export.catalogue import schema_problems
 from epubconvert.run import cli
 from epubconvert.run.run import main
@@ -553,6 +556,103 @@ class TestWhenTheDestinationIsWrong:
 
         rows = _csv_rows(target.read_text(encoding="utf-8"))
         assert {row["Exclusive Shelf"] for row in rows} == {"to-read"}
+
+
+def _closed(monkeypatch: pytest.MonkeyPatch, closed: Path) -> None:
+    """Make *closed* a directory this run may not write into, as for root."""
+    allowed = os.access
+
+    def access(path: Any, how: int, **kwargs: Any) -> bool:
+        if how & os.W_OK and Path(os.fspath(path)) == closed:
+            return False
+        return allowed(path, how, **kwargs)
+
+    monkeypatch.setattr(os, "access", access)
+
+
+class TestALinkIsJudgedWhereItLeads:
+    """
+    The catalogue is written beside the file a link resolves to, as the
+    highlights file is judged, so that directory is the one asked about: the
+    link's own was, so a link into a closed directory passed and the write
+    refused it after the library was read, and a link out of one was refused
+    though the write would have gone through.
+    """
+
+    def test_a_link_into_a_directory_it_may_not_write_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "closed").mkdir()
+        (tmp_path / "closed" / "real.csv").write_text("old")
+        link = tmp_path / "link.csv"
+        link.symlink_to(tmp_path / "closed" / "real.csv")
+        _closed(monkeypatch, tmp_path / "closed")
+
+        refusal = detached.library_refusal(link, force=True)
+
+        assert refusal == f"Could not write {link}: Permission denied"
+
+    def test_a_link_out_of_one_is_written_through(self, tmp_path, monkeypatch):
+        (tmp_path / "closed").mkdir()
+        (tmp_path / "open").mkdir()
+        (tmp_path / "open" / "real.csv").write_text("old")
+        link = tmp_path / "closed" / "link.csv"
+        link.symlink_to(tmp_path / "open" / "real.csv")
+        _closed(monkeypatch, tmp_path / "closed")
+
+        assert detached.library_refusal(link, force=True) is None
+
+
+class TestWhatTheRunWillMakeIsJudgedToo:
+    @pytest.mark.parametrize("dry", [True, False], ids=["dry", "real"])
+    def test_the_directory_a_vault_is_made_in_is_refused_up_front(
+        self, tmp_path, monkeypatch, capsys, dry
+    ):
+        # Missing, it looked like a free name: the dry run passed, and the
+        # real one wrote the notes and then found a directory there.
+        _container(monkeypatch, tmp_path)
+        made = tmp_path / "made"
+
+        code = main(
+            [
+                "-s",
+                str(tmp_path / "lib"),
+                "-ao",
+                str(made / "vault"),
+                "--annotations-format",
+                "markdown",
+                "--library-export",
+                str(made),
+                *(["--dry-run"] if dry else []),
+            ]
+        )
+
+        assert code == 5
+        assert f"Could not write {made}: Is a directory" in capsys.readouterr().err
+        assert not made.exists()
+
+    def test_the_vault_itself_is_refused_too(self, tmp_path):
+        vault = tmp_path / "vault"
+
+        refusal = detached.library_refusal(vault, force=False, pending=(vault,))
+
+        assert refusal == f"Could not write {vault}: Is a directory"
+
+    def test_a_name_too_long_for_the_filesystem_is_refused_up_front(self, tmp_path):
+        target = tmp_path / ("x" * 300 + ".csv")
+
+        refusal = detached.library_refusal(target, force=False)
+
+        assert refusal == f"Could not write {target}: File name too long"
+
+    def test_a_filesystem_that_cannot_say_leaves_it_to_the_write(
+        self, tmp_path, monkeypatch
+    ):
+        # Windows has no pathconf; the write still refuses the name.
+        monkeypatch.delattr(os, "pathconf")
+        target = tmp_path / ("x" * 300 + ".csv")
+
+        assert detached.library_refusal(target, force=False) is None
 
 
 class TestTheFlagsRefuseWhatTheyCannotDo:

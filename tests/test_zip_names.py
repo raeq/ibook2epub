@@ -20,16 +20,22 @@ nothing depends on a ``zip`` binary being installed.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import ast
+import re
 import warnings
+import zipfile
 import zlib
+from collections.abc import Callable
 from pathlib import Path
-from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
+from typing import Any
+from warnings import warn_explicit
+from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 
 import pytest
 
 from epubconvert.collect import annotations
-from epubconvert.collect.package import member_name, read_archive_package
+from epubconvert.collect.package import ValidationError, read_archive_package
 from epubconvert.collect.validate import ArchiveInvalidError, validate_archive
+from epubconvert.collect.zipnames import member_name
 from epubconvert.export import archive as shelf
 from epubconvert.run import annotating, run
 from epubconvert.utils import exits
@@ -290,6 +296,143 @@ class TestAUnicodePathFieldNamesAnUnflaggedMember:
         assert member_name(ZipInfo("a.xhtml\x00.exe")) == "a.xhtml"
 
 
+def first_named(path: Path, stored: bytes, field: bytes) -> Path:
+    """Write BOOK with *stored* for mimetype's name and *field* in its entry."""
+    stand_in = "#" * len(stored)
+    with ZipFile(path, "w") as writing:
+        for name, text in BOOK.items():
+            info = ZipInfo(stand_in if name == "mimetype" else name)
+            info.extra = field if name == "mimetype" else b""
+            writing.writestr(info, text)
+    path.write_bytes(path.read_bytes().replace(stand_in.encode(), stored))
+    return path
+
+
+class TestAFieldNeverNamesMimetype:
+    """
+    A Unicode Path field neither makes a member ``mimetype`` nor unmakes it.
+
+    OCF fixes the first member's name bytes, which a reader sniffing offset 30
+    checks, and no field changes them. A book storing ``XXXXXXXX`` with a
+    field saying ``mimetype`` passed --verify; one storing ``mimetype`` with a
+    field saying ``zzz`` was renamed ``zzz`` by a refresh.
+    """
+
+    def test_a_field_does_not_name_a_member_mimetype(self):
+        info = ZipInfo("XXXXXXXX")
+        info.extra = unicode_path(b"XXXXXXXX", "mimetype")
+
+        assert member_name(info) == "XXXXXXXX"
+
+    def test_a_field_does_not_rename_mimetype(self):
+        info = ZipInfo("mimetype")
+        info.extra = unicode_path(b"mimetype", "zzz")
+
+        assert member_name(info) == "mimetype"
+
+    def test_verify_reports_a_first_member_only_a_field_calls_mimetype(self, tmp_path):
+        field = unicode_path(b"XXXXXXXX", "mimetype")
+        path = first_named(tmp_path / "Book.epub", b"XXXXXXXX", field)
+
+        assert "first member is 'XXXXXXXX', not 'mimetype'" in validate_archive(path)
+
+    def test_a_refresh_keeps_mimetype_whatever_a_field_claims(self, tmp_path):
+        field = unicode_path(b"mimetype", "zzz")
+        path = first_named(tmp_path / "Book.epub", b"mimetype", field)
+
+        assert shelf.replace_annotations(path, [NOTE])
+
+        assert path.read_bytes()[30:38] == b"mimetype"
+        assert validate_archive(path) == []
+
+    def test_verify_reads_the_first_local_headers_own_name(self, tmp_path):
+        # The directory says mimetype; the header at offset 0 does not.
+        path = first_named(tmp_path / "Book.epub", b"mimetype", b"")
+        raw = bytearray(path.read_bytes())
+        raw[30:38] = b"XXXXXXXX"
+        path.write_bytes(bytes(raw))
+
+        problems = validate_archive(path)
+
+        expected = "first member's local header names it b'XXXXXXXX', not mimetype"
+        assert expected in problems
+
+
+def chapter_field(path: Path, field: bytes) -> Path:
+    """Write BOOK with *field* as the chapter's extra field."""
+    with ZipFile(path, "w") as writing:
+        for name, text in BOOK.items():
+            info = ZipInfo(name)
+            info.extra = field if name == CHAPTER else b""
+            writing.writestr(info, text)
+    return path
+
+
+#: The chapter's name as the directory holds it, which a field vouches for.
+_CHAPTER_CRC = zlib.crc32(CHAPTER.encode("utf-8")).to_bytes(4, "little")
+
+
+class TestAFieldZipfileRefusesIsDamageEverywhere:
+    """
+    zipfile 3.14 refuses an archive whose Unicode Path field is shorter than
+    its version and CRC, or vouches for the name in bytes that are not UTF-8,
+    where 3.10 opened it and member_name fell back without a word: --verify
+    exited 7 on one and 0 on the other. So every Python refuses it, in 3.14's
+    words. An empty field 3.14 opens, but warned of on stderr.
+    """
+
+    @pytest.mark.parametrize(
+        ("field", "said"),
+        [
+            (b"\x75\x70\x02\x00\x01\x00", ""),
+            (b"\x75\x70\x06\x00\x01" + _CHAPTER_CRC + b"\xff", ": invalid utf-8 bytes"),
+        ],
+        ids=["short", "not-utf8"],
+    )
+    def test_every_reader_refuses_it(self, tmp_path, field, said):
+        path = chapter_field(tmp_path / "Book.epub", field)
+        refused = f"Corrupt unicode path extra field (0x7075){said}"
+
+        assert validate_archive(path) == [f"not a readable zip archive: {refused}"]
+        with pytest.raises(ValidationError, match=re.escape(refused)):
+            read_archive_package(path)
+        with pytest.raises(BadZipFile, match=re.escape(refused)):
+            shelf.replace_annotations(path, [NOTE])
+
+    def test_a_field_for_another_name_is_not_read(self, tmp_path):
+        field = b"\x75\x70\x06\x00\x01" + zlib.crc32(b"x").to_bytes(4, "little")
+        path = chapter_field(tmp_path / "Book.epub", field + b"\xff")
+
+        assert validate_archive(path) == []
+
+    @pytest.mark.parametrize("reader", ["verify", "package", "refresh"])
+    def test_zipfiles_warning_of_an_empty_field_is_not_shown(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch, reader
+    ):
+        # 3.14 warns of it as it opens the archive; others are made to.
+        opening = ZipFile.__init__
+
+        def warned(self: ZipFile, file: Any, *args: Any, **kwargs: Any) -> None:
+            if (args or ("r",))[0] == "r":
+                warn_explicit("Empty", UserWarning, zipfile.__file__, 1, "zipfile")
+            opening(self, file, *args, **kwargs)
+
+        monkeypatch.setattr(ZipFile, "__init__", warned)
+        field = unicode_path(CHAPTER.encode("utf-8"), "")
+        path = chapter_field(tmp_path / "Book.epub", field)
+        read: Callable[[Path], object] = {
+            "verify": validate_archive,
+            "package": read_archive_package,
+            "refresh": lambda book: shelf.replace_annotations(book, [NOTE]),
+        }[reader]
+
+        with warnings.catch_warnings(record=True) as shown:
+            warnings.simplefilter("always")
+            read(path)
+
+        assert [str(warning.message) for warning in shown] == []
+
+
 class TestARefreshKeepsTheRealName:
     def test_the_rebuild_writes_the_member_under_its_utf8_name(self, tmp_path):
         path = unflagged(tmp_path / "Book.epub", BOOK)
@@ -354,7 +497,7 @@ class TestRuleEveryReaderKnowsAMemberByItsUTF8Name:
         # is clear, so a lookup by name, a listing of names or a ZipInfo's
         # filename is a reader this rule missed, and 3.14 lets a Unicode Path
         # field rewrite filename. The directory's orig_filename is read only
-        # by member_name. Derived, so a new one fails.
+        # by member_name and _name_bytes. Derived, so a new one fails.
         offenders = []
         for path in sorted(Path("epubconvert").rglob("*.py")):
             text = path.read_text(encoding="utf-8")
@@ -366,7 +509,8 @@ class TestRuleEveryReaderKnowsAMemberByItsUTF8Name:
                 if node.attr in _ASKED_BY_NAME:
                     offenders.append(f"{path}:{node.lineno} {node.attr}")
                 if node.attr == "orig_filename":
-                    if not _inside(tree, node, "member_name"):
+                    readers = ("member_name", "_name_bytes")
+                    if not any(_inside(tree, node, name) for name in readers):
                         offenders.append(f"{path}:{node.lineno} orig_filename")
                     continue
                 if node.attr != "filename" or not reads_archives:

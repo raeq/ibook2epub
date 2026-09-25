@@ -375,6 +375,48 @@ class TestWritingNotes:
         assert not vault.exists() or list(vault.glob("*.md")) == []
 
 
+class TestADryRunSaysItOpensNoNote:
+    """
+    A dry run does not open the vault's notes, so a note the real run leaves
+    alone and exits 1 for -- a file ibook2epub did not write at a note's
+    name, one it cannot read, an edited sidecar -- went unmentioned, and the
+    dry run exited 0. It says so, and the README says so.
+    """
+
+    @pytest.mark.parametrize(
+        "route",
+        [
+            pytest.param(["-ao"], id="annotations-only"),
+            pytest.param(["-m", "0", "-ae", "-ad"], id="export"),
+            pytest.param(["-ae", "-ar", "-ad"], id="refresh"),
+        ],
+    )
+    def test_it_says_the_notes_were_not_opened(
+        self, tmp_path, output_dir, monkeypatch, capsys, route
+    ):
+        library = _library(tmp_path, monkeypatch)
+        output_dir.mkdir(exist_ok=True)
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "Leviathan Wakes.md").write_text("My own thoughts.\n")
+        flags = ["-s", str(library), "-o", str(output_dir), "-d", *route]
+
+        main([*flags, str(vault), "--annotations-format", "markdown"])
+
+        err = capsys.readouterr().err
+        assert f"the notes in {vault} were not opened" in err
+        assert (vault / "Leviathan Wakes.md").read_text() == "My own thoughts.\n"
+
+    def test_nor_is_it_said_where_there_is_no_vault(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        library = _library(tmp_path, monkeypatch)
+
+        main(["-s", str(library), "-d", "-ao", str(tmp_path / "highlights.json")])
+
+        assert "were not opened" not in capsys.readouterr().err
+
+
 class TestTheSecondRun:
     def _vault(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         library = _library(tmp_path, monkeypatch)

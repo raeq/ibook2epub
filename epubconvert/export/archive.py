@@ -24,13 +24,13 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 from ..collect.annotations import EMBEDDED_PATH, embedded_json, index_by_book
 from ..collect.package import (
     ValidationError,
-    member_name,
     open_member,
     open_regular,
     read_member,
     repeated_entries,
 )
 from ..collect.validate import ArchiveInvalidError, ValidationOptions, storable
+from ..collect.zipnames import member_name, open_archive
 from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
 from ..utils.display import printable
@@ -806,7 +806,7 @@ def replace_annotations(
     partial: Path | None = None
     target_archive, mode = _what_to_replace(target_archive)
     try:
-        with _open_shelved(target_archive) as opened, ZipFile(opened) as reading:
+        with _open_shelved(target_archive) as opened, open_archive(opened) as reading:
             # Each listing of a member would be inflated and written again.
             repeated = repeated_entries(reading)
             if repeated is not None:

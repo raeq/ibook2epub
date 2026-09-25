@@ -603,8 +603,16 @@ def library_refusal(
     # and was refused for the spelling. The same normalisation the two
     # destinations are already compared with.
     coming = {os.path.realpath(path) for path in pending}
-    inside_vault = os.path.realpath(target.parent) in coming
-    if inside_vault and _note_name(target.name):
+    # Where the write lands: through a link, beside the file it resolves to,
+    # as the highlights file is judged. Judged by the link's own directory, a
+    # link into a closed one passed and the write refused it after the read.
+    landing = Path(os.path.realpath(target))
+    if any(Path(path).is_relative_to(landing) for path in coming):
+        # The vault, or a directory the run makes it in: missing, it looked a
+        # free name, and the write found a directory once the notes were in.
+        return _cannot_write(target, os.strerror(errno.EISDIR))
+    inside_vault = str(landing.parent) in coming
+    if inside_vault and _note_name(landing.name):
         # A vault is written before the catalogue, so this target is a note
         # that does not exist yet: its name looks free, and --force then
         # wrote a CSV over the reader's highlights. Every other write in this
@@ -614,7 +622,7 @@ def library_refusal(
             "the library export would write over it. Name a file the vault "
             "does not use, or put the catalogue outside it."
         )
-    homeless = None if inside_vault else _homeless(target)
+    homeless = None if inside_vault else _homeless(target, landing)
     if homeless is not None:
         return homeless
     # os.path.lexists, which never raises, and sees a dangling link as there:
@@ -647,7 +655,7 @@ def _is_directory(target: Path) -> bool:
         return False
 
 
-def _homeless(target: Path) -> str | None:
+def _homeless(target: Path, landing: Path) -> str | None:
     """
     Say why the library export cannot be written into its directory, if so.
 
@@ -655,13 +663,15 @@ def _homeless(target: Path) -> str | None:
     directory was asked, so one on a read-only volume, or one the run may not
     write into, passed the dry run, and the real run read the whole library
     before the write refused it. Beside ``-ao``, the highlights were written
-    first and the catalogue refused after them.
+    first and the catalogue refused after them. So is a name longer than the
+    directory's filesystem allows.
 
     :param target: The file the run would write.
+    :param landing: Where the write lands.
 
     :return: The reason, or None when the directory can be written into.
     """
-    folder = target.parent
+    folder = landing.parent
     try:
         os.stat(folder)  # noqa: PTH116
     except FileNotFoundError:
@@ -672,7 +682,26 @@ def _homeless(target: Path) -> str | None:
     except OSError:
         pass  # Named below, as the write would name it.
     reason = _directory_refusal(folder)
+    if reason is None and _too_long(landing):
+        reason = os.strerror(errno.ENAMETOOLONG)
     return None if reason is None else _cannot_write(target, reason)
+
+
+def _too_long(landing: Path) -> bool:
+    """
+    Whether a file's name is longer than its directory's filesystem allows.
+
+    :param landing: The file, where the write lands.
+
+    :return: True when the write would fail for it. False when it would not,
+        or the limit cannot be asked, as on Windows or before the vault the
+        file goes in is made; the write still says so then.
+    """
+    try:
+        most = os.pathconf(landing.parent, "PC_NAME_MAX")
+    except (AttributeError, OSError, ValueError):
+        return False
+    return 0 < most < len(os.fsencode(landing.name))
 
 
 def _note_name(name: str) -> bool:

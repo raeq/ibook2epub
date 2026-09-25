@@ -44,7 +44,7 @@ module, so this map saves a search:
 ``test_escaped_names.py``    a book's names in --verify and --validate, and
                              a skipped row's id, reach the terminal escaped
 ``test_zip_names.py``        member names not flagged UTF-8, as Info-ZIP
-                             writes them (``package.member_name``)
+                             writes them (``zipnames.member_name``)
 ``test_merged_book_fields.py`` a merged ``-ao`` file takes a book's
                              fields as they are now
 ===========================  ==================================================
