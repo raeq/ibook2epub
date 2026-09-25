@@ -603,6 +603,58 @@ class TestALinkIsJudgedWhereItLeads:
         assert detached.library_refusal(link, force=True) is None
 
 
+class TestWhatTheRunWillMakeIsJudgedToo:
+    @pytest.mark.parametrize("dry", [True, False], ids=["dry", "real"])
+    def test_the_directory_a_vault_is_made_in_is_refused_up_front(
+        self, tmp_path, monkeypatch, capsys, dry
+    ):
+        # Missing, it looked like a free name: the dry run passed, and the
+        # real one wrote the notes and then found a directory there.
+        _container(monkeypatch, tmp_path)
+        made = tmp_path / "made"
+
+        code = main(
+            [
+                "-s",
+                str(tmp_path / "lib"),
+                "-ao",
+                str(made / "vault"),
+                "--annotations-format",
+                "markdown",
+                "--library-export",
+                str(made),
+                *(["--dry-run"] if dry else []),
+            ]
+        )
+
+        assert code == 5
+        assert f"Could not write {made}: Is a directory" in capsys.readouterr().err
+        assert not made.exists()
+
+    def test_the_vault_itself_is_refused_too(self, tmp_path):
+        vault = tmp_path / "vault"
+
+        refusal = detached.library_refusal(vault, force=False, pending=(vault,))
+
+        assert refusal == f"Could not write {vault}: Is a directory"
+
+    def test_a_name_too_long_for_the_filesystem_is_refused_up_front(self, tmp_path):
+        target = tmp_path / ("x" * 300 + ".csv")
+
+        refusal = detached.library_refusal(target, force=False)
+
+        assert refusal == f"Could not write {target}: File name too long"
+
+    def test_a_filesystem_that_cannot_say_leaves_it_to_the_write(
+        self, tmp_path, monkeypatch
+    ):
+        # Windows has no pathconf; the write still refuses the name.
+        monkeypatch.delattr(os, "pathconf")
+        target = tmp_path / ("x" * 300 + ".csv")
+
+        assert detached.library_refusal(target, force=False) is None
+
+
 class TestTheFlagsRefuseWhatTheyCannotDo:
     def test_an_empty_filename_is_refused(self):
         with pytest.raises(SystemExit):
