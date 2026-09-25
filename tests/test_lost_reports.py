@@ -273,3 +273,23 @@ class TestADocumentOnStandardOutput:
         assert "Could not write the report to standard output" in (
             capsys.readouterr().err
         )
+
+
+class TestACtrlCAsTheRunEnds:
+    def test_while_it_asks_whether_the_report_was_lost(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # Asked after main's handler, so a Ctrl-C there was a traceback and
+        # exit 1 once every book had been written.
+        make_package(tmp_path / "lib", "Book.epub")
+
+        def interrupted() -> bool:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr("epubconvert.utils.display.report_lost", interrupted)
+
+        code = run.main(["-s", str(tmp_path / "lib"), "-o", str(tmp_path / "out")])
+
+        assert code == exits.INTERRUPTED
+        assert "Interrupted; rerun to continue." in capsys.readouterr().err
+        assert (tmp_path / "out" / "Book.epub").is_file()

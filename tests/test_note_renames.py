@@ -409,6 +409,54 @@ class TestANamesakeWithNothingToWrite:
         assert (vault / "Dune (Deluxe).md").read_bytes() == before["Dune (Deluxe).md"]
 
 
+class TestALegacyNoteAtAnIdleBooksName:
+    """
+    ``Dune.pdf`` has lost every highlight in Books; its note ``Dune.md``, as
+    2.3.1 wrote it, holds one passage and the reader's writing on the PDF.
+    Another edition, named ``Dune (3).pdf`` and with no note of its own,
+    highlights that passage now. Only the highlights say whose the note is,
+    and they name that edition, so the note was moved to ``Dune (3).md`` and
+    tagged for it, the reader's writing on the PDF with it, without a word.
+    """
+
+    ASSETS: dict[str, str | None] = {"P": "Dune.pdf", "Q": "Other.epub"}
+
+    def _write(self, vault: Path, found: list[dict[str, Any]], suffix: bool) -> int:
+        named = [
+            Assignment(Path("Dune.pdf"), "Dune.pdf", "dune.pdf"),
+            Assignment(Path("Other.epub"), "Dune (3).pdf", "dune (3).pdf"),
+        ]
+        return notes.write_vault(
+            found, str(vault), named, copyable=(), suffix=suffix, assets=self.ASSETS
+        )
+
+    @pytest.mark.parametrize("suffix", [False, True])
+    def test_it_is_left_where_it_is_and_named(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], suffix: bool
+    ):
+        app_logger.configure(verbosity=0)
+        vault = tmp_path / "vault"
+        pdfs = [_highlight("Fear is the mind-killer.", "P", "Dune.pdf")]
+        assert self._write(vault, pdfs, suffix) == exits.SUCCESS
+        note = vault / "Dune.md"
+        _legacy(note)
+        note.write_text(note.read_text(encoding="utf-8") + MINE, encoding="utf-8")
+        before = _snapshot(vault)
+        others = [
+            _highlight("Fear is the mind-killer.", "Q", "Other.epub"),
+            _highlight("The spice must flow.", "Q", "Other.epub"),
+        ]
+
+        for _ in range(2):
+            assert self._write(vault, others, suffix) == exits.FAILED
+
+            assert _snapshot(vault) == before
+            reported = capsys.readouterr().err
+            assert "Left Dune.md alone" in reported
+            assert "another book in the library is given that name" in reported
+            assert "If it is not that book's, move it to Dune (3).md" in reported
+
+
 class TestWhatIsLookedFor:
     def test_not_a_note_naming_another_file(self, vault: Path):
         note = vault / "Dune.md"

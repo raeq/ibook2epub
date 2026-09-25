@@ -389,9 +389,12 @@ def _group_copies(
         groups.setdefault(filesystem_key(name), []).append((source, output_dir / name))
     for source, skipped in not_downloaded:
         logger.warning("Skipped, %s: %s", printable(skipped), printable(source.name))
-    with _REPORT_LOCK:
-        report.incomplete += len(not_downloaded)
-        report.collisions += len(plan.lost)
+    # Without the report lock: no worker has started, and the lock is one
+    # every run in the process shares and cannot re-enter. A Ctrl-C landing
+    # in its exit here, on the run's own thread, left it held, and the next
+    # run in the process hung at its first count.
+    report.incomplete += len(not_downloaded)
+    report.collisions += len(plan.lost)
     return list(groups.values())
 
 

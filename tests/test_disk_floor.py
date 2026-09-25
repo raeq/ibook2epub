@@ -13,8 +13,9 @@ from typing import Any
 
 import pytest
 
-from epubconvert.run import convert, run
+from epubconvert.run import convert, copying, run
 from epubconvert.utils import exits
+from tests.conftest import make_metadata_package
 
 
 class TestTheFloorIsSampledOnce:
@@ -105,6 +106,77 @@ class TestAnInterruptWhileTheFloorIsAsked:
         assert first == exits.INTERRUPTED
         assert second == exits.SUCCESS
         assert (tmp_path / "out" / "Paper.pdf").is_file()
+
+
+class _CutShort:
+    """
+    The report lock, whose first exit on the run's own thread is cut short by
+    Ctrl-C before it releases. The workers' exits are left alone: they run on
+    threads a Ctrl-C does not reach.
+    """
+
+    def __init__(self, lock: Any) -> None:
+        self._lock = lock
+        self.fired = False
+
+    def __enter__(self) -> "_CutShort":
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        worker = threading.current_thread().name.startswith(("zip", "copy"))
+        if not worker and not self.fired:
+            self.fired = True
+            raise KeyboardInterrupt
+        self._lock.release()
+
+    def locked(self) -> bool:
+        return bool(self._lock.locked())
+
+    def release(self) -> None:
+        self._lock.release()
+
+
+class TestAnInterruptWhileTheReportIsCounted:
+    """
+    The run's own thread counted into the report under the one lock every
+    run's workers share, which is not reentrant: the copies it could not make
+    before the pool started, and the books whose worker raised once the pool
+    had finished. A Ctrl-C landing in that lock's exit, before the release,
+    left it held for the life of the process, and the next run in it hung.
+    Neither count races a worker, so neither takes the lock.
+    """
+
+    @pytest.mark.parametrize(
+        "book",
+        [
+            pytest.param("Paper.pdf", id="a-copy"),
+            pytest.param("Alpha.epub", id="a-book-whose-worker-raised"),
+        ],
+    )
+    def test_leaves_the_next_run_free_to_go(self, tmp_path, monkeypatch, book):
+        library = tmp_path / "lib"
+        if book.endswith(".pdf"):
+            library.mkdir()
+            (library / book).write_bytes(b"%PDF-1.4\n")
+        else:
+            make_metadata_package(library, book, title="Alpha")
+
+            def raising(*_: object) -> bool:
+                raise RuntimeError("escaped the worker")
+
+            monkeypatch.setattr(convert._Progress, "has_room", raising)
+        lock = _CutShort(threading.Lock())
+        monkeypatch.setattr(convert, "_REPORT_LOCK", lock)
+        monkeypatch.setattr(copying, "_REPORT_LOCK", lock)
+        argv = ["-s", str(library), "-o", str(tmp_path / "out"), "-m", "0"]
+
+        first = _within(PATIENCE, argv)
+        second = _within(PATIENCE, argv)
+
+        assert second is not None, "the second run hung"
+        assert first == second
+        assert not lock.fired
 
 
 #: How long a run is given before it is taken to have hung.

@@ -703,7 +703,8 @@ converted, in a dry run too. A directory that is not there or cannot be
 written (a read-only volume is named as one), a file already there that is not
 an annotation export, or a name the run itself makes a directory (`-ad Books
 -o Books`) stops the run with exit code 5 and says why, rather than after
-every book is converted.
+every book is converted. A directory already there is named as one: give a
+file, or add `--annotations-format markdown` to write a note per book into it.
 
 **On macOS this needs Full Disk Access.** The databases live inside Apple's
 container. Without it, `-ao` and `-ar`, where the highlights are the whole run,
@@ -799,7 +800,8 @@ highlights no book has any more, or only some of one book's — goes with its
 name, or the numbered name `--on-collision suffix` gave it, when only one book
 wants that name. When two do, neither is handed it: without
 `--on-collision suffix` the run names it and exits `1`, and with it each book
-gets a numbered note. So does a note two books each hold every highlight of.
+gets a numbered note. So does a note two books each hold every highlight of,
+whether or not either has a note of its own already.
 
 A note is another book's when the book it names is one Books still knows —
 in your library, highlighted or not — when its frontmatter names another
@@ -815,7 +817,9 @@ metadata is corrected — takes its note with it: the note is renamed to the
 new name, with everything of yours in it. If it cannot be, because something
 is already at the new name or the note's `.md.new` is still beside it, the
 run names it and exits `1` until you move it yourself; no second note is
-started beside it.
+started beside it. So does a note written before notes named their book
+that lies at the name of another book in your library, highlighted or not:
+only its highlights say it is not that book's, and it is left where it is.
 
 A rerun with nothing new writes nothing at all, so a vault in git stays quiet.
 
@@ -1013,7 +1017,10 @@ ibook2epub --library-export --dry-run                           # just the estim
 The third one writes both files, and takes `--force` because the catalogue is
 a snapshot: without it a second run stops at the file already there, and stops
 before the highlights too, since both destinations are judged before either is
-written.
+written. The catalogue's directory is judged as the highlights file's is: one
+that is not there, that the run may not write into or search, or that is on a
+read-only volume stops the run with exit code 5 before the library is read, in
+a dry run too.
 
 It converts nothing, like `-ao`, and the two compose: the reader who wants
 their catalogue out is the reader who wants their highlights out. It needs no

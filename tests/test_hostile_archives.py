@@ -30,6 +30,7 @@ from epubconvert.collect.annotations import EMBEDDED_PATH
 from epubconvert.collect.validate import ArchiveInvalidError
 from epubconvert.export import archive
 from epubconvert.run import run
+from epubconvert.utils import exits
 from tests.conftest import corrupt_member, make_metadata_package
 from tests.test_validate import MEMBERS, write_epub
 
@@ -449,6 +450,55 @@ class TestARepeatedDirectoryEntryIsNotInflatedAgain:
 
         assert not problems
         assert inflated[PADDING] == 1
+
+    @staticmethod
+    def _sharing_mimetype(path: Path, shared: str = "mimetype") -> Path:
+        """Point the last directory entry at the *shared* member's header."""
+        with ZipFile(write_epub(path)) as opened:
+            offset = opened.getinfo(shared).header_offset
+        raw = bytearray(path.read_bytes())
+        last = raw.rindex(b"PK\x01\x02")
+        raw[last + 42 : last + 46] = offset.to_bytes(4, "little")
+        path.write_bytes(bytes(raw))
+        return path
+
+    def test_its_package_document_is_not_read_to_name_it(self, tmp_path):
+        # Naming a book by its metadata read container.xml, and 3.14 printed
+        # the same warning of it; a book like this cannot describe itself.
+        path = self._sharing_mimetype(tmp_path / "O.epub", "META-INF/container.xml")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(package_reader.ValidationError, match="share a local"):
+                package_reader.read_archive_package(path)
+
+    def test_verify_reads_no_member_of_it_on_any_python(self, tmp_path):
+        # mimetype was read before the shared header was found: 3.14 then
+        # printed zipfile's own "UserWarning: Overlapped entries: 'mimetype'"
+        # above the report, and 3.11 refused the whole archive in its words.
+        path = self._sharing_mimetype(tmp_path / "Overlap.epub")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            problems = validate.validate_archive(path)
+
+        assert problems == [package_reader.SHARED_HEADER]
+
+    def test_verify_says_so_in_its_own_words_alone(self, tmp_path, capsys):
+        shelf, library = tmp_path / "shelf", tmp_path / "lib"
+        library.mkdir()
+        shelf.mkdir()
+        self._sharing_mimetype(shelf / "Overlap.epub")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            code = run.main(["--verify", "-s", str(library), "-o", str(shelf)])
+
+        said = capsys.readouterr()
+        assert code == exits.DAMAGED
+        damaged = f"[1/1] Overlap.epub is damaged: {package_reader.SHARED_HEADER}"
+        assert damaged in said.err.splitlines()
+        assert "Overlapped" not in said.err
 
     @pytest.mark.parametrize("method", [ZIP_STORED, ZIP_DEFLATED])
     def test_a_refresh_refuses_to_rebuild_it(self, tmp_path, monkeypatch, method):

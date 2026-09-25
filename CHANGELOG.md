@@ -20,10 +20,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- `-ae -ar` writes a book's members in the order the file stores them, not
-  the order its central directory lists them. A book storing `mimetype`
-  first but listing it later passed `--verify`, was rewritten with
-  `mimetype` not first, and then failed it.
+- `-ae -ar` writes `mimetype` first and the other members in the order the
+  file stores them, not the order its central directory lists them. A book
+  storing `mimetype` first but listing it later passed `--verify`, was
+  rewritten with `mimetype` not first, and then failed it; a book listing
+  `mimetype` first but storing it later is still repaired by a refresh.
+
+- `--verify` reads nothing of an archive whose directory entries share a
+  local header, so Python 3.13 and later no longer print zipfile's own
+  `UserWarning: Overlapped entries: 'mimetype' (possible zip bomb)` above
+  the report. Naming a book by its metadata refuses such an archive too.
 
 - A container's rootfile media type is compared without regard to case or
   parameters, so `application/oebps-package+xml; charset=utf-8` names the
@@ -31,11 +37,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   type is taken ahead of one declaring another: a PDF listed ahead of an
   untyped package document was parsed as the package document.
 
-- A zip member is named by its own header on every Python. Python 3.14 took
-  the name from a Unicode Path extra field (0x7075) instead, where 3.10 and
-  3.11 ignore it, so a member stored as `a.xhtml` with such a field saying
-  `b.xhtml` had a different name on each, and `--verify` and `-ae -ar` read
-  the book differently.
+- A zip member is named the same way on every Python, as Info-ZIP's unzip
+  names it: an unflagged name takes the UTF-8 name of a Unicode Path extra
+  field (0x7075) whose CRC matches the name's bytes, and a flagged name is
+  its own. Python 3.14 took the field's name even for a flagged name, where
+  3.10 and 3.11 ignore the field, so `--verify` and `-ae -ar` read one book
+  differently on each; and a book zipped by WinZip, or by Info-ZIP on
+  Windows, which stores a non-ASCII name in the OEM code page with its
+  UTF-8 name in that field, had its chapter reported missing, and a refresh
+  rewrote the chapter under a misreading of its name.
 
 - `-ad` naming the shelf or a directory the run makes above it (`-ad Books
   -o Books` on a first run) is refused before anything is converted, with
@@ -51,6 +61,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - A dry run of `--library-export` refuses a file the real run would refuse,
   with exit code `5`, as a dry run of `-ao` does. It only warned ("A real run
   would refuse to write") and exited `0`. So does `-ao --library-export -d`.
+
+- `--library-export` into a directory the run cannot write into, one on a
+  read-only volume, or one it may not search is refused with exit code `5`
+  before the library is read, in the dry run and the real run alike, and
+  beside `-ao` before the highlights are written. The dry run exited `0`,
+  the real run read the whole library before the write refused it, `-ao`
+  wrote the highlights and then failed the catalogue, and on Python 3.10 and
+  3.11 an unsearchable directory was a traceback and exit `1`.
+
+- `-ad` or `-ao` naming an existing directory in the JSON format says it is a
+  directory: name a file, or pass `--annotations-format markdown` to write one
+  note per book into it. It was said to be a file "already there and could
+  not be read (not a regular file)", with advice to move it aside.
+
+- A Ctrl-C landing as the run counted, on its own thread, the copies it could
+  not make or a book whose worker failed no longer leaves the report's lock
+  held, which hung a second run started in the same process.
+
+- A Ctrl-C landing as a highlights file, a note or a library export was given
+  its temporary, before the temporary's name was known, no longer leaves a
+  `.ibook2epub-*.part` file beside it. Nor is a Ctrl-C as the run asks
+  whether its report was lost, once all the work is done, a traceback: it
+  exits `130`.
 
 - A highlights file in a directory the run may not search is refused as
   "Permission denied" on every Python; on 3.10 and 3.11 it was said to be
@@ -966,6 +999,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - `-s` naming a file says the path is not a directory, rather than that it
   does not exist.
+
+- A note written before notes named their book, holding only passages two
+  editions both highlighted, goes to neither edition on every run. One that
+  had a note of its own elsewhere -- which may be the fresh note the tie
+  itself gave it -- stepped aside, so once the reader deleted the other's
+  empty duplicate, or edited a line of its note, the other edition took the
+  note: its highlights written over it, the note tagged for it, and the
+  reader's writing on the first edition left under them, without a word.
+  Such a note is now left as it is and each edition numbered past it, or
+  refused it, as when neither had a note of its own; an upgraded vault's
+  PDF note that both editions hold stays where it is and the PDF starts a
+  fresh one.
+
+- A note written before notes named their book is not moved to another
+  book's new name while it lies at the name a book in the library is given,
+  highlighted or not: the book with no highlights today cannot say the note
+  is not its own. The note of a `Dune.pdf` whose highlights were all deleted
+  was moved to another edition's note name and tagged for it, the reader's
+  writing on the PDF with it, when that edition highlighted the note's
+  passage. It is named and left alone, and the run exits `1`, as a note
+  that cannot be moved is.
 
 ## [2.3.1] - 2026-09-11
 

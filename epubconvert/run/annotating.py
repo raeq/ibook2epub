@@ -780,10 +780,12 @@ def run_container_only(args: argparse.Namespace, policy: NamingPolicy) -> int:
             # The highlights merge and would have been safe to rerun, so a
             # reader repeating the README's composed command sees only the
             # catalogue's refusal and no sign that the rest was skipped too.
+            # Pointed at the refusal above rather than at --force: a
+            # directory the run may not write into is not opened by it.
             logger.error(
                 "Your highlights were not written either, because both files "
-                "are judged before either is written. Pass --force to replace "
-                "the library export, or write the two separately."
+                "are judged before either is written. Settle the library "
+                "export's refusal above, or write the two separately."
             )
         return exits.NO_OUTPUT
     # The highlights first: their export merges into its file, so a refusal

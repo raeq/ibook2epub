@@ -880,23 +880,23 @@ def _rebuild(
     reading: ZipFile, members: list[ZipInfo], partial: Path, embedded: str
 ) -> None:
     """
-    Copy archive members into a new archive, one stream at a time, and embed
-    an annotation set after them.
+    Copy members into a new archive a stream at a time, then the annotations.
 
-    Streamed rather than read into a list first: that held the whole book in
-    memory, so refreshing a 300 MB book peaked at 300 MB, and the MemoryError
-    a large one raised is not an error a refresh reports and moves past. Each
-    member keeps its compression and gets the same normalized entry a fresh
-    export gives it, so a refreshed book is byte-identical to one exported
-    with the same annotations in the first place.
+    Streamed, not read into a list first: that held the whole book in memory,
+    so refreshing a 300 MB book peaked at 300 MB, and the MemoryError a large
+    one raised is not one a refresh reports and moves past. Each member keeps
+    its compression and gets the entry a fresh export gives it, so the book is
+    byte-identical to one exported with these annotations in the first place.
 
     :param reading: The archive being refreshed, open for reading.
-    :param members: The members to carry across, written in the file's order.
+    :param members: What to carry across: mimetype first, as OCF asks, then as stored.
     :param partial: The new archive to write.
     :param embedded: The annotation document to store after the members.
     """
     with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
-        for info in sorted(members, key=lambda info: info.header_offset):
+        for info in sorted(
+            members, key=lambda i: (member_name(i) != MIMETYPE_NAME, i.header_offset)
+        ):
             member = entry(member_name(info), info.compress_type)
             _size_ahead(member, info.file_size)
             with (
@@ -937,10 +937,15 @@ def write_atomically(target: Path, text: str) -> None:
     target, mode = _what_to_replace(target)
     partial: Path | None = None
     try:  # Made inside: a Ctrl-C as its descriptor closed left it behind.
-        handle, temporary = tempfile.mkstemp(
-            dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-        )
-        partial = Path(temporary)
+        # Named before it is made: a Ctrl-C as mkstemp returned left its .part
+        # in a vault. Made exclusively, so a name already taken is not removed.
+        while partial is None:
+            name = f"{PARTIAL_PREFIX}{os.urandom(8).hex()}{PARTIAL_SUFFIX}"
+            partial = target.parent / name
+            try:
+                handle = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                partial = None
         os.close(handle)
         partial.write_text(text, encoding="utf-8")
         _sync(partial)

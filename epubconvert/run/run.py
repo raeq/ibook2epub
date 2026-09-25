@@ -546,6 +546,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     display.start_report()
     try:
         code = _run(args)
+        # A report that could not be written -- a listing, a verdict, a
+        # summary -- is a destination the run could not use, and a script
+        # that reads only the status would otherwise take a lost report for a
+        # clean run. Any other failure outranks it, as it outranks a detached
+        # file's. Asked inside the try: after it, a Ctrl-C here was a
+        # traceback once all the work was done.
+        if code == exits.SUCCESS and display.report_lost():
+            code = exits.NO_OUTPUT
     except KeyboardInterrupt:
         # The export stops cleanly and says what it finished. Everything else
         # -- reading the highlights, --list, --verify, the -ar refresh -- has
@@ -553,12 +561,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Each writes by atomic replace, so nothing is left half-written.
         logger.warning("Interrupted; rerun to continue.")
         return exits.INTERRUPTED
-    # A report that could not be written -- a listing, a verdict, a summary
-    # -- is a destination the run could not use, and a script that reads
-    # only the status would otherwise take a lost report for a clean run.
-    # Any other failure outranks it, as it outranks a detached file's.
-    if code == exits.SUCCESS and display.report_lost():
-        return exits.NO_OUTPUT
     return code
 
 

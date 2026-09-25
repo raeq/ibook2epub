@@ -197,12 +197,16 @@ def check_archive(path: Path) -> Verdict:
             names = [member_name(info) for info in entries]
             members = set(names)
             by_name = dict(zip(names, entries, strict=True))
-            problems.extend(_check_mimetype(archive, by_name))
+            # Before mimetype is read: zipfile 3.13 and later print their own
+            # "Overlapped entries" warning on reading an entry whose header
+            # another shares, above the report, so none of it is read then.
+            repeated = repeated_entries(archive)
+            readable = repeated != SHARED_HEADER
+            problems.extend(_check_mimetype(archive, by_name, readable=readable))
             warnings.extend(_mimetype_warnings(by_name, handle))
             problems.extend(_check_unique(names))
-            repeated = repeated_entries(archive)
-            if repeated == SHARED_HEADER:
-                problems.append(repeated)
+            if not readable:
+                problems.append(SHARED_HEADER)
 
             # Before anything is inflated: the contents are checked only when
             # every member can be decompressed in bounded memory, and once.
@@ -391,13 +395,17 @@ def _check_methods(archive: ZipFile) -> list[str]:
     return disallowed
 
 
-def _check_mimetype(archive: ZipFile, members: dict[str, ZipInfo]) -> list[str]:
+def _check_mimetype(
+    archive: ZipFile, members: dict[str, ZipInfo], *, readable: bool
+) -> list[str]:
     """
     Check the ``mimetype`` entry the epub specification mandates.
 
     :param archive: The open archive.
     :param members: Its members by name, built once by the caller; the last
         listing of a name, as zipfile's own lookup keeps.
+    :param readable: Whether its content may be read: not when two entries
+        share a local header, which the caller reports.
 
     :return: A list of problems.
     """
@@ -434,7 +442,9 @@ def _check_mimetype(archive: ZipFile, members: dict[str, ZipInfo]) -> list[str]:
     # the declaration a bound, so only a stored member is read, and only as
     # far as that length: a compressed one declaring 20 bytes inflated whole.
     if info.file_size != len(MIMETYPE_CONTENT) or (
-        stored and read_member(archive, info, len(MIMETYPE_CONTENT)) != MIMETYPE_CONTENT
+        stored
+        and readable
+        and read_member(archive, info, len(MIMETYPE_CONTENT)) != MIMETYPE_CONTENT
     ):
         problems.append("mimetype does not contain 'application/epub+zip'")
 
