@@ -703,7 +703,8 @@ converted, in a dry run too. A directory that is not there or cannot be
 written (a read-only volume is named as one), a file already there that is not
 an annotation export, or a name the run itself makes a directory (`-ad Books
 -o Books`) stops the run with exit code 5 and says why, rather than after
-every book is converted.
+every book is converted. A directory already there is named as one: give a
+file, or add `--annotations-format markdown` to write a note per book into it.
 
 **On macOS this needs Full Disk Access.** The databases live inside Apple's
 container. Without it, `-ao` and `-ar`, where the highlights are the whole run,
@@ -1016,7 +1017,10 @@ ibook2epub --library-export --dry-run                           # just the estim
 The third one writes both files, and takes `--force` because the catalogue is
 a snapshot: without it a second run stops at the file already there, and stops
 before the highlights too, since both destinations are judged before either is
-written.
+written. The catalogue's directory is judged as the highlights file's is: one
+that is not there, that the run may not write into or search, or that is on a
+read-only volume stops the run with exit code 5 before the library is read, in
+a dry run too.
 
 It converts nothing, like `-ao`, and the two compose: the reader who wants
 their catalogue out is the reader who wants their highlights out. It needs no

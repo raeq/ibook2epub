@@ -62,6 +62,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   with exit code `5`, as a dry run of `-ao` does. It only warned ("A real run
   would refuse to write") and exited `0`. So does `-ao --library-export -d`.
 
+- `--library-export` into a directory the run cannot write into, one on a
+  read-only volume, or one it may not search is refused with exit code `5`
+  before the library is read, in the dry run and the real run alike, and
+  beside `-ao` before the highlights are written. The dry run exited `0`,
+  the real run read the whole library before the write refused it, `-ao`
+  wrote the highlights and then failed the catalogue, and on Python 3.10 and
+  3.11 an unsearchable directory was a traceback and exit `1`.
+
+- `-ad` or `-ao` naming an existing directory in the JSON format says it is a
+  directory: name a file, or pass `--annotations-format markdown` to write one
+  note per book into it. It was said to be a file "already there and could
+  not be read (not a regular file)", with advice to move it aside.
+
+- A Ctrl-C landing as the run counted, on its own thread, the copies it could
+  not make or a book whose worker failed no longer leaves the report's lock
+  held, which hung a second run started in the same process.
+
+- A Ctrl-C landing as a highlights file, a note or a library export was given
+  its temporary, before the temporary's name was known, no longer leaves a
+  `.ibook2epub-*.part` file beside it. Nor is a Ctrl-C as the run asks
+  whether its report was lost, once all the work is done, a traceback: it
+  exits `130`.
+
 - A highlights file in a directory the run may not search is refused as
   "Permission denied" on every Python; on 3.10 and 3.11 it was said to be
   "already there and could not be read" when it was not there at all. A
