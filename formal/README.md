@@ -151,6 +151,40 @@ it loses the name. With `KeepOwn`, a copy whose claimed name holds a file
 that is not its own is placed at no file on the shelf (`not_own`), since its
 size says so where no identifier can.
 
+`SourceMarked` is the provenance marker (`export/provenance.py`): every
+archive a run writes for a package names its source -- the book's path in the
+library -- in the zip archive comment, and a file copied through is copied as
+it is. A book is its source here, so a marker names the book whose archive
+the file is, and the variable `mark` says whether a file carries one. Where
+the plan read a book's identifier, the marker is read with it and outranks it
+(`placing._marked`); before `--refresh` writes over an archive it is read
+whatever the policy; `claims.kept_numbers` keeps a numbered or marked file
+whose marker names the book and passes over one naming another; for a name
+two packages want, the book a file's marker names claims it first, and a file
+naming none of them is spoken for, so none of them claims it
+(`telling.tell_apart`); and the orphan check lists a marked file unless it
+names a book of the library that the plan gives no name. `RefuseAmbiguous` is
+the rest of `telling`: an unmarked file of such a name goes, in skip mode, to
+the one book that declares its identifier, and where two books that nothing
+tells apart -- no usable identifier, or one between them -- want it, it is
+spoken for; and a book known to declare no usable identifier is never placed
+at a file that declares one. `Legacy` is the files on the shelf before the
+first run, written before markers: `LegacyOfTwo` is book 2's archive under
+the plain name. `AcceptMoved` is `holders.moved`: a marked file naming a
+package no longer in the library is still a book's own where both declare a
+usable identifier that no other book of the library declares -- the archive
+of a book moved to another folder. (The code asks the same of a file whose
+marker names a book added since at the moved book's old path, which the
+model cannot hold; see "What a marker keys on" below.) Every configuration
+written before markers sets the four to `FALSE`, `FALSE`, `NoLegacy` and
+`FALSE`, and so keeps its outcome; with the three switches on, each of those
+that holds still holds.
+
+A move itself cannot be written in this model, where a book is its source.
+What the planner sees of one -- the book that wrote the file gone from the
+library, another declaring its identifier present -- is a book of `SharedId`
+deleted beside its mate, and that is what `SharedIdMoved` checks.
+
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
 | `Stable` | whole library, `--refresh` | fixed | none | on | both hold |
@@ -180,10 +214,20 @@ size says so where no identifier can.
 | `NumberedRemovals` | `--match`, `--refresh`, suffix mode, named from the folder, two packages | removed with their archives | none | before a write | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `NumberedRemovalsStuck` | the same, without `KeepNumbered` | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
 | `NumberedRemovalsCrowd` | `NumberedRemovals` with three packages | removed with their archives | none | the same | **NoArchiveOfTheLibraryIsAnOrphan violated** |
+| `NumberedRemovalsCrowdMarked` | the same, with `SourceMarked` and `RefuseAmbiguous` | removed with their archives | none | the same | NoArchiveOfTheLibraryIsAnOrphan holds |
 | `NumberedLeftBehind` | `--match`, `--refresh`, suffix mode, named from the folder, a package titled like the other's name numbered | books added and removed, archives left | the look-alike only | before a write | ExportedMeansTheBooksOwnFile and NoArchiveOfTheLibraryIsAnOrphan hold |
 | `NumberedLeftBehindLoose` | the same, without `AskNumbered` | books added and removed, archives left | the look-alike only | the same | **ExportedMeansTheBooksOwnFile violated** |
 | `NamesakeAdded` | `--match`, `--refresh`, suffix mode, named from the folder, two packages of one name | books added | all | before a write | all four hold |
 | `NamesakeAddedLoose` | the same, without `KeepShared` | books added | all | the same | **ExportedMeansTheBooksOwnFile violated** |
+| `UnidentifiableMarked` | as `Unidentifiable`, with `SourceMarked` and `RefuseAmbiguous` | books added and removed | book 1 only | on | the three hold |
+| `UnidentifiableLegacy` | the same, book 2's archive on the shelf from before markers | books added and removed | book 1 only | on | **ExportedMeansTheBooksOwnFile violated** |
+| `SharedIdMarked` | `--match`, `--refresh`, two packages of one name and one identifier, with markers | books added and removed | one, shared | on | the three hold |
+| `SharedIdSuffixMarked` | the same, suffix mode | books added and removed | one, shared | on | all but NoArchiveOfTheLibraryIsAnOrphan hold |
+| `SharedIdLoose` | `SharedIdMarked` without markers | books added and removed | one, shared | on | **ExportedMeansTheBooksOwnFile violated** |
+| `SharedIdMoved` | `SharedIdMarked` with `AcceptMoved` | books added and removed | one, shared | on | **ExportedMeansTheBooksOwnFile violated** |
+| `UnidentifiableRefuse` | `--match`, `--refresh`, two packages of one name, book 2's archive from before markers | fixed | none | on | the three hold |
+| `UnidentifiableRefuseSuffix` | the same, suffix mode | fixed | none | on | ExportedMeansTheBooksOwnFile and NeverWritesOverAnotherBook hold |
+| `UnidentifiableRefuseLoose` | `UnidentifiableRefuse` without `RefuseAmbiguous` | fixed | none | on | **ExportedMeansTheBooksOwnFile violated** |
 
 What the configurations that fail show:
 
@@ -207,11 +251,54 @@ What the configurations that fail show:
 
   `tests/test_planning.py::TestANameOnTheShelfIsNotProofOfTheBook` replays
   each of these against the CLI.
-- **`Unidentifiable`** is the limit the fix does not remove. When one of the
-  two books has no usable identifier (none at all, or a placeholder such as
-  `none`), nothing tells them apart, and the name decides as it did before.
-  Two books that share a genuine identifier, such as a converter's template
-  UUID, cannot be told apart either.
+- **`Unidentifiable`** is the limit the check did not remove, as it stood
+  before markers. When one of the two books has no usable identifier (none at
+  all, or a placeholder such as `none`), nothing tells them apart, and the
+  name decides. Two books that share a genuine identifier, such as a
+  converter's template UUID, cannot be told apart either: once one leaves the
+  library, the other is reported exported from its archive by the identifier
+  they share (`SharedIdLoose`).
+
+  Every archive a run writes now names its source, and `UnidentifiableMarked`,
+  `SharedIdMarked` and `SharedIdSuffixMarked` hold over the same libraries:
+  where the identifiers cannot tell two books apart, the marker does. The
+  two `SharedId` ones leave `AcceptMoved` off: with it, a book that shared
+  its identifier with a book since deleted, and has no file of its own -- a
+  collision in skip mode, or not yet written in either -- is taken for that
+  book moved, reported exported from its archive, and written over it by
+  `--refresh` and `--force` (`SharedIdMoved`). From the shelf the two cannot
+  be told apart, and finding a moved book's archive is what that costs. It is
+  what the planner did before markers, by the identifier the two shared
+  (`SharedIdLoose` fails the same way), so it loses nothing an upgrade kept.
+  The marker is read where the plan reads the identifiers anyway -- from the
+  same open -- where it knows a book declares none, for a name two books
+  want, and before a write. A rerun over identified books reads nothing
+  more, but for one short read of the last bytes of each file of a name two
+  books want, in skip mode under a policy that names from the folder: nothing
+  else there reads the file, and nothing else tells the two apart.
+
+  A file written before markers names nothing.
+  `UnidentifiableRefuseLoose` is book 2's archive from before markers and
+  books 1 and 2, neither with a usable identifier: book 1 sorts first and was
+  reported exported from it. Now neither is given it (`UnidentifiableRefuse`):
+  in skip mode both are collisions, and the file, which may be either one's
+  only archive, is not listed as an orphan; in suffix mode each is written
+  under a name of its own, with its marker (`UnidentifiableRefuseSuffix`), and
+  the file is then listed as an orphan, as a book taking its marker leaves its
+  old one. A book known to declare no usable identifier is not given a file
+  that declares one either.
+
+  **`UnidentifiableLegacy`** is the limit that remains: a file from before
+  markers that declares no usable identifier, whose book has left the
+  library, is taken by the name by a book alone in wanting it -- with or
+  without an identifier of its own, since the file has none to compare --
+  and `--refresh` writes over it, as NeverWritesOverAnotherBook would show
+  too. So is one declaring an identifier the book shares with the book that
+  left. A file copied through carries no marker either, so a deleted zipped
+  book's file is the same case. Refusing a book alone its unmarked file
+  would write every shelf made before markers again. Files written by this
+  version carry their marker, and are not taken this way.
+  `tests/test_told_apart.py` replays these against the CLI.
 - **`ChangingSuffixStuck`** is what the check cost suffix mode before
   `placing.place`. With the 1965 edition's archive under the plain name, a run
   that names the Ace edition alone -- any run after the 1965 edition is
@@ -246,6 +333,15 @@ What the configurations that fail show:
   placing, and moves on past a number a deleted namesake left.
   `tests/test_planning.py::TestAFolderNameIsNotProofOfTheBook` replays the
   writes against the CLI.
+
+  Markers do not change the report here, which would read every archive on
+  every rerun: they are read for a folder name two books of the library want,
+  when the names are claimed, and before any write. So a namesake added
+  beside a marked archive is not taken for its book, in either mode, and
+  `--force` and `--refresh` write over no archive whose marker names another
+  book; but a book alone in wanting the name of a namesake that left the
+  library is still listed as exported from its file, as the model shows with
+  or without markers.
 
 - **`CopiesSuffixStuck`** is the claim pass before a copy kept its own
   file in suffix mode. The rule that a copy already on the shelf keeps its
@@ -319,7 +415,9 @@ What the configurations that fail show:
 - **`NumberedRemovalsCrowd`** is the limit of that rule: with three
   packages and no usable identifier, once the first leaves, two books still
   want the plain name, and nothing says which numbered file is whose. The
-  last takes the second's number, and its own archive is an orphan.
+  last takes the second's number, and its own archive is an orphan. With
+  markers each numbered file says whose it is, and
+  `NumberedRemovalsCrowdMarked` holds.
 
 - **`NumberedLeftBehindLoose`** is that rule before `AskNumbered`. It asked
   nothing of the file: a book `Dune (1965)` with a real identifier was
@@ -375,6 +473,47 @@ What the model does not describe, and why:
   the CLI in `tests/test_case_namesakes.py`.
 - **`--force`**, which writes over a book's own archive as `--refresh` does
   for a newer source, and is checked before the write the same way.
+- **What a marker keys on.** A book is its source here. The code names the
+  book's path in the library, NFC-normalized and case folded, so a folder
+  renamed by case keeps its book's archives, and two paths that differ by
+  case alone are one source -- as they are on the case-insensitive volume the
+  library lives on by default; where a case-sensitive one holds both, the
+  planner finds two books of one source and takes a marker naming it as
+  evidence for neither: it neither gives the file to one of them nor refuses
+  it to both, and their names and identifiers decide, as before markers
+  (`tests/test_told_apart.py`). Refused to both, each was written under a new
+  number on every run in suffix mode. A book moved to another folder is
+  another source: its archive names a source no book has. Where the book and
+  the archive declare a usable identifier that no other book of the library is
+  known to declare, the archive is the book's own (`holders.moved`,
+  `AcceptMoved`): found, kept, reported exported, not listed as an orphan, and
+  written over by `--refresh`, `--force` and `-ae -ar`, whose write names the
+  new folder; a quiet rerun writes nothing. Under a policy that names from the
+  folder only the identifiers read are known, so another book declaring the
+  same one unread does not stop it. A moved book declaring no usable
+  identifier, or one another book declares, is listed as an orphan and written
+  again in suffix mode or is a collision in skip mode -- the failure that
+  costs a write, never the one that loses a book
+  (`tests/test_moved_books.py`). Another book added since at the moved book's
+  old path has the source the archive names. Taken at the marker's word, the
+  moved book lost its only archive to it; now, where the file declares the
+  moved book's identifier, no other book declares that, and the newcomer is
+  known to declare another or none, the identifier decides, and the newcomer
+  moves on as from another book's file. A newcomer declaring the same
+  identifier, or left unread, keeps the marker's word. This cannot be written
+  in the model: a marker there names the book whose archive the file is, and
+  the file declares that book's identifier, so the rule never applies to a
+  file the model can hold (`tests/test_moved_books.py` replays it against the
+  CLI). A book named from its folder that no other book competes with is
+  trusted by its name, marker unread, and so found where it moved either way.
+  A book deleted and another added at its path is the same source; where both
+  declare usable identifiers and they differ, or the file declares one and the
+  newcomer none, the file is still the other book's before any write
+  (`tests/test_told_apart.py`) and, where the plan read the identifiers, in
+  what it reports; named from the folder, the newcomer can be reported
+  exported from it, the `FolderNamedReports` limit. Where the file declares
+  none, the newcomer is taken for its book, and `--force` or `--refresh`
+  writes over it.
 - **Two different files of one size and one modification time.** A copy's
   own bytes are told exactly here; the code tells them by size and
   modification time, which a copy keeps from its source

@@ -693,7 +693,7 @@ def _same_file(source: Path, found: Path, stamps: Collection[int]) -> bool:
     Decide from a stat of each whether *found* is *source*'s copy.
 
     A copy keeps its source's modification time
-    (:func:`~epubconvert.export.archive.copy_through`), so the size and the
+    (:func:`~epubconvert.export.writing.copy_through`), so the size and the
     time together say so. By size alone, a zipped book or a PDF of the same
     size replacing a deleted one was taken as already copied, and never was.
 

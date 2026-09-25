@@ -443,7 +443,8 @@ def build_parser() -> argparse.ArgumentParser:
             "exports only the first, 'suffix' keeps both. A suffixed book is "
             "marked with a digest of its own dc:identifier, so adding another "
             "book later does not rename it; books whose identifier is missing "
-            "or shared fall back to ' (2)', which does move."
+            "or shared fall back to ' (2)', which each keeps by the source its "
+            "archive names."
         ),
     )
     integrity.add_argument(

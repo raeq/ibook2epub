@@ -65,6 +65,15 @@ class Assignment:
     #: A package that kept a numbered file of its name on the shelf
     #: (claims.kept_numbers), rather than claiming the first free name.
     kept_number: bool = False
+    #: A digest of the package's path in the library, which every archive
+    #: written of it names (:mod:`epubconvert.export.provenance`). None when
+    #: the run was given no library to be relative to, and for a file
+    #: copied through, which is copied as it is.
+    source: str | None = None
+    #: Why the book was not given a file its name holds: nothing tells it
+    #: from another book of the library that wants the file too, and the
+    #: file names no source. The run says so once.
+    untold: str | None = None
 
 
 @runtime_checkable

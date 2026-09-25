@@ -15,7 +15,13 @@ from pathlib import Path
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from .claims import MARKED, NUMBERED, shelf_files, shelf_names
-from .holders import holds_another_book, identifier_on_shelf, same_identity
+from .holders import (
+    holds_another_book,
+    identifier_on_shelf,
+    marker_on_shelf,
+    same_identity,
+    written_for,
+)
 from .placing import Existing, Shelf, place, read_shelf
 from .planning import ORPHAN, SKIP, CollisionMode, Decision, assign_names
 
@@ -62,6 +68,14 @@ def find_orphans(
     then outsorted by an added ``a/Dune.epub`` that a case-insensitive
     filesystem gives the same file, had its only archive listed here.
 
+    An archive whose marker names its source is judged by that alone: one
+    written from a source no book of the library has is an orphan, whatever
+    book its name or its identifier might be taken for, and so is one of a
+    book the plan names elsewhere, as an archive left under an old name is.
+    The archive of a book the plan gives no name may be its only one, and is
+    not listed. That reads the last bytes of each file no book is placed at,
+    and of no other.
+
     Nothing is deleted, here or anywhere. The never-deletes stance is
     deliberate; the gap was that nothing would say either.
 
@@ -104,12 +118,39 @@ def find_orphans(
             claimed.add(filesystem_key(clash.identity))
 
     live = {item.identifier for item in assigned if item.identifier}
+    nameless = {item.source for item in assigned if item.source and not item.filename}
     return sorted(
         found
         for found in shelf_files(output_dir)
         if (key := filesystem_key(policy.identity(found.name))) not in claimed
-        and not (live and key in shelf.spoken and identifier_on_shelf(found) in live)
+        and _unclaimed(found, key in shelf.spoken, (live, nameless), shelf)
     )
+
+
+def _unclaimed(
+    found: Path,
+    spoken: bool,
+    books: tuple[Container[str], Container[str]],
+    shelf: Shelf,
+) -> bool:
+    """
+    Decide whether a file no book is placed at is an orphan.
+
+    :param found: The file.
+    :param spoken: Whether its name is one the plan gave a book.
+    :param books: The identifiers of the books of the library, and the
+        sources of those the plan gives no name.
+    :param shelf: The shelf, with the sources of the books of the library.
+
+    :return: True when no book of the library may be the one it holds.
+    """
+    live, nameless = books
+    marked = marker_on_shelf(found) if shelf.sources else None
+    # A marker naming a source two books share names neither: the file is
+    # judged as one written before markers (holders.written_for).
+    if marked is not None and shelf.sources[marked] < 2:
+        return marked not in nameless
+    return not (live and spoken and identifier_on_shelf(found) in live)
 
 
 def _unopened_forms(
@@ -174,6 +215,10 @@ def _held_by_loser(item: Assignment, shelf: Shelf) -> Existing | None:
         or not same_identity(found.identity, item.identity)
     ):
         return None
+    # The file under a name two books want: its marker says whose it is.
+    marked = written_for(found.path, item.source, shelf.sources)
+    if marked is not None:
+        return found if marked else None
     return found if holds_another_book(found.path, item.identifier) is None else None
 
 

@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Collection, Container, Iterable, Sequence
+from collections.abc import Callable, Collection, Container, Iterable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -25,7 +25,13 @@ from ..export.naming import (
     split_extension,
     truncate_bytes,
 )
-from .holders import identifier_on_shelf, source_identifier
+from .holders import (
+    UNREAD,
+    identifier_on_shelf,
+    marker_on_shelf,
+    moved,
+    source_identifier,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..utils.opf import Package
@@ -123,6 +129,9 @@ class Claims:
         self.holders: dict[str, str] = {}
         #: The name that took each filesystem key.
         self.held: dict[str, str] = {}
+        #: Why no book of the plan may have a file, by its filesystem key
+        #: (:mod:`epubconvert.run.telling`).
+        self.refused: dict[str, str] = {}
 
     def resume(self, group: str) -> int:
         """Return the first position worth trying for this group."""
@@ -167,6 +176,19 @@ class Claims:
         "another book already claims this name".
         """
         return self.holders.get(group) or self.held.get(filesystem_key(name))
+
+    def refuse(self, key: str, candidate: str, reason: str) -> None:
+        """
+        Speak for a name no book of the plan may have, so none claims it.
+
+        :param key: The name's identity.
+        :param candidate: The name.
+        :param reason: Why, for a book that loses its name to it.
+        """
+        path_key = filesystem_key(candidate)
+        self.identities.add(key)
+        self.paths.add(path_key)
+        self.refused[path_key] = reason
 
     def exhaust(self, group: str, limit: int) -> None:
         """Record that this group has no positions left to try."""
@@ -291,7 +313,7 @@ def numbered_names(
 
 
 class Keeping(NamedTuple):
-    """What :func:`kept_numbers` found of one package's files on the shelf."""
+    """What the shelf says of one package's files (:func:`kept_numbers`)."""
 
     #: The file it keeps, if any.
     file: str | None = None
@@ -301,6 +323,14 @@ class Keeping(NamedTuple):
     #: Its usable identifier, where one was read to find its file: placing
     #: compares it with the file it is given (holders.foreign).
     identifier: str | None = None
+    #: Why it was refused a file that nothing tells from another book's
+    #: (:mod:`epubconvert.run.telling`), when it keeps none of its own.
+    untold: str | None = None
+
+
+#: The numbered files of a book's name and those of its marked name, each
+#: lowest first.
+_Forms = tuple[list[tuple[int, str]], list[tuple[int, str]]]
 
 
 class Wanting(NamedTuple):
@@ -316,6 +346,9 @@ class Wanting(NamedTuple):
     alone: bool
     #: The package to read its identifier from, when naming did not.
     unread: Path | None
+    #: Its source, which the archives written of it name
+    #: (:attr:`~epubconvert.utils.policy.Assignment.source`).
+    source: str | None = None
 
 
 def kept_numbers(
@@ -323,6 +356,7 @@ def kept_numbers(
     shelf: Collection[str],
     policy: NamingPolicy,
     unopened: Container[Path] = frozenset(),
+    refused: Collection[str] = frozenset(),
 ) -> dict[int, Keeping]:
     """
     Find the numbered file on the shelf each package in suffix mode keeps.
@@ -392,6 +426,22 @@ def kept_numbers(
     identifier says, so a copy that keeps the file sends the package back to
     claim a name (copynames._Claiming.reclaim).
 
+    Before any identifier, the marker of each of these files is read: one
+    that names the book's source is its own, whatever the identifiers can
+    say, and one that names another source is no number of it, and under its
+    plain name refuses it that name as a file of another identifier does. So
+    two books that declare no usable identifier keep their numbers when the
+    book before them leaves, and one added since is given no number a
+    deleted namesake left. A file no book of its crowd may have
+    (:mod:`epubconvert.run.telling`) is not kept either.
+
+    A book that keeps no file its own marker names, and finds one whose
+    marker names another book of the library, is asked first whether that
+    file is its own from before a move (holders.moved): it keeps it before
+    the book the marker names claims anything, and that book moves on as
+    from another book's file. Only such a book pays for the reads: one not
+    yet written, or moved.
+
     :param books: Each package, in sorted order.
     :param shelf: The shelf's names, from :func:`shelf_names`.
     :param policy: The naming policy in force.
@@ -400,6 +450,7 @@ def kept_numbers(
         (:class:`~epubconvert.run.holders.Unopened`). Left unread whatever
         the run was asked, an evicted book kept nothing, and without the
         flag its only archive was listed as an orphan.
+    :param refused: The names of the files no book may keep.
 
     :return: What was found of each book whose files were looked at, by
         index into *books*: the file it keeps, whether its plain name's file
@@ -409,6 +460,7 @@ def kept_numbers(
     sharing = Counter(filesystem_key(policy.identity(book.base)) for book in books)
     directory = getattr(shelf, "directory", None)
     kept: dict[int, Keeping] = {}
+    library = _Library.of(books, unopened)
 
     def forms(name: str) -> list[tuple[int, str]]:
         key = filesystem_key(policy.identity(name))
@@ -423,13 +475,14 @@ def kept_numbers(
             (number, found)
             for number, found in [*index.get(key, []), *itself]
             if found not in {keeping.file for keeping in kept.values()}
+            and found not in refused
             and (number <= 1 or filesystem_key(policy.identity(found)) not in sharing)
         )
 
-    for position, book in enumerate(books):
+    def looked_at(book: Wanting) -> _Forms | None:
         numbers = forms(book.base)
         marked_forms = forms(book.stable) if book.stable != book.base else []
-        if directory is None or (
+        if (
             all(n <= 1 for n, _ in numbers)
             and not marked_forms
             # Nor shared: no other book wants the file, as its name or as a
@@ -438,9 +491,231 @@ def kept_numbers(
                 numbers and _shared(filesystem_key(policy.identity(book.base)), sharing)
             )
         ):
-            continue
-        kept[position] = _keeps(book, (numbers, marked_forms), directory, unopened)
+            return None
+        return numbers, marked_forms
+
+    if directory is None:
+        return kept
+    kept.update(_movers(books, looked_at, directory, library))
+    for position, book in enumerate(books):
+        found = None if position in kept else looked_at(book)
+        if found is not None:
+            kept[position] = _kept(book, found, directory, library)
     return kept
+
+
+def _movers(
+    books: Sequence[Wanting],
+    looked_at: Callable[[Wanting], _Forms | None],
+    directory: Path,
+    library: _Library,
+) -> dict[int, Keeping]:
+    """
+    Find the books that keep a file from before a move, before any other claims.
+
+    A book is asked only where no file the planner looks at here names its
+    source: one not yet written, or moved to another folder. A book whose
+    own archive is under a name another book wants is not found among the
+    files of its own names, and was asked on every run.
+
+    :param books: Each package, in sorted order.
+    :param looked_at: The files of a book's names on the shelf, or None
+        when they are not looked at.
+    :param directory: The shelf.
+    :param library: The sources and identifiers of the library.
+
+    :return: The file each such book keeps, by index into *books*.
+    """
+    looked = {}
+    for position, book in enumerate(books):
+        found = looked_at(book)
+        if found is not None:
+            looked[position] = [name for entries in found for _, name in entries]
+    marks = {
+        name: marker_on_shelf(directory / name)
+        for names in looked.values()
+        for name in names
+    }
+    written = set(marks.values())
+    movers = {}
+    for position, names in looked.items():
+        book = books[position]
+        if book.source is None or book.source in written:
+            continue
+        candidates = [
+            name
+            for name in names
+            if marks[name] in library.by_source and marks[name] != book.source
+        ]
+        mine = _moved_here(book, candidates, directory, library) if candidates else None
+        if mine is not None:
+            movers[position] = mine
+    return movers
+
+
+class _Library(NamedTuple):
+    """What the library says of whose a file on the shelf may be."""
+
+    #: How many books have each source: a source two have names neither.
+    sources: Counter[str]
+    #: How many books are known to declare each identifier.
+    declared: Counter[str]
+    #: The books not to open for their identifier.
+    unopened: Container[Path]
+    #: The book of each source only one book has.
+    by_source: dict[str, Wanting]
+
+    @classmethod
+    def of(cls, books: Sequence[Wanting], unopened: Container[Path]) -> _Library:
+        """
+        Say what the library says of its books.
+
+        :param books: Each package.
+        :param unopened: The books not to open for their identifier.
+
+        :return: Their sources, identifiers and books by source.
+        """
+        sources = Counter(book.source for book in books if book.source)
+        return cls(
+            sources,
+            Counter(book.identifier for book in books if book.identifier),
+            unopened,
+            {
+                book.source: book
+                for book in books
+                if book.source and sources[book.source] == 1
+            },
+        )
+
+    def declares(self, source: str) -> object:
+        """Say what the book of *source* declares, as :func:`declared_by` does."""
+        book = self.by_source.get(source)
+        return UNREAD if book is None else declared_by(book, self.unopened)
+
+
+def declared_by(book: Wanting, unopened: Container[Path]) -> object:
+    """
+    Say what a book declares, reading it where naming did not.
+
+    :param book: The book.
+    :param unopened: The books not to open for their identifier.
+
+    :return: Its usable identifier, None for none, or
+        :data:`~epubconvert.run.holders.UNREAD` for a book left unopened.
+    """
+    if book.identifier is not None or book.unread is None:
+        return book.identifier
+    if book.unread in unopened:
+        return UNREAD
+    return source_identifier(book.unread)
+
+
+def _moved_here(
+    book: Wanting, candidates: Sequence[str], directory: Path, library: _Library
+) -> Keeping | None:
+    """
+    Find a book's own file from before a move, whose marker names another book.
+
+    Another book added at the moved book's old path is named by the marker
+    of its archive, which is still the moved book's where the identifiers say
+    so (holders.moved).
+
+    :param book: The book, which no file looked at names.
+    :param candidates: The files of its names whose marker names another
+        book of the library, lowest first.
+    :param directory: The shelf.
+    :param library: The sources and identifiers of the library.
+
+    :return: The file it keeps, or None when it has none such.
+    """
+    if library.sources[book.source or ""] > 1:
+        return None
+    identifier = declared_by(book, library.unopened)
+    if not isinstance(identifier, str):
+        return None
+    for name in candidates:
+        if moved(
+            directory / name,
+            identifier,
+            library.sources,
+            library.declared,
+            library.declares,
+        ):
+            return Keeping(name, False, identifier)
+    return None
+
+
+def _kept(book: Wanting, forms: _Forms, directory: Path, library: _Library) -> Keeping:
+    """
+    Name the file on the shelf that *book* keeps: by its marker, or else as
+    :func:`_keeps` finds it among the files no other book's marker names.
+
+    :param book: The package in question.
+    :param forms: The numbered files of its name and those of its marked
+        name, each lowest first.
+    :param directory: The shelf.
+    :param library: The sources and identifiers of the library.
+
+    :return: What it keeps, as :func:`_keeps` says.
+    """
+    unmarked, mine, refused = _unmarked(book, forms, directory, library)
+    if mine:
+        return Keeping(mine, refused, book.identifier)
+    keeping = _keeps(book, unmarked, directory, library.unopened)
+    return keeping._replace(refused=True) if refused else keeping
+
+
+def _unmarked(
+    book: Wanting,
+    forms: tuple[list[tuple[int, str]], list[tuple[int, str]]],
+    directory: Path,
+    library: _Library,
+) -> tuple[tuple[list[tuple[int, str]], list[tuple[int, str]]], str | None, bool]:
+    """
+    Settle what the markers of a book's files say, before any identifier.
+
+    A file whose marker names a source no book has is left to the identifiers
+    where it declares the book's own: the book moved there from another folder
+    (holders.moved).
+
+    :param book: The package in question.
+    :param forms: The numbered files of its name and those of its marked
+        name, each lowest first.
+    :param directory: The shelf.
+    :param library: The sources and identifiers of the library.
+
+    :return: Its files less those whose marker names another source; the
+        first whose marker names its own, if any; and whether its plain
+        name's file names another.
+    """
+    numbers, marked_forms = forms
+    if book.source is None or library.sources[book.source] > 1:
+        return forms, None, False
+    marks = {
+        name: marker_on_shelf(directory / name) for _, name in [*numbers, *marked_forms]
+    }
+    others = {name for name, mark in marks.items() if mark not in (None, book.source)}
+    if any(marks[name] not in library.sources for name in others):
+        identifier = book.identifier
+        if identifier is None and book.unread and book.unread not in library.unopened:
+            identifier = source_identifier(book.unread)
+        others = {
+            name
+            for name in others
+            if not moved(
+                directory / name, identifier, library.sources, library.declared
+            )
+        }
+    plain = next((name for number, name in numbers if number <= 1), None)
+    mine = [name for _, name in [*numbers, *marked_forms] if marks[name] == book.source]
+    return (
+        (
+            [entry for entry in numbers if entry[1] not in others],
+            [entry for entry in marked_forms if entry[1] not in others],
+        ),
+        mine[0] if mine else None,
+        plain in others,
+    )
 
 
 def _numbered_plain(key: str) -> str | None:
@@ -490,7 +765,7 @@ def _keeps(
 
     :param book: The package in question.
     :param forms: The numbered files of its name and those of its marked
-        name, each lowest first.
+        name, each lowest first, less those another book's marker names.
     :param directory: The shelf.
     :param unopened: The books not to open for their identifier.
 

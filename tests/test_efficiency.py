@@ -26,7 +26,7 @@ from epubconvert.collect import package as package_reader
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
 from epubconvert.run import claims, convert, copynames, holders, placing, planning, run
-from tests.conftest import make_metadata_package, make_package
+from tests.conftest import make_metadata_package, make_package, unmark
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import zipped_book
 
@@ -400,6 +400,93 @@ class TestEachShelfArchiveIsReadOnce:
         assert self._opens(monkeypatch, library, output_dir) == Counter()
 
 
+class TestAFileTwoBooksWantIsOpenedOnce:
+    """
+    In skip mode the file of a name two books want is told apart by its
+    marker (run/telling.py). Read from the file's last bytes where the
+    identifiers were to be read from the archive anyway, a no-op rerun under
+    ``--name-by author-title`` opened each such file twice, where it had
+    opened it once. Named from the folder, nothing else reads the file: the
+    one short read of its last bytes is the price of telling the two apart.
+    """
+
+    @pytest.mark.parametrize(
+        "policy", [[], ["--name-by", "author-title"]], ids=["folder", "author-title"]
+    )
+    @pytest.mark.parametrize("listing", [[], ["--list"]], ids=["run", "list"])
+    def test_a_rerun_opens_each_file_once(
+        self, tmp_path, output_dir, monkeypatch, policy, listing
+    ):
+        library = tmp_path / "lib"
+        for index in range(3):
+            for folder in ("a", "b"):
+                make_metadata_package(
+                    library / folder,
+                    f"Book {index}.epub",
+                    title=f"Book {index}",
+                    creator="Frank Herbert",
+                    identifier=f"urn:uuid:{folder}{index}",
+                )
+        argv = ["-s", str(library), "-o", str(output_dir), "-q", *policy]
+        run.main([*argv, "-m", "0"])
+        # What the conversion read is remembered; the rerun reads afresh.
+        holders._identifier_of.cache_clear()  # pylint: disable=protected-access
+        holders._marker_of.cache_clear()  # pylint: disable=protected-access
+        holders._OPENED.clear()  # pylint: disable=protected-access
+        opened: Counter[str] = Counter()
+        original = os.open
+
+        def counting(path, flags, *args, **kwargs):
+            found = Path(path)
+            if found.parent == output_dir and found.suffix == ".epub":
+                opened[found.name] += 1
+            return original(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", counting)
+
+        run.main([*argv, *(listing or ["-m", "0"])])
+
+        assert len(opened) == 3
+        assert set(opened.values()) == {1}
+
+
+class TestABookWithAnArchiveOfItsOwnIsNotAskedWhetherItMoved:
+    """
+    In suffix mode a book no file of whose names its own marker names is
+    asked whether a file naming another book is its own, from before a move,
+    which reads both books' identifiers (claims._moved_here). A book whose
+    own archive is under a name another book wants -- ``c/Dune.epub``'s
+    ``Dune (2).epub`` beside a book titled ``Dune (2)`` -- was asked on every
+    rerun, named from the folder: two package documents read for nothing.
+    """
+
+    def test_a_rerun_reads_no_package_document(self, tmp_path, output_dir, monkeypatch):
+        library = tmp_path / "lib"
+        for folder in ("b", "c"):
+            make_metadata_package(
+                library / folder,
+                "Dune.epub",
+                title="Dune",
+                identifier=f"urn:uuid:{folder}",
+            )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        run.main([*argv, "--on-collision", "suffix"])
+        make_metadata_package(
+            library / "d", "Dune (2).epub", title="Dune (2)", identifier="urn:uuid:d"
+        )
+        run.main([*argv, "--on-collision", "suffix"])
+        assert sorted(path.name for path in output_dir.glob("*.epub")) == [
+            "Dune (2) (2).epub",
+            "Dune (2).epub",
+            "Dune.epub",
+        ]
+        reads, _ = _source_reads(monkeypatch)
+
+        run.main([*argv, "--on-collision", "suffix"])
+
+        assert reads == Counter()
+
+
 class TestABookRenamedByCaseIsReadOnce:
     """
     A file of another spelling of a book's name may be its own archive, and
@@ -408,15 +495,20 @@ class TestABookRenamedByCaseIsReadOnce:
     check -- and each placing read the book's package document again.
     """
 
+    @pytest.mark.parametrize("marked", [True, False], ids=["marked", "unmarked"])
     @pytest.mark.parametrize("listing", [[], ["--list"]])
     def test_its_package_document_is_read_once(
-        self, tmp_path, output_dir, monkeypatch, listing
+        self, tmp_path, output_dir, monkeypatch, listing, marked
     ):
         library = tmp_path / "lib"
         make_metadata_package(
             library / "b", "dune.epub", title="Dune", identifier="urn:uuid:D"
         )
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        if not marked:
+            # As an archive written before markers is: only the identifiers
+            # can say whose it is.
+            unmark(output_dir / "dune.epub")
         renamed = (library / "b" / "dune.epub").rename(library / "b" / "Dune.epub")
         reads: Counter[Path] = Counter()
         original = package_reader.read_package_dir
@@ -430,7 +522,8 @@ class TestABookRenamedByCaseIsReadOnce:
 
         run.main(["-s", str(library), "-o", str(output_dir), "-q", *cap, *listing])
 
-        assert reads == Counter({renamed: 1})
+        # The marker names the book's folder, case folded: nothing else is read.
+        assert reads == (Counter() if marked else Counter({renamed: 1}))
 
 
 def _source_reads(monkeypatch) -> tuple[Counter[Path], Counter[Path]]:

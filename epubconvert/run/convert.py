@@ -35,6 +35,7 @@ from ..collect.validate import ValidationOptions
 from ..export.archive import PARTIAL_PREFIX, PARTIAL_SUFFIX, zip_package
 from ..export.inspect_output import extract_cover, free_megabytes
 from ..export.naming import PassthroughNaming, encode_name
+from ..export.provenance import source_of
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.display import printable
@@ -283,6 +284,7 @@ def _zip_and_record(
             target,
             run.validation,
             annotations_for_book(package.name, run.annotations or {}),
+            source_of(package, run.plan.library if run.plan else None),
         )
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-except
         with _REPORT_LOCK:

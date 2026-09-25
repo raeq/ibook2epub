@@ -35,18 +35,25 @@ from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
 from ..utils.display import printable
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
+from .provenance import stamp
+
+# Re-exported as well as used: these lived here until the module reached the
+# line limit, and their importers, and the tests that patch them, still look
+# for them here.
+# pylint: disable=useless-import-alias,unused-import
+from .writing import PARTIAL_PREFIX as PARTIAL_PREFIX
+from .writing import PARTIAL_SUFFIX as PARTIAL_SUFFIX
+from .writing import UMASK as UMASK
+from .writing import copy_through as copy_through
+from .writing import file_mode as file_mode
+from .writing import what_to_replace as what_to_replace
+from .writing import write_atomically as write_atomically
+
+# pylint: enable=useless-import-alias,unused-import
 
 # Zip cannot represent a timestamp before 1980; using its floor keeps every
 # export byte-identical regardless of when it ran.
 ARCHIVE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
-
-#: Marks a half-written archive. The prefix matters as much as the suffix:
-#: the sweep in :func:`epubconvert.run.convert.sweep_partials` deletes what it
-#: matches, and a bare ``*.part`` glob also matches a browser's in-progress
-#: download or a user's own file sitting in the output directory.
-PARTIAL_PREFIX = ".ibook2epub-"
-#: Appended to every temporary this tool writes.
-PARTIAL_SUFFIX = ".part"
 
 #: Suffixes worth taking along verbatim. A real library holds both forms --
 #: Apple's package directories, and books that arrived already zipped or as
@@ -198,40 +205,6 @@ def _is_regular(path: Path) -> bool:
         return stat.S_ISREG(path.lstat().st_mode)
     except OSError:
         return False
-
-
-def copy_through(source: Path, target: Path) -> None:
-    """
-    Put a file on the shelf without touching its bytes.
-
-    Written to a temporary and moved into place, like every other write here,
-    so an interrupted run never leaves a half-copied file that a later run
-    mistakes for finished work.
-
-    The copy keeps the source's modification time, taken from the descriptor
-    it read: with its size, that is how a later run knows the file for this
-    source's copy without opening either (copynames._same_file). By size
-    alone, a book of the same size replacing a deleted one was taken as
-    already copied.
-
-    :param source: The file to copy.
-    :param target: Where it should land.
-    """
-    handle, partial_name = tempfile.mkstemp(
-        dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-    )
-    os.close(handle)
-    partial = Path(partial_name)
-    try:
-        partial.chmod(file_mode())
-        with open_contained(source) as reading, partial.open("wb") as writing:
-            shutil.copyfileobj(reading, writing)
-            read = os.fstat(reading.fileno())
-        os.utime(partial, ns=(read.st_atime_ns, read.st_mtime_ns))
-        partial.replace(target)
-    except BaseException:
-        partial.unlink(missing_ok=True)
-        raise
 
 
 def count_ignored(source_dir: Path, packages: Sequence[Path]) -> int:
@@ -461,6 +434,7 @@ def zip_package(
     target_archive: Path,
     validation: ValidationOptions | None = None,
     annotations: Sequence[dict[str, object]] | None = None,
+    provenance: str | None = None,
 ) -> int:
     """
     Write a single package directory out as a spec-valid epub archive.
@@ -481,6 +455,10 @@ def zip_package(
         None. Embedding here rather than rebuilding the finished archive
         afterwards halves the writing: the archive was being serialised once
         without them and once with.
+    :param provenance: The book's source, as
+        :func:`~epubconvert.export.provenance.source_of` digests it, to name
+        in the archive comment: what tells this archive from a namesake's on
+        a later run. None writes no marker.
 
     :return: The number of members stored, excluding ``mimetype``. Counts the
         embedded annotation set, which is not a package file.
@@ -535,6 +513,8 @@ def zip_package(
                 file_count += 1
 
             file_count += _embed_annotations(archive, annotations, stored)
+            if provenance is not None:
+                archive.comment = stamp(provenance)
 
         assert_is_a_book(target_archive.name, stored)
 
@@ -549,24 +529,6 @@ def zip_package(
         raise
 
     return file_count
-
-
-#: The process umask, read once at import. Reading it requires *setting* it --
-#: there is no query-only call -- so doing that per book from up to 64 workers
-#: let one thread observe another's zeroed window and write a world-writable
-#: book, and could leave the process umask at 0 for everything afterwards.
-#: Import happens before any thread exists, and this tool never changes it.
-UMASK = os.umask(0)
-os.umask(UMASK)
-
-
-def file_mode() -> int:
-    """
-    Return the mode an exported file should carry, per the user's umask.
-
-    :return: 0o666 with the umask applied.
-    """
-    return 0o666 & ~UMASK
 
 
 def assert_is_a_book(name: str, stored: set[str]) -> None:
@@ -711,7 +673,7 @@ def index_by_package(
 
 
 def _same_annotations(
-    held: bytes | None, annotations: Sequence[dict[str, object]], expected: bytes
+    held: bytes | None, annotations: Sequence[dict[str, object]], embedded: str
 ) -> bool:
     """
     Whether an archive already carries exactly these annotations.
@@ -724,12 +686,15 @@ def _same_annotations(
 
     :param held: The embedded document as it stands, or None if there is none.
     :param annotations: What it should carry.
-    :param expected: What a rewrite would store, serialised.
+    :param embedded: What a rewrite would store, serialised.
 
     :return: True if a rewrite would change nothing.
     """
     if held is None:
         return not annotations
+    # As zipfile will store it. A document, not a name, so not through the
+    # name encoder; surrogates pass, so comparing never raises.
+    expected = bytes(embedded, "utf-8", "surrogatepass")
     if held == expected:
         return True
     if len(held) > 2 * len(expected) + _SPACING_ALLOWANCE:
@@ -770,6 +735,7 @@ def replace_annotations(
     annotations: Sequence[dict[str, object]],
     *,
     room: Callable[[], bool] | None = None,
+    provenance: str | None = None,
 ) -> bool:
     """
     Swap the embedded annotation set of an archive already on the shelf.
@@ -789,6 +755,10 @@ def replace_annotations(
         copy is started beside the original. Asking earlier refused a refresh
         that had nothing to write, and a shelf already up to date on a full
         volume reported a failure.
+    :param provenance: The book's source, to name in the rebuilt archive's
+        marker, as a fresh export names it: an archive written before
+        markers gains one when it is written anyway. None keeps the comment
+        the archive had.
 
     :return: True if the archive was rewritten, False if it already said this.
 
@@ -804,7 +774,7 @@ def replace_annotations(
         return False
 
     partial: Path | None = None
-    target_archive, mode = _what_to_replace(target_archive)
+    target_archive, mode = what_to_replace(target_archive)
     try:
         with _open_shelved(target_archive) as opened, open_archive(opened) as reading:
             # Each listing of a member would be inflated and written again.
@@ -824,10 +794,7 @@ def replace_annotations(
             # looks at this one small blob: 7.86 MB of peak allocation on a
             # 6.4 MB book, to decide against rewriting it.
             embedded = embedded_json(list(annotations))
-            # As zipfile will store it. A document, not a name, so not through
-            # the name encoder; surrogates pass, so comparing never raises.
-            expected = bytes(embedded, "utf-8", "surrogatepass")
-            if _same_annotations(held, annotations, expected):
+            if _same_annotations(held, annotations, embedded):
                 return False
             if room is not None and not room():
                 raise NoRoomError(target_archive.name)
@@ -838,7 +805,7 @@ def replace_annotations(
             )
             partial = Path(temporary)  # Named first: a Ctrl-C may land on close.
             os.close(handle)
-            _rebuild(reading, members, partial, embedded)
+            _rebuild(reading, members, partial, (embedded, provenance))
             # After the rebuild, as write_atomically does: a book the user
             # made read-only would otherwise make its own partial unwritable.
             partial.chmod(mode)
@@ -877,7 +844,10 @@ def _open_shelved(path: Path) -> IO[bytes]:
 
 
 def _rebuild(
-    reading: ZipFile, members: list[ZipInfo], partial: Path, embedded: str
+    reading: ZipFile,
+    members: list[ZipInfo],
+    partial: Path,
+    written: tuple[str, str | None],
 ) -> None:
     """
     Copy members into a new archive a stream at a time, then the annotations.
@@ -891,8 +861,11 @@ def _rebuild(
     :param reading: The archive being refreshed, open for reading.
     :param members: What to carry across: mimetype first, as OCF asks, then as stored.
     :param partial: The new archive to write.
-    :param embedded: The annotation document to store after the members.
+    :param written: The annotation document to store after the members, and
+        the book's source to name in the archive comment, or None to keep the
+        comment *reading* has.
     """
+    embedded, provenance = written
     with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
         for info in sorted(
             members, key=lambda i: (member_name(i) != MIMETYPE_NAME, i.header_offset)
@@ -905,95 +878,4 @@ def _rebuild(
             ):
                 shutil.copyfileobj(source, target)
         writing.writestr(entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), embedded)
-
-
-def write_atomically(target: Path, text: str) -> None:
-    """
-    Replace a file's contents, or leave the old contents alone.
-
-    ``write_text`` truncates before it writes, so a failure partway through --
-    a full disk, a Ctrl-C -- left the export as a prefix of itself, which is
-    neither the old file nor the new one. It is also not valid JSON, so every
-    later run then refused to write to that path at all. The export is the
-    artifact the merge machinery exists to protect; this is the same
-    temporary-then-replace path :func:`zip_package` uses. A replace swaps in a
-    new file, so three things the old one carried are carried across:
-
-    - **Its mode.** Every rerun wrote the partial at the umask's mode, so an
-      export the user had made 0600 became readable by everyone again.
-    - **Its being a link.** The replace landed on the link itself, so a link
-      into a synced folder became a regular file here and the synced copy went
-      stale without a word. A link is now written through: the partial goes
-      beside the file it resolves to, so the rename stays atomic there.
-    - **Its contents, durably.** Without an fsync before the rename, a crash
-      just after it can leave the name on a file whose data never reached the
-      disk -- the old contents gone and the new ones empty.
-
-    :param target: The file to replace.
-    :param text: What it should hold.
-
-    :raises OSError: If it could not be written. The old file survives.
-    """
-    target, mode = _what_to_replace(target)
-    partial: Path | None = None
-    try:  # Made inside: a Ctrl-C as its descriptor closed left it behind.
-        # Named before it is made: a Ctrl-C as mkstemp returned left its .part
-        # in a vault. Made exclusively, so a name already taken is not removed.
-        while partial is None:
-            name = f"{PARTIAL_PREFIX}{os.urandom(8).hex()}{PARTIAL_SUFFIX}"
-            partial = target.parent / name
-            try:
-                handle = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                partial = None
-        os.close(handle)
-        partial.write_text(text, encoding="utf-8")
-        _sync(partial)
-        # After the write, not before: a target the user made read-only would
-        # otherwise make its own partial unwritable.
-        partial.chmod(mode)
-        partial.replace(target)
-    except BaseException:
-        if partial is not None:
-            partial.unlink(missing_ok=True)
-        raise
-
-
-def _what_to_replace(target: Path) -> tuple[Path, int]:
-    """
-    Find the file a replace should land on, and the mode it should keep.
-
-    Resolved unconditionally: a plain path resolves to itself, give or take a
-    linked parent, and a link resolves to the file the user meant, so the
-    replace lands there and the link survives. Shared by every path that
-    replaces a file the user may have set up: the refresh of a book on the
-    shelf once reset its mode and replaced a linked entry, after the notes and
-    exports had been fixed for exactly that.
-
-    :param target: The path about to be replaced.
-
-    :return: The file to replace, and the permission bits to give the new one.
-    """
-    resolved = Path(os.path.realpath(target))
-    try:
-        # Permission bits only: a setuid or sticky bit is not something to
-        # reproduce.
-        return resolved, stat.S_IMODE(resolved.stat().st_mode) & 0o777
-    except FileNotFoundError:
-        return resolved, file_mode()
-
-
-def _sync(path: Path) -> None:
-    """
-    Push a written file's data to the disk.
-
-    ``fsync`` flushes the file, not the descriptor it is called on, so a fresh
-    descriptor on a file that has just been written and closed is enough.
-
-    :param path: The file to flush.
-    """
-    descriptor = os.open(path, os.O_RDWR)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        writing.comment = reading.comment if provenance is None else stamp(provenance)

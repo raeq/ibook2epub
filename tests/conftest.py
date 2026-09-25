@@ -209,6 +209,20 @@ def remove_tree(path: Path) -> None:
     path.rmdir()
 
 
+def unmark(archive: Path) -> None:
+    """
+    Strip an archive's comment, as an archive written before markers has none.
+
+    The end of the central directory is the file's last 22 bytes plus the
+    comment, and the comment's length is its last two.
+    """
+    data = archive.read_bytes()
+    end = data.rfind(b"PK\x05\x06")
+    archive.write_bytes(data[: end + 20] + b"\x00\x00")
+    with ZipFile(archive) as opened:
+        assert opened.comment == b""
+
+
 def abandoned_partial(output_dir: Path, stem: str) -> Path:
     """
     A temporary as a killed run leaves one: this tool's name, and old.

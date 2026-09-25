@@ -18,8 +18,10 @@ from typing import Literal
 from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package, read_package_dir
 from ..collect.source import inspect_package
-from ..export.naming import disambiguator
+from ..export.naming import disambiguator, filesystem_key
+from ..export.provenance import source_of
 from ..utils.app_logger import logger
+from ..utils.display import printable
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
 from ..utils.spec import PACKAGE_SUFFIX
@@ -35,8 +37,9 @@ from .claims import (
     shelf_names,
     suffixed,
 )
-from .holders import Unopened, holds_another_book
-from .placing import Shelf, place, read_shelf
+from .holders import Unopened, declares_one, holds_another_book
+from .placing import Shelf, place, read_shelf, written_before_writing
+from .telling import tell_apart
 
 #: What the planner can decide about a package. These strings are a public
 #: contract, not an internal detail: ``--list`` names them all in its help text
@@ -102,6 +105,10 @@ class PlanOptions:
     refresh: bool = False
     check_incomplete: bool = False
     on_collision: CollisionMode = SKIP
+    #: The library's root, which each archive's provenance marker is
+    #: relative to (:func:`~epubconvert.export.provenance.source_of`). None
+    #: writes and reads no marker.
+    library: Path | None = None
 
 
 @dataclass
@@ -212,6 +219,7 @@ def assign_names(
     *,
     shelf: Collection[str] = frozenset(),
     unopened: Container[Path] = frozenset(),
+    library: Path | None = None,
 ) -> list[Assignment]:
     """
     Give every package an output name, resolving collisions deterministically.
@@ -257,18 +265,31 @@ def assign_names(
     :param unopened: The books not to open, because opening them downloads
         them: under ``--skip-incomplete``, a package iCloud has evicted
         (:class:`~epubconvert.run.holders.Unopened`).
+    :param library: The library's root, which each book's source is named
+        relative to (:attr:`Assignment.source`); None names none.
 
     :return: One :class:`Assignment` per package, in sorted order.
     """
     setup = _Naming(
-        policy, on_collision, getattr(policy, "max_bytes", 0), unopened=unopened
+        policy,
+        on_collision,
+        getattr(policy, "max_bytes", 0),
+        unopened=unopened,
+        library=library,
     )
     unnamed = _left_unnamed(packages, policy, unopened)
     return sorted(
         [
             *_assign_all([p for p in packages if p not in unnamed], setup, shelf),
             *(
-                Assignment(package, "", "", NOT_DOWNLOADED, unnamed=True)
+                Assignment(
+                    package,
+                    "",
+                    "",
+                    NOT_DOWNLOADED,
+                    unnamed=True,
+                    source=source_of(package, library),
+                )
                 for package in sorted(unnamed)
             ),
         ],
@@ -294,7 +315,12 @@ def _assign_all(
     claims = Claims()
 
     bases = [_bases(name, metadata, setup, crowded) for _, name, metadata in wanted]
-    keeping = _kept_on_shelf(wanted, bases, crowded, setup, shelf)
+    keeping = _kept_on_shelf(
+        _wanting(wanted, bases, crowded, setup),
+        [_shown(package, setup.library) for package, _, _ in wanted],
+        setup,
+        (shelf, claims),
+    )
     kept = [index for index, found in keeping.items() if found.file]
     named: dict[int, Assignment] = {}
     for index in [
@@ -332,50 +358,99 @@ def _left_unnamed(
     return frozenset(package for package in packages if package in unopened)
 
 
-def _kept_on_shelf(
+def _wanting(
     wanted: Sequence[tuple[Path, str, Package | None]],
     bases: Sequence[tuple[str, str]],
     crowded: Counter[str],
     setup: _Naming,
-    shelf: Collection[str],
-) -> dict[int, Keeping]:
+) -> list[Wanting]:
     """
-    Find the books that keep a numbered or marked file of theirs on the shelf.
-
-    Only under :data:`SUFFIX`; see :func:`~epubconvert.run.claims.kept_numbers`.
+    Say what the shelf is asked about each package.
 
     :param wanted: Package, wanted name and metadata, in sorted order.
     :param bases: Each book's base and stable name, in the same order.
     :param crowded: How many books want each identity.
     :param setup: The naming configuration.
-    :param shelf: The names of the files on the shelf.
 
-    :return: What was found of each book whose files were looked at, by its
-        index in *wanted*.
+    :return: One per package, in the same order.
     """
-    if setup.on_collision != SUFFIX:
-        return {}
     policy = setup.policy
     # A policy that reads no package document leaves the identifier to be
-    # read here, and only for a name with numbered files on the shelf.
+    # read where the shelf is asked, and only for a name with numbered files
+    # on the shelf, or one two books want with a file.
     unread = not getattr(policy, "needs_metadata", False)
-    return kept_numbers(
-        [
-            Wanting(
-                base,
-                stable,
-                usable_identifier(metadata),
-                crowded[policy.identity(name)] == 1,
-                package if unread else None,
-            )
-            for (base, stable), (package, name, metadata) in zip(
-                bases, wanted, strict=True
-            )
-        ],
+    return [
+        Wanting(
+            base,
+            stable,
+            usable_identifier(metadata),
+            crowded[policy.identity(name)] == 1,
+            package if unread else None,
+            source_of(package, setup.library),
+        )
+        for (base, stable), (package, name, metadata) in zip(bases, wanted, strict=True)
+    ]
+
+
+def _shown(package: Path, library: Path | None) -> str:
+    """A package as a person knows it: its path in the library, if there is one."""
+    if library is not None and package.is_relative_to(library):
+        return package.relative_to(library).as_posix()
+    return str(package)
+
+
+def _kept_on_shelf(
+    wanting: Sequence[Wanting],
+    shown: Sequence[str],
+    setup: _Naming,
+    claiming: tuple[Collection[str], Claims],
+) -> dict[int, Keeping]:
+    """
+    Find the books that keep a file of theirs on the shelf.
+
+    Under :data:`SUFFIX` a numbered or marked one; see
+    :func:`~epubconvert.run.claims.kept_numbers`. In skip mode, the file of a
+    name two books want that says it is one's
+    (:func:`~epubconvert.run.telling.tell_apart`). A file of such a name that
+    none of them may have is spoken for, so none claims it.
+
+    :param wanting: What the shelf is asked about each package.
+    :param shown: Each package as a person knows it.
+    :param setup: The naming configuration.
+    :param claiming: The names of the files on the shelf, and the names
+        spoken for, updated in place.
+
+    :return: What was found of each book whose files were looked at, by its
+        index, with why it was refused a file where it cannot be told from
+        another book.
+    """
+    shelf, claims = claiming
+    told = tell_apart(
+        wanting,
+        shown,
         shelf,
-        policy,
-        setup.unopened,
+        setup.policy,
+        suffix=setup.on_collision == SUFFIX,
+        unopened=setup.unopened,
     )
+    for name, reason in told.refused.items():
+        claims.refuse(setup.policy.identity(name), name, reason)
+    found = (
+        kept_numbers(wanting, shelf, setup.policy, setup.unopened, told.refused)
+        if setup.on_collision == SUFFIX
+        else {index: Keeping(name) for index, name in told.keeps.items()}
+    )
+    for index, identifier in told.identifiers.items():
+        # Read to tell it from its namesakes, and carried as kept_numbers
+        # carries it, so placing compares it with the file it is given.
+        keeping = found.get(index, Keeping())
+        if keeping.identifier is None:
+            found[index] = keeping._replace(identifier=identifier)
+    for index, reason in told.untold.items():
+        keeping = found.get(index, Keeping())
+        if not keeping.file:
+            found[index] = keeping._replace(untold=reason)
+    return found
 
 
 @dataclass(frozen=True)
@@ -388,6 +463,8 @@ class _Naming:
     budget: int
     #: The books not to open, because opening them downloads them.
     unopened: Container[Path] = frozenset()
+    #: The library's root, which each book's source is named relative to.
+    library: Path | None = None
 
 
 def _wanted_names(
@@ -464,8 +541,20 @@ def _assign_one(
     if taken is None:
         # Carries its identifier though it has no name, so an archive of it
         # already on the shelf is still recognised as a live book's.
-        reason = lost_to(claims.holder(group, base), metadata)
-        return Assignment(package, "", group, reason, identifier=identifier)
+        reason = (
+            keeping.untold
+            or claims.refused.get(filesystem_key(base))
+            or lost_to(claims.holder(group, base), metadata)
+        )
+        return Assignment(
+            package,
+            "",
+            group,
+            reason,
+            identifier=identifier,
+            source=source_of(package, setup.library),
+            untold=keeping.untold,
+        )
 
     filename, key = taken
     return Assignment(
@@ -482,6 +571,8 @@ def _assign_one(
         # with nowhere to go was a collision on every run in suffix mode.
         stable if setup.on_collision == SUFFIX else None,
         kept_number=filename == keeping.file,
+        source=source_of(package, setup.library),
+        untold=keeping.untold,
     )
 
 
@@ -604,6 +695,7 @@ def plan_exports(
             settings.on_collision,
             shelf=shelf_names(output_dir),
             unopened=unopened,
+            library=settings.library,
         )
     assignments = assigned
     shelf = read_shelf(output_dir, policy, assignments, unopened=unopened)
@@ -622,6 +714,7 @@ def plan_exports(
     unnamed = sum(1 for item in assignments if item.unnamed)
     if unnamed:
         logger.warning(NOT_NAMED, unnamed)
+    _say_untold(assignments)
     named = {item.package: item for item in assignments}
     # Naming read no package document, so no book carries an identifier to
     # compare against the archive holding its name. See _decide.
@@ -631,6 +724,33 @@ def plan_exports(
         _decide(package, named[package], shelf, output_dir, settings, unread=unread)
         for package in packages
     ]
+
+
+def _say_untold(assignments: Sequence[Assignment]) -> None:
+    """
+    Say which books were refused a file because nothing tells them apart.
+
+    Once per crowd, whatever the mode: in skip mode each is a collision, and
+    the collision's reason alone did not say that the file may be either
+    one's only archive; in suffix mode each is written under a name of its
+    own, a rewrite nothing else would explain.
+
+    :param assignments: Every book's name.
+    """
+    untold: dict[str, list[Assignment]] = {}
+    for item in assignments:
+        if item.untold:
+            untold.setdefault(item.untold, []).append(item)
+    for reason, crowd in untold.items():
+        logger.warning(
+            "%s; %s.",
+            printable(reason),
+            (
+                "each was given a name of its own"
+                if all(item.filename for item in crowd)
+                else "none was written"
+            ),
+        )
 
 
 def _decide(
@@ -674,7 +794,13 @@ def _decide(
             return settled
     refreshing = found is not None and not forced
 
-    unusable = _decide_before_writing(package, found, settings, unread=unread)
+    unusable = _decide_before_writing(
+        package,
+        found,
+        settings,
+        unread=unread,
+        own=written_before_writing(found, assignment, shelf, unread=unread),
+    )
     if unusable is not None:
         if unusable.status != COLLISION:
             unusable.placed = found or output_dir / filename
@@ -693,7 +819,12 @@ def _decide(
 
 
 def _decide_before_writing(
-    package: Path, found: Path | None, settings: PlanOptions, *, unread: bool
+    package: Path,
+    found: Path | None,
+    settings: PlanOptions,
+    *,
+    unread: bool,
+    own: bool | None = None,
 ) -> Decision | None:
     """
     Decide whether a book about to be written may be, and over what.
@@ -703,6 +834,9 @@ def _decide_before_writing(
     :param settings: Planning behaviour.
     :param unread: Naming read no package document, so nothing has yet
         compared this book with the archive holding its name.
+    :param own: Whether the archive's marker names this book's source,
+        which says more than the identifiers can; None when it names none,
+        or the plan names no sources.
 
     :return: The decision, or None when the book may be written.
     """
@@ -712,6 +846,12 @@ def _decide_before_writing(
     inspected = settings.check_incomplete
     if inspected and (unusable := _decide_against_source(package, settings)):
         return unusable
+    if found is not None and own is False:
+        # Written from another book's source: that book's, maybe its last
+        # one, whatever the name or the identifiers say.
+        return Decision(
+            package, COLLISION, reason=f"{found.name} was written for another book"
+        )
     if found is not None and unread:
         # About to write over the archive holding this name, and naming read
         # nothing that could say whose it is. Folder names are not unique: the
@@ -720,10 +860,17 @@ def _decide_before_writing(
         # book holding the name left the library, --refresh and --force wrote
         # the other over its archive, likely the last copy. One source read,
         # paid only by a book about to replace something.
+        # A marker naming this book does not excuse the comparison: a book
+        # deleted and another added at its path, whose identifiers differ, or
+        # where it declares none and the file one.
         identifier = usable_identifier(_metadata_of(package, True))
         other = _decide_against_holder(package, found, identifier)
         if other is not None:
             return other
+        if identifier is None and settings.library is not None:
+            declared = declares_one(found)
+            if declared is not None:
+                return Decision(package, COLLISION, reason=declared)
     return None if inspected else _decide_against_source(package, settings)
 
 
