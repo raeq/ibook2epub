@@ -38,13 +38,13 @@ from .package import (
     UNREADABLE_MEMBER,
     ValidationError,
     disallowed_method,
-    member_name,
     open_member,
     open_regular,
     read_member,
     read_package,
     repeated_entries,
 )
+from .zipnames import member_name, open_archive
 
 EPUBCHECK = "epubcheck"
 
@@ -189,7 +189,7 @@ def check_archive(path: Path) -> Verdict:
     try:
         # Judged on the descriptor, not a stat of the name: a FIFO swapped in
         # between the two was opened for reading, and waited for ever.
-        with open_regular(path) as handle, ZipFile(handle) as archive:
+        with open_regular(path) as handle, open_archive(handle) as archive:
             size = os.fstat(handle.fileno()).st_size
             # The names OCF reads, not zipfile's cp437 reading of those
             # Info-ZIP leaves unflagged: see member_name.
