@@ -239,7 +239,8 @@ Naming and output:
                         suffixed book is marked with a digest of its own
                         dc:identifier, so adding another book later does not
                         rename it; books whose identifier is missing or
-                        shared fall back to ' (2)', which does move.
+                        shared fall back to ' (2)', which each keeps by the
+                        source its archive names.
   --no-copy-through     Do not copy already-valid .epub files and .pdf files
                         to the output directory. They are copied by default,
                         because a real library holds both Apple's package
@@ -628,11 +629,12 @@ Two cases still fall back to ` (2)`, and both say so rather than pretending:
   one converter's template UUID.
 
 A numbered book keeps its number when a book before it leaves the library,
-rather than taking the freed name and being written again. It is found by its
-identifier, which is read for a name with numbered files on the shelf even when
-the book is named from its folder; a book with no usable identifier keeps its
-number only when it alone wants the name and nothing holds the plain name,
-since nothing else can say whose the numbered file is.
+rather than taking the freed name and being written again. It is found by the
+source its archive names (below), or else by its identifier, which is read for
+a name with numbered files on the shelf even when the book is named from its
+folder; a book with no usable identifier and an archive from an earlier
+release keeps its number only when it alone wants the name and nothing holds
+the plain name, since nothing else can say whose the numbered file is.
 
 Measured on that library with `--name-by author-title --on-collision suffix`:
 2,692 names untouched, 78 marked with a digest, 10 of those needing a number as
@@ -662,6 +664,64 @@ deleted one is copied rather than taken as already there. Copies made by
 releases before this one carry the time they were written, which is later than
 their source's; such a file is still recognised by its size alone, so
 upgrading copies nothing again.
+
+#### How a book knows its own file
+
+Every archive this tool writes names the book it was written from, in the zip
+archive's comment:
+
+```text
+ibook2epub/1 src=fc47dad3
+```
+
+The digest is of the book's path in the library -- `a/Dune.epub` and
+`b/Dune.epub` are two books -- with case folded, so renaming a folder only by
+case changes nothing. Readers ignore the comment, `mimetype` stays first, and
+the book validates as before. A refresh with `-ae -ar` keeps it, and writes it
+into an archive from an earlier release that it rewrites anyway. Nothing is
+rewritten just to add one, and a PDF or zipped book copied through is left
+byte for byte.
+
+The name says which book a file is *for*; the marker says which book it is
+*from*, and that wins. Two books that declare no usable identifier, or one
+between them, each keep the file their marker names, whatever order they sort
+in and whichever of them leaves the library and comes back. A file whose
+marker names a book no longer in the library is never taken for another book,
+never written over by `--force`, `--refresh` or `-ae -ar`, and is listed as an
+orphan. Identifiers that both books declare and that differ still say two
+books, whatever the marker says, as does a file that declares an identifier
+where the book declares none: a book moved or deleted and another added at the
+same path is not written over the first one's archive.
+
+Archives from an earlier release name nothing. Where two books that nothing
+tells apart want such a file, neither is given it, and the run says so:
+
+```text
+cannot tell these books apart: a/Dune.epub, b/Dune.epub: Dune.epub names no
+source, and nothing they declare tells them apart; none was written.
+```
+
+Under `--on-collision suffix` each is written under a name of its own, with its
+marker, and the old file is listed as an orphan once they are ("each was given
+a name of its own"); in skip mode both are collisions, and the file, which may
+be either one's only archive, is not listed as an orphan. A book that declares
+no usable identifier is never given a file that declares one. A book alone in
+wanting an unmarked file of its name keeps it, so upgrading exports nothing
+again -- which leaves one case the marker cannot cover: a file with no marker,
+from an earlier release or copied through, that declares no identifier and
+whose book has since left the library, is taken by the name by a book alone in
+wanting it. It is not written over.
+
+Two things cost a rewrite, never a book. A book moved to another folder in the
+library, or a library pointed at with `-s` from another level, has another
+source: its old archive is listed as an orphan and the book is written again,
+or in skip mode reported as a collision until the old file is moved away. And
+under the naming policies that name a book from its folder, a book reported as
+exported is still trusted by its name when no other book wants it: checking
+would read every archive on every run. The marker is read where two books want
+a name, where the identifiers are read anyway, and before anything is written
+over; a rerun over a shelf of books with identifiers of their own reads nothing
+more than it did.
 
 ### Taking your highlights with you
 
@@ -1128,7 +1188,9 @@ exit code `5`; pass `--force` to replace it.
 The output directory is the source of truth — there is no state file. On each
 run, any book already present in the output directory is skipped and logged as
 `Already exported, skipping: <name>`. Re-running the command is therefore
-safe: it only exports books that have not yet been converted.
+safe: it only exports books that have not yet been converted. Where a name
+alone cannot say which book a file holds, the source each archive names does
+([How a book knows its own file](#how-a-book-knows-its-own-file)).
 
 With `-p` this still holds. A book's identity is derived from its *sanitised*
 filename, so the identity of completed work can be recomputed by reading the

@@ -268,7 +268,9 @@ What the configurations that fail show:
   **`UnidentifiableLegacy`** is the limit that remains: a file from before
   markers that declares no usable identifier, whose book has left the
   library, is taken by the name by a book alone in wanting it -- with or
-  without an identifier of its own, since the file has none to compare.
+  without an identifier of its own, since the file has none to compare. A
+  file copied through carries no marker either, so a deleted zipped book
+  that declares no identifier is the same case.
   Refusing a book alone its unmarked file would write every shelf made
   before markers again. It is never written over: before a write the book's
   identifier and the file's are compared, as before. Files written by this
@@ -459,8 +461,9 @@ What the model does not describe, and why:
   book is written again under suffix mode or is a collision in skip mode --
   the failure that costs a write, never the one that loses a book. A book
   deleted and another added at its path is the same source; where both
-  declare usable identifiers and they differ, the file is still the other
-  book's (`tests/test_told_apart.py`).
+  declare usable identifiers and they differ, or the file declares one and
+  the newcomer none, the file is still the other book's
+  (`tests/test_told_apart.py`).
 - **Two different files of one size and one modification time.** A copy's
   own bytes are told exactly here; the code tells them by size and
   modification time, which a copy keeps from its source

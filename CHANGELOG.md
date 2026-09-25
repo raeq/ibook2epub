@@ -7,7 +7,33 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Every archive the tool writes names the book it was written from in its zip
+  archive comment, `ibook2epub/1 src=<digest>`: a digest of the book's path in
+  the library, NFC-normalized and case folded. Readers ignore it and the book
+  validates as before. `-ae -ar` keeps it, and writes it into an older archive
+  it rewrites anyway; nothing is rewritten only to add one, and files copied
+  through stay byte for byte.
+- Where two books that nothing tells apart -- no usable identifier, or one
+  between them -- want an archive written before markers, neither is given
+  it: under `--on-collision suffix` each is written under a name of its own,
+  in skip mode each is a collision, and the run warns once, naming the books.
+
 ### Changed
+
+- The planner takes an archive's marker over its name and over an identifier
+  two books share: a book keeps the file its marker names, numbered or not,
+  in either mode, and a file whose marker names a book no longer in the
+  library is listed as an orphan and never taken or written over. The marker
+  is read where the identifiers are read anyway, from the same open, where
+  two books want one name, and before a write: a rerun over a shelf of books
+  with identifiers of their own reads nothing more.
+- A book moved to another folder in the library has another source: its old
+  archive is listed as an orphan and the book is written again, or in skip
+  mode is a collision.
+- `export/archive.py` hands `copy_through`, `write_atomically` and the
+  partial-file names to `export/writing.py`, and re-exports them.
 
 - `collect/validate.py` is split into `collect/identifiers.py` (identifier and
   title canonicalisation), `collect/package.py` (reading a package) and
@@ -21,6 +47,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   moves from `collect/package.py` to `collect/zipnames.py`.
 
 ### Fixed
+
+- A book with no usable identifier, or one it shares, is no longer reported
+  exported from another book's archive of its name, nor written over it by
+  `--force`, `--refresh` or `-ae -ar`, wherever that archive names its source
+  (formal/README.md, `Unidentifiable`). A book known to declare no usable
+  identifier is never given a file that declares one. What remains is a file
+  with no marker -- from an earlier release, or copied through -- that
+  declares no identifier, taken by the name by a book alone in wanting it.
+- Three books of one name with no usable identifier keep their numbered
+  files as one of them leaves (`NumberedRemovalsCrowd`).
 
 - `-ae -ar` writes `mimetype` first and the other members in the order the
   file stores them, not the order its central directory lists them. A book
