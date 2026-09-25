@@ -799,7 +799,8 @@ highlights no book has any more, or only some of one book's — goes with its
 name, or the numbered name `--on-collision suffix` gave it, when only one book
 wants that name. When two do, neither is handed it: without
 `--on-collision suffix` the run names it and exits `1`, and with it each book
-gets a numbered note. So does a note two books each hold every highlight of.
+gets a numbered note. So does a note two books each hold every highlight of,
+whether or not either has a note of its own already.
 
 A note is another book's when the book it names is one Books still knows —
 in your library, highlighted or not — when its frontmatter names another

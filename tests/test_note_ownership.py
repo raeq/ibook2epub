@@ -333,16 +333,25 @@ class TestANoteWrittenBeforeNotesWereTagged:
         else:
             other = noteformat.BOOK_TAG.sub("", notes.compose(shared[:1]), count=1)
         (vault / "Dune.md").write_text(other + MINE, encoding="utf-8")
+        before = (vault / "Dune.md").read_bytes()
         (vault / "Dune (2).md").write_text(notes.compose(shared[1:]))
 
         code = _write(vault, shared, suffix=True, library=(PDF, EPUB))
 
         assert code == exits.SUCCESS
-        assert sorted(_notes(vault)) == ["Dune (2).md", "Dune.md"]
         held = noteformat.split(_notes(vault)["Dune (2).md"])
         assert held is not None
         assert held.book == disambiguator("PDFASSET")
         assert MINE in _notes(vault)["Dune.md"]
+        if tagged_for_a_book_gone:
+            # Naming no file either, only the highlights in it say whose it
+            # is, and both books hold them: the PDF's note of its own may be
+            # the fresh one such a tie gave it, so it goes to neither.
+            assert sorted(_notes(vault)) == ["Dune (2).md", "Dune (3).md", "Dune.md"]
+            assert (vault / "Dune.md").read_bytes() == before
+        else:
+            # Naming the EPUB's file, it is the EPUB's.
+            assert sorted(_notes(vault)) == ["Dune (2).md", "Dune.md"]
 
     def test_holding_no_ones_highlights_it_goes_with_its_name(self, tmp_path: Path):
         # Nothing says whose it is, and only one book wants its name: it is

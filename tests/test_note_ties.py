@@ -88,15 +88,14 @@ class TestAnUpgradedVault:
     EPUB = ["The spice must flow.", "Fear is the mind-killer."]
     PDF = ["The spice must flow."]
 
-    def test_each_note_stays_with_its_edition_and_a_rerun_writes_nothing(
-        self, tmp_path: Path
-    ):
+    def test_no_note_changes_edition_and_a_rerun_writes_nothing(self, tmp_path: Path):
         vault = tmp_path / "vault"
         vault.mkdir()
         pdfs = notes.compose(_found([], self.PDF))
         epubs = notes.compose(_found(self.EPUB, []))
         (vault / "Dune.md").write_text(_legacy(pdfs, ON_THE_PDF))
         (vault / "Dune (2).md").write_text(_legacy(epubs, ON_THE_EPUB))
+        before = (vault / "Dune.md").read_bytes()
         found = _found(self.EPUB, self.PDF)
 
         def run() -> int:
@@ -104,14 +103,101 @@ class TestAnUpgradedVault:
 
         assert run() == exits.SUCCESS
 
-        # The EPUB holds the PDF's note too, but has one of its own.
-        assert sorted(_snapshot(vault)) == ["Dune (2).md", "Dune.md"]
-        # Its region comes out the same, so it is not rewritten, nor tagged.
-        assert _tagged(vault, "Dune.md") in (None, "PDF")
-        assert ON_THE_PDF in (vault / "Dune.md").read_text()
-        assert "Fear" not in (vault / "Dune.md").read_text()
+        # The EPUB holds the PDF's note too, so it is left to neither: that
+        # the EPUB has a note of its own cannot say the PDF's is not also
+        # its, since a tie gives it one. The PDF starts a fresh note.
+        assert sorted(_snapshot(vault)) == ["Dune (2).md", "Dune (3).md", "Dune.md"]
+        assert (vault / "Dune.md").read_bytes() == before
+        assert _tagged(vault, "Dune (3).md") == "PDF"
         assert ON_THE_EPUB in (vault / "Dune (2).md").read_text()
+        assert _tagged(vault, "Dune (2).md") in (None, "EPUB")
         _rerun_is_quiet(vault, run, exits.SUCCESS)
+
+
+class TestATieTheReaderTidiesAfter:
+    """
+    The PDF's note ``Dune.md``, as 2.3.1 wrote it, holds one passage both
+    editions highlighted. The tie numbers each edition past it, with a
+    fresh note of its own, and the reader deletes the EPUB's as an empty
+    duplicate. The EPUB then had no note of its own to drop it out of the
+    tie, so the PDF did, and the EPUB took the PDF's note: its highlights
+    written over the region, the note tagged for it, and the reader's
+    writing on the PDF left under them, without a word.
+    """
+
+    EPUB = ["The spice must flow.", "Fear is the mind-killer."]
+    PDF = ["Fear is the mind-killer."]
+
+    @pytest.mark.parametrize("tagged_for_a_book_gone", [False, True])
+    def test_the_note_goes_to_neither_edition(
+        self, tmp_path: Path, tagged_for_a_book_gone: bool
+    ):
+        # Tagged for a book removed from Books, a note naming no file is as
+        # silent as one tagged for none.
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        pdfs = _legacy(notes.compose(_found([], self.PDF)), ON_THE_PDF)
+        if tagged_for_a_book_gone:
+            gone = f" book={disambiguator('GONE')} -->"
+            pdfs = pdfs.replace(" -->", gone, 1)
+        (vault / "Dune.md").write_text(pdfs)
+        before = (vault / "Dune.md").read_bytes()
+        found = _found(self.EPUB, self.PDF)
+
+        def run() -> int:
+            return _write(vault, found, ("Dune.epub", "Dune.pdf"), suffix=True)
+
+        assert run() == exits.SUCCESS
+        fresh = [name for name in _snapshot(vault) if _tagged(vault, name) == "EPUB"]
+        assert len(fresh) == 1
+        (vault / fresh[0]).unlink()
+
+        assert run() == exits.SUCCESS
+
+        assert (vault / "Dune.md").read_bytes() == before
+        _rerun_is_quiet(vault, run, exits.SUCCESS)
+        assert (vault / "Dune.md").read_bytes() == before
+
+
+class TestAnEditInOneEditionsNote:
+    """
+    Both notes written by this version and then left as 2.3.1 would have:
+    untagged, with the reader's writing in each. The EPUB's ``Dune.md``
+    holds both of its passages, the PDF's ``Dune (2).md`` the one they
+    share; the reader edits a line in the EPUB's region, so nothing but
+    its name says whose that one is. The EPUB, with no note of its own by
+    evidence, stayed in the tie over the PDF's note while the fresh note the
+    tie gave the PDF took the PDF out of it, and on the second run the EPUB
+    took the PDF's note.
+    """
+
+    EPUB = ["The spice must flow.", "Fear is the mind-killer."]
+    PDF = ["Fear is the mind-killer."]
+
+    def test_the_other_editions_note_is_never_handed_over(self, tmp_path: Path):
+        vault = tmp_path / "vault"
+        found = _found(self.EPUB, self.PDF)
+
+        def run() -> int:
+            return _write(vault, found, ("Dune.epub", "Dune (2).pdf"), suffix=True)
+
+        assert run() == exits.SUCCESS
+        assert sorted(_snapshot(vault)) == ["Dune (2).md", "Dune.md"]
+        for note, mine in (("Dune.md", ON_THE_EPUB), ("Dune (2).md", ON_THE_PDF)):
+            (vault / note).write_text(_legacy((vault / note).read_text(), mine))
+        epubs = (vault / "Dune.md").read_text()
+        edited = epubs.replace("> The spice must flow.", "> The spice must flow!")
+        (vault / "Dune.md").write_text(edited)
+        before = _snapshot(vault)
+
+        for _ in range(3):
+            assert run() == exits.SUCCESS
+
+            assert (vault / "Dune (2).md").read_bytes() == before["Dune (2).md"]
+            assert (vault / "Dune.md").read_bytes() == before["Dune.md"]
+            for name in _snapshot(vault):
+                if _tagged(vault, name) == "EPUB":
+                    assert ON_THE_PDF not in (vault / name).read_text()
 
 
 class TestARenamedEditionsNote:
@@ -158,7 +244,7 @@ class TestARenameOntoANameOnlyCaseTellsApart:
     EPUB = [SHARED, "only in the epub"]
 
     @pytest.mark.parametrize("suffix", [False, True])
-    def test_the_pdf_keeps_its_note_and_a_rerun_writes_nothing(
+    def test_neither_note_changes_edition_and_a_rerun_writes_nothing(
         self, tmp_path: Path, suffix: bool
     ):
         vault = tmp_path / "vault"
@@ -168,21 +254,24 @@ class TestARenameOntoANameOnlyCaseTellsApart:
         for note in vault.iterdir():
             mine = f"\nMY WRITING IN {note.name}\n"
             note.write_text(_legacy(note.read_text(encoding="utf-8"), mine))
-        pdfs = "\nMY WRITING IN dune.md\n"
-        epubs = "\nMY WRITING IN Dune (3).md\n"
+        before = _snapshot(vault)
+        code = exits.SUCCESS if suffix else exits.FAILED
 
         def run() -> int:
             return _write(vault, found, ("Dune.epub", "dune.pdf"), suffix=suffix)
 
-        # Without suffix the EPUB loses the name collision to the PDF.
-        assert run() == exits.SUCCESS
+        assert run() == code
 
-        assert sorted(_snapshot(vault)) == ["Dune (3).md", "dune.md"]
-        assert _tagged(vault, "dune.md") in (None, "PDF")
-        assert pdfs in (vault / "dune.md").read_text()
-        assert "only in the epub" not in (vault / "dune.md").read_text()
-        assert epubs in (vault / "Dune (3).md").read_text()
-        _rerun_is_quiet(vault, run, exits.SUCCESS)
+        # Both editions hold the PDF's note, so it goes to neither: the
+        # PDF starts a fresh one under suffix. Without it the EPUB is given
+        # dune.md and refused it, its own note left where it is, and the PDF
+        # loses the name collision.
+        fresh = ["dune (2).md"] if suffix else []
+        assert sorted(_snapshot(vault)) == sorted([*before, *fresh])
+        assert {name: _snapshot(vault)[name] for name in before} == before
+        if suffix:
+            assert _tagged(vault, "dune (2).md") == "PDF"
+        _rerun_is_quiet(vault, run, code)
 
 
 class TestATieWithABookThatDoesNotWantTheName:
