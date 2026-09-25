@@ -77,6 +77,35 @@
  * book is placed at it, no book that lost its name may hold it, and it is not
  * under a name the plan gave while holding a book whose identifier was read.
  *
+ * Provenance markers, from export/provenance.py, holders.py and telling.py.
+ * With SourceMarked, every archive a run writes for a package names its source in
+ * the zip comment; a file copied through is copied as it is, and one in
+ * Legacy was written before markers. A book is its source here, so a marker
+ * names the book in the file: the variable mark says whether it has one.
+ *   placing._marked            where the plan read the book's identifier
+ *       (every package when naming read them, ReadsSources; otherwise one a
+ *       copy wants the name of, with a usable one), the marker is read with
+ *       it: one naming another book is that book's file, one naming this
+ *       book is its own
+ *   planning._decide_before_writing   before --refresh writes over an
+ *       archive, its marker is read whatever the policy
+ *   claims.kept_numbers        a numbered or marked file whose marker names
+ *       the book is kept; one naming another is no number of it
+ *   telling.tell_apart         for a name two packages want, each file of it
+ *       (and in suffix mode each number of it that is no package's own
+ *       name): one whose marker names a book of the crowd is kept by it in
+ *       skip mode, claiming first; one naming none of them is spoken for, so
+ *       none claims it. With RefuseAmbiguous, an unmarked one goes, in skip
+ *       mode, to the one book declaring its identifier, and is spoken for
+ *       where two books of the crowd are told apart by nothing: no usable
+ *       identifier, or one between them, and not refused by one it declares
+ *   RefuseAmbiguous also stands for placing's rule that a book known to
+ *       declare no usable identifier is never placed at a file declaring
+ *       one, and for the same rule before a write
+ *   find_orphans               a marked file is an orphan unless the book it
+ *       names is in the library and was given no name; a loser holds the
+ *       file of its name when the marker names it
+ *
  * Not modelled:
  *   - case folding and Unicode normalization. Names are strings compared
  *     exactly: PassthroughNaming.identity is the filename. So a book renamed
@@ -90,6 +119,10 @@
  *   - two different files of one size and one modification time: the stat
  *     that tells a copy's own bytes is taken as given
  *     (tests/test_copy_keeping.py). Distinct books are distinct files here.
+ *   - what a marker keys on. A book is its source here; the code names its
+ *     path in the library, case folded, so a book moved to another folder
+ *     is another source, and one deleted and another added at its path is
+ *     the same one (formal/README.md).
  * A digest marker is " [b]" for book b, or for the least book of SharedId;
  * a real digest is a hash of the identifier, equal for equal identifiers.
  *)
@@ -123,8 +156,13 @@ CONSTANTS
                    \* that is a copy's own bytes claims a name again
     AskNumbered,   \* with KeepNumbered, a package with no usable identifier
                    \* keeps no numbered file that declares one
-    KeepShared     \* with KeepNumbered, packages whose names are one file
+    KeepShared,    \* with KeepNumbered, packages whose names are one file
                    \* ask whose it is, numbered files on the shelf or not
+    SourceMarked,  \* each archive written for a package names its source
+    RefuseAmbiguous, \* no book is given a file nothing tells from another's,
+                   \* and one declaring no identifier none declaring one
+    Legacy         \* the files on the shelf before the first run, written
+                   \* before markers: <<k, b>> is b's name numbered k
 
 Books == 1..N
 
@@ -137,17 +175,19 @@ VARIABLES
                    \* because another book's archive held its name
     orphaned,      \* history: a run reported as an orphan the archive of a
                    \* book in the library
+    mark,          \* name -> whether its file names the book it holds
     last           \* the last run: what it selected and decided, for traces
 
-vars == <<lib, shelf, misreported, clobbered, stranded, orphaned, last>>
+vars == <<lib, shelf, misreported, clobbered, stranded, orphaned, mark, last>>
 
 -----------------------------------------------------------------------------
 (* Naming: assign_names, then claim_copies *)
 
-\* MAX_SUFFIX is 99; N positions always leave one free for N books to claim,
-\* and 2N one for a book moving on past every name the others hold.
-Limit == IF OnCollision = "suffix" THEN N ELSE 1
+\* MAX_SUFFIX is 99; 2N positions always leave one free for N books to
+\* claim past the names spoken for, and for a book moving on past every name
+\* the others hold.
 MoveLimit == IF OnCollision = "suffix" THEN 2 * N ELSE 1
+Limit == MoveLimit
 
 Suffixed(base, k) == IF k = 1 THEN base ELSE base \o " (" \o ToString(k) \o ")"
 \* The digest of b's identifier: one for the books sharing one.
@@ -208,25 +248,37 @@ Numbered(S, order, taken) ==
              there  == Forms(base)
              marked == IF stable # base THEN Forms(stable) ELSE {}
              Mine(nm, T) == {k \in T : Mate(shelf[Suffixed(nm, k)], b)}
+             \* claims._unmarked: a marker naming the book keeps its file,
+             \* whatever the identifiers say; one naming another drops it.
+             Own(nm, T) == {k \in T : mark[Suffixed(nm, k)]
+                                     /\ shelf[Suffixed(nm, k)] = b}
+             Unmarked(nm, T) == {k \in T : ~mark[Suffixed(nm, k)]
+                                          \/ shelf[Suffixed(nm, k)] = b}
              shared == Cardinality({d \in S : Base(S, d) = base}) > 1
              look   == /\ KeepNumbered
                        /\ OnCollision = "suffix"
                        /\ \/ \E k \in there : k > 1
                           \/ marked # {}
                           \/ KeepShared /\ shared
+             plain  == Unmarked(base, there)
+             other  == Unmarked(stable, marked)
              name   == IF ~look THEN ""
+                       ELSE IF b \notin Copies /\ Own(base, there) # {}
+                         THEN Suffixed(base, Min(Own(base, there)))
+                       ELSE IF b \notin Copies /\ Own(stable, marked) # {}
+                         THEN Suffixed(stable, Min(Own(stable, marked)))
                        ELSE IF b \in Usable
-                         THEN IF Mine(base, there) # {}
-                                THEN Suffixed(base, Min(Mine(base, there)))
-                              ELSE IF Mine(stable, marked) # {}
-                                THEN Suffixed(stable, Min(Mine(stable, marked)))
+                         THEN IF Mine(base, plain) # {}
+                                THEN Suffixed(base, Min(Mine(base, plain)))
+                              ELSE IF Mine(stable, other) # {}
+                                THEN Suffixed(stable, Min(Mine(stable, other)))
                               ELSE ""
                        ELSE IF /\ Crowd(S, Wanted[b]) = 1
-                               /\ Cardinality(there) = 1
-                               /\ \A k \in there : k > 1
-                               /\ AskNumbered => shelf[Suffixed(base, Min(there))]
+                               /\ Cardinality(plain) = 1
+                               /\ \A k \in plain : k > 1
+                               /\ AskNumbered => shelf[Suffixed(base, Min(plain))]
                                                   \notin Usable
-                         THEN Suffixed(base, Min(there))
+                         THEN Suffixed(base, Min(plain))
                        ELSE ""
              rest   == Numbered(S, Tail(order),
                                 IF name = "" THEN taken ELSE taken \cup {name})
@@ -245,11 +297,66 @@ Claim(S, order, claimed) ==
                            IF name = "" THEN claimed ELSE claimed \cup {name})
          IN [c \in {b} \cup DOMAIN rest |-> IF c = b THEN name ELSE rest[c]]
 
-\* assign_names: the packages that keep a numbered file first, then the rest.
+(* telling.tell_apart, over the packages S: the crowd wanting b's name, and
+   the files of its name judged. *)
+CrowdOf(S, b) == {c \in S : Base(S, c) = Base(S, b)}
+Judged(S, base) ==
+    {Suffixed(base, k) :
+        k \in {j \in 1..MoveLimit :
+                /\ shelf[Suffixed(base, j)] # 0
+                /\ \/ j = 1
+                   \/ /\ OnCollision = "suffix"
+                      /\ Suffixed(base, j) \notin {Base(S, c) : c \in S}}}
+
+\* The one book of crowd C that declares n's identifier, or 0.
+Declarer(C, n) ==
+    LET owners == {c \in C : c \in Usable /\ shelf[n] \in Usable /\ Mate(c, shelf[n])}
+    IN IF Cardinality(owners) = 1 THEN CHOOSE c \in owners : TRUE ELSE 0
+
+\* The books of C nothing tells apart from one another, that n does not
+\* refuse by an identifier they do not declare.
+Untold(C, n) ==
+    {c \in C : /\ c \notin Usable \/ \E d \in C \ {c} : Mate(c, d)
+               /\ shelf[n] \notin Usable \/ (c \in Usable /\ Mate(c, shelf[n]))}
+
+\* The book of C that keeps n by what n says, or 0.
+TellKeep(C, n) ==
+    IF mark[n] THEN (IF shelf[n] \in C THEN shelf[n] ELSE 0)
+    ELSE IF RefuseAmbiguous THEN Declarer(C, n)
+    ELSE 0
+
+\* n is spoken for, so no book of the plan claims it.
+TellRefused(C, n) ==
+    IF mark[n] THEN shelf[n] \notin C
+    ELSE /\ RefuseAmbiguous
+         /\ Declarer(C, n) = 0
+         /\ Cardinality(Untold(C, n)) >= 2
+
+Refused(S) ==
+    UNION {{n \in Judged(S, Base(S, b)) : TellRefused(CrowdOf(S, b), n)} :
+              b \in {c \in S : Cardinality(CrowdOf(S, c)) >= 2}}
+
+\* In skip mode, the book that keeps its plain name's file, claiming first.
+SkipKept(S) ==
+    [b \in S |-> IF /\ OnCollision = "skip"
+                    /\ Cardinality(CrowdOf(S, b)) >= 2
+                    /\ shelf[Base(S, b)] # 0
+                    /\ TellKeep(CrowdOf(S, b), Base(S, b)) = b
+                   THEN Base(S, b) ELSE ""]
+
+\* The files each package keeps: kept_numbers in suffix mode, never one
+\* spoken for; telling's in skip mode.
+KeptFiles(S) ==
+    IF OnCollision = "suffix" THEN Numbered(S, Sorted(S), Refused(S))
+    ELSE SkipKept(S)
+
+\* assign_names: the packages that keep a file first, then the rest, past the
+\* names spoken for.
 PackageClaim(S) ==
-    LET kept    == Numbered(S, Sorted(S), {})
+    LET kept    == KeptFiles(S)
         keepers == {b \in S : kept[b] # ""}
-        rest    == Claim(S, Sorted(S \ keepers), {kept[b] : b \in keepers})
+        rest    == Claim(S, Sorted(S \ keepers),
+                         {kept[b] : b \in keepers} \cup Refused(S))
     IN [b \in S |-> IF b \in keepers THEN kept[b] ELSE rest[b]]
 
 (* _Claiming._own: c's own bytes, or, where c and the file both declare a
@@ -339,7 +446,8 @@ Assigned(L) ==
                     ELSE [c \in {} |-> ""]
         own    == {exact[c] : c \in DOMAIN exact}
         again  == {b \in P : /\ first[b] \in held
-                             /\ \/ Numbered(P, Sorted(P), {})[b] # ""
+                             /\ \/ /\ OnCollision = "suffix"
+                                   /\ KeptFiles(P)[b] # ""
                                 \/ first[b] \in own}
         redo   == Claim(P, Sorted(again),
                         ({first[b] : b \in P \ again} \ {""}) \cup held)
@@ -356,6 +464,16 @@ Holds(b, n) == /\ VerifyHolder
                /\ b \in Usable
                /\ shelf[n] \in Usable
                /\ ~Mate(shelf[n], b)
+
+\* The marker of n names another book than b: a package's file only.
+MarkedOther(b, n) == b \notin Copies /\ mark[n] /\ shelf[n] # b
+
+\* A book known to declare no usable identifier, at a file declaring one.
+DeclaresNone(b, n) ==
+    /\ RefuseAmbiguous
+    /\ b \notin Copies
+    /\ b \notin Usable
+    /\ shelf[n] \in Usable
 
 (* Whose identifier the plan has read, given every book's name asg. A
    package's when naming read it, or a copy wants its name or keeps its file
@@ -402,8 +520,13 @@ RECURSIVE Place(_, _, _, _, _)
 Place(order, start, spoken, known, strange) ==
     IF order = <<>> THEN [b \in {} |-> ""]
     ELSE LET b        == Head(order)
+             \* placing._marked: read where the identifiers are.
+             reads    == ReadsSources \/ (b \in known /\ b \in Usable)
              Other(n) == /\ shelf[n] # 0
-                         /\ b \in strange \/ (b \in known /\ Holds(b, n))
+                         /\ \/ b \in strange
+                            \/ b \in known /\ Holds(b, n)
+                            \/ reads /\ MarkedOther(b, n)
+                            \/ ReadsSources /\ DeclaresNone(b, n)
              open     == IF Target(b) = "" THEN {}
                          ELSE {k \in 1..MoveLimit :
                                  LET n == Suffixed(Target(b), k)
@@ -431,7 +554,11 @@ Init ==
     \* With changes, any library: the one before a book was added. The same
     \* states as removing books before the first run, when removals are on.
     /\ lib \in IF AllowChanges THEN SUBSET Books ELSE {Books}
-    /\ shelf = [n \in Names |-> 0]
+    /\ shelf = [n \in Names |->
+                  IF \E p \in Legacy : Suffixed(Wanted[p[2]], p[1]) = n
+                    THEN (CHOOSE p \in Legacy : Suffixed(Wanted[p[2]], p[1]) = n)[2]
+                    ELSE 0]
+    /\ mark = [n \in Names |-> FALSE]
     /\ misreported = FALSE
     /\ clobbered = FALSE
     /\ stranded = FALSE
@@ -443,7 +570,7 @@ AddBook(b) ==
     /\ b \notin lib
     /\ lib' = lib \cup {b}
     /\ last' = <<"added", b>>
-    /\ UNCHANGED <<shelf, misreported, clobbered, stranded, orphaned>>
+    /\ UNCHANGED <<shelf, misreported, clobbered, stranded, orphaned, mark>>
 
 RemoveBook(b) ==
     /\ AllowChanges \/ TakesArchive
@@ -453,6 +580,9 @@ RemoveBook(b) ==
     /\ shelf' = IF TakesArchive
                   THEN [n \in Names |-> IF shelf[n] = b THEN 0 ELSE shelf[n]]
                   ELSE shelf
+    /\ mark' = IF TakesArchive
+                 THEN [n \in Names |-> mark[n] /\ shelf[n] # b]
+                 ELSE mark
     /\ last' = <<"removed", b>>
     /\ UNCHANGED <<misreported, clobbered, stranded, orphaned>>
 
@@ -487,7 +617,11 @@ Run(S, refresh, newer, done) ==
         Checked(b) == b \in known \/ (refresh /\ b \in newer)
         name     == [b \in S |-> IF b \in Copies THEN all[b] ELSE planned[b]]
         present  == {b \in Packages(S) : name[b] # "" /\ shelf[name[b]] # 0}
-        foreign  == {b \in present : Checked(b) /\ Holds(b, name[b])}
+        \* _decide_before_writing: its marker, then the identifiers.
+        foreign  == {b \in present :
+                        \/ Checked(b) /\ Holds(b, name[b])
+                        \/ refresh /\ b \in newer /\ MarkedOther(b, name[b])
+                        \/ refresh /\ b \in newer /\ DeclaresNone(b, name[b])}
         collided == {b \in S : name[b] = ""} \cup foreign
         ours     == present \ foreign
         rewrite  == IF refresh THEN ours \cap newer ELSE {}
@@ -500,13 +634,18 @@ Run(S, refresh, newer, done) ==
         \* that lost its name may hold (_held_by_loser), and one under a name
         \* the plan gave that holds a book whose identifier was read.
         Wants(b) == IF b \in Copies THEN Wanted[b] ELSE Base(Packages(lib), b)
+        Holding(b, n) == IF b \notin Copies /\ mark[n] THEN shelf[n] = b
+                         ELSE ~(b \in known /\ Holds(b, n))
         losers   == {b \in lib : /\ again[b] = ""
                                  /\ shelf[Wants(b)] # 0
-                                 /\ ~(b \in known /\ Holds(b, Wants(b)))}
+                                 /\ Holding(b, Wants(b))}
         claimed  == {again[b] : b \in lib} \cup {Wants(b) : b \in losers}
+        \* A marked file is one of a book the plan gave no name, or nobody's.
+        Spared(n) == IF mark[n] THEN shelf[n] \in Packages(lib) /\ asg[shelf[n]] = ""
+                     ELSE n \in spoken /\ shelf[n] \in known \cap Usable
         orphans  == {n \in Names : /\ shelf[n] # 0
                                    /\ n \notin claimed
-                                   /\ ~(n \in spoken /\ shelf[n] \in known \cap Usable)}
+                                   /\ ~Spared(n)}
     IN /\ misreported' = (misreported \/
                            \E b \in exported \cup kept : shelf[name[b]] # b)
        /\ clobbered' = (clobbered \/
@@ -518,6 +657,11 @@ Run(S, refresh, newer, done) ==
                       IF \E b \in written : name[b] = n
                         THEN CHOOSE b \in written : name[b] = n
                         ELSE shelf[n]]
+       \* zip_package names the source; copy_through copies the bytes.
+       /\ mark' = [n \in Names |->
+                     IF \E b \in written : name[b] = n
+                       THEN SourceMarked /\ (CHOOSE b \in written : name[b] = n) \notin Copies
+                       ELSE mark[n]]
        /\ last' = <<"ran", IF S = lib THEN "all" ELSE "--match", S,
                     IF refresh THEN "--refresh" ELSE "",
                     [b \in S |-> IF b \in collided THEN "collision"
@@ -546,7 +690,7 @@ Spec == Init /\ [][Next]_vars
 \* What makes two states the same, for TLC's VIEW: everything but `last`,
 \* which is there for reading counterexamples and would otherwise multiply
 \* the states checked by every way of reaching each one.
-View == <<lib, shelf, misreported, clobbered, stranded, orphaned>>
+View == <<lib, shelf, misreported, clobbered, stranded, orphaned, mark>>
 
 -----------------------------------------------------------------------------
 (* Properties *)
@@ -574,6 +718,9 @@ TypeOK ==
     /\ Copies \subseteq Books
     /\ SharedId \subseteq Usable
     /\ shelf \in [Names -> 0..N]
+    /\ mark \in [Names -> BOOLEAN]
+    /\ \A n \in Names : mark[n] => shelf[n] \notin Copies \cup {0}
+    /\ Legacy \subseteq (1..MoveLimit) \X (Books \ Copies)
     /\ misreported \in BOOLEAN
     /\ clobbered \in BOOLEAN
     /\ stranded \in BOOLEAN
@@ -592,4 +739,10 @@ SuffixLookalike == [b \in Books |-> IF b = 3 THEN "Dune (2)" ELSE "Dune"]
 \* A book whose title is what a second edition's suffix would produce, and
 \* a book of the plain title that sorts after it.
 NumberedLookalike == [b \in Books |-> IF b = 1 THEN "Dune (2)" ELSE "Dune"]
+
+\* Nothing on the shelf before the first run.
+NoLegacy == {}
+
+\* Book 2's archive under the plain name, written before markers.
+LegacyOfTwo == {<<1, 2>>}
 =============================================================================

@@ -54,7 +54,8 @@ EXPECTED = {
     "RerunPlanner.RefreshUnverified": (
         "Invariant NeverWritesOverAnotherBook is violated."
     ),
-    # The known limit: a book with no usable identifier cannot be told apart.
+    # The known limit before markers: a book with no usable identifier cannot
+    # be told apart.
     "RerunPlanner.Unidentifiable": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
@@ -103,10 +104,12 @@ EXPECTED = {
     "RerunPlanner.NumberedRemovalsStuck": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
     ),
-    # The known limit: no identifier, and two books still want the name.
+    # The known limit before markers: no identifier, and two books still want
+    # the name. Each numbered file names its book once markers are written.
     "RerunPlanner.NumberedRemovalsCrowd": (
         "Invariant NoArchiveOfTheLibraryIsAnOrphan is violated."
     ),
+    "RerunPlanner.NumberedRemovalsCrowdMarked": HOLDS,
     # A book with no identifier beside the numbered-looking archive a deleted
     # book left: without asking what the file declares, it kept that file.
     "RerunPlanner.NumberedLeftBehind": HOLDS,
@@ -117,6 +120,26 @@ EXPECTED = {
     # the plain file is, the newcomer claimed it first.
     "RerunPlanner.NamesakeAdded": HOLDS,
     "RerunPlanner.NamesakeAddedLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
+    # Each archive names its source: books with no usable identifier, or one
+    # between them, are told apart by the marker; without it, by nothing.
+    "RerunPlanner.UnidentifiableMarked": HOLDS,
+    "RerunPlanner.SharedIdMarked": HOLDS,
+    "RerunPlanner.SharedIdSuffixMarked": HOLDS,
+    "RerunPlanner.SharedIdLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
+    # A file from before markers, wanted by two books nothing tells apart:
+    # neither is given it. Without refusing, the first in sorted order was.
+    "RerunPlanner.UnidentifiableRefuse": HOLDS,
+    "RerunPlanner.UnidentifiableRefuseSuffix": HOLDS,
+    "RerunPlanner.UnidentifiableRefuseLoose": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
+    # The limit that remains: a file from before markers that declares no
+    # usable identifier, taken by the name by a book alone in wanting it.
+    "RerunPlanner.UnidentifiableLegacy": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
 }
