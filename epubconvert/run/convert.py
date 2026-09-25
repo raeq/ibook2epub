@@ -467,10 +467,12 @@ async def export_planned(
             ),
             return_exceptions=True,
         )
+        # Counted without the report lock: every worker has returned, and a
+        # Ctrl-C in that lock's exit on this thread, before the release, left
+        # it held and the next run in the process hung (as for _Progress).
         for outcome in outcomes:
             if isinstance(outcome, BaseException):
-                with _REPORT_LOCK:
-                    report.failed += 1
+                report.failed += 1
                 logger.error("Export failed unexpectedly: %r", outcome)
     finally:
         # Books not started are dropped, so an interrupt does not wait for
