@@ -23,7 +23,7 @@ import pytest
 
 from epubconvert.collect import package as package_reader
 from epubconvert.run import run
-from tests.conftest import make_metadata_package, make_package, remove_tree
+from tests.conftest import make_metadata_package, make_package, remove_tree, unmark
 from tests.test_copy_claims import SUFFIX, identifier_of, listing, shelf, zipped_book
 from tests.test_copy_through import _evict
 from tests.test_efficiency import _named
@@ -473,7 +473,10 @@ class TestAnEvictedNumberedBook:
     def test_under_skip_incomplete_its_numbers_are_no_orphans(
         self, tmp_path, output_dir, monkeypatch, capsys
     ):
+        # Archives written before markers: nothing can say which is its own.
         library = self._left(tmp_path, output_dir, monkeypatch)
+        for archive in output_dir.glob("*.epub"):
+            unmark(archive)
         capsys.readouterr()
 
         listed = listing(library, output_dir, capsys, *SUFFIX, "--skip-incomplete")
@@ -482,6 +485,22 @@ class TestAnEvictedNumberedBook:
 
         assert ("Dune (2).epub", "orphan") not in listed
         assert "orphan" not in ran.out
+        assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
+
+    def test_under_skip_incomplete_its_marker_finds_its_file_unopened(
+        self, tmp_path, output_dir, monkeypatch, capsys
+    ):
+        # Each archive names its source: the evicted book keeps its number
+        # without being read, and the deleted book's archive is an orphan.
+        library = self._left(tmp_path, output_dir, monkeypatch)
+        capsys.readouterr()
+
+        listed = listing(library, output_dir, capsys, *SUFFIX, "--skip-incomplete")
+        run.main([*_argv(library, output_dir), "--skip-incomplete"])
+        ran = capsys.readouterr()
+
+        assert listed == [("Dune.epub", "exported"), ("Dune.epub", "orphan")]
+        assert "1 orphaned" in ran.out
         assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
 
 

@@ -629,6 +629,24 @@ def read_archive_package(path: Path) -> Package:
         itself. So is anything but a regular file, and one whose entries
         share a local header.
     """
+    return read_archive_and_comment(path)[0]
+
+
+def read_archive_and_comment(path: Path) -> tuple[Package, bytes]:
+    """
+    Parse an archive's package document, and keep its archive comment.
+
+    The comment is where an archive this tool wrote names its source
+    (:mod:`epubconvert.export.provenance`). ``ZipFile`` has read it by the
+    time it has read the directory, so a caller that opens an archive for its
+    identifier has the comment for nothing.
+
+    :param path: The archive.
+
+    :return: The package document, and the comment, empty when there is none.
+
+    :raises ValidationError: As :func:`read_archive_package` raises it.
+    """
     try:
         # zipfile leaves a stream it was handed open, so it is closed here.
         with open_regular(path) as handle, open_archive(handle) as archive:
@@ -636,7 +654,7 @@ def read_archive_package(path: Path) -> Package:
             # the report on reading an entry whose header another shares.
             if repeated_entries(archive) == SHARED_HEADER:
                 raise ValidationError(SHARED_HEADER)
-            return read_package(archive)
+            return read_package(archive), archive.comment
     except UNREADABLE_MEMBER as exc:
         raise ValidationError(printable(str(exc))) from exc
 

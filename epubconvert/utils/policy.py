@@ -70,6 +70,10 @@ class Assignment:
     #: the run was given no library to be relative to, and for a file
     #: copied through, which is copied as it is.
     source: str | None = None
+    #: Why the book was not given a file its name holds: nothing tells it
+    #: from another book of the library that wants the file too, and the
+    #: file names no source. The run says so once.
+    untold: str | None = None
 
 
 @runtime_checkable

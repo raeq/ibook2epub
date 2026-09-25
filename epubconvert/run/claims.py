@@ -25,7 +25,7 @@ from ..export.naming import (
     split_extension,
     truncate_bytes,
 )
-from .holders import identifier_on_shelf, source_identifier
+from .holders import identifier_on_shelf, marker_on_shelf, source_identifier
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..utils.opf import Package
@@ -123,6 +123,9 @@ class Claims:
         self.holders: dict[str, str] = {}
         #: The name that took each filesystem key.
         self.held: dict[str, str] = {}
+        #: Why no book of the plan may have a file, by its filesystem key
+        #: (:mod:`epubconvert.run.telling`).
+        self.refused: dict[str, str] = {}
 
     def resume(self, group: str) -> int:
         """Return the first position worth trying for this group."""
@@ -167,6 +170,19 @@ class Claims:
         "another book already claims this name".
         """
         return self.holders.get(group) or self.held.get(filesystem_key(name))
+
+    def refuse(self, key: str, candidate: str, reason: str) -> None:
+        """
+        Speak for a name no book of the plan may have, so none claims it.
+
+        :param key: The name's identity.
+        :param candidate: The name.
+        :param reason: Why, for a book that loses its name to it.
+        """
+        path_key = filesystem_key(candidate)
+        self.identities.add(key)
+        self.paths.add(path_key)
+        self.refused[path_key] = reason
 
     def exhaust(self, group: str, limit: int) -> None:
         """Record that this group has no positions left to try."""
@@ -291,7 +307,7 @@ def numbered_names(
 
 
 class Keeping(NamedTuple):
-    """What :func:`kept_numbers` found of one package's files on the shelf."""
+    """What the shelf says of one package's files (:func:`kept_numbers`)."""
 
     #: The file it keeps, if any.
     file: str | None = None
@@ -301,6 +317,9 @@ class Keeping(NamedTuple):
     #: Its usable identifier, where one was read to find its file: placing
     #: compares it with the file it is given (holders.foreign).
     identifier: str | None = None
+    #: Why it was refused a file that nothing tells from another book's
+    #: (:mod:`epubconvert.run.telling`), when it keeps none of its own.
+    untold: str | None = None
 
 
 class Wanting(NamedTuple):
@@ -316,6 +335,9 @@ class Wanting(NamedTuple):
     alone: bool
     #: The package to read its identifier from, when naming did not.
     unread: Path | None
+    #: Its source, which the archives written of it name
+    #: (:attr:`~epubconvert.utils.policy.Assignment.source`).
+    source: str | None = None
 
 
 def kept_numbers(
@@ -323,6 +345,7 @@ def kept_numbers(
     shelf: Collection[str],
     policy: NamingPolicy,
     unopened: Container[Path] = frozenset(),
+    refused: Collection[str] = frozenset(),
 ) -> dict[int, Keeping]:
     """
     Find the numbered file on the shelf each package in suffix mode keeps.
@@ -392,6 +415,15 @@ def kept_numbers(
     identifier says, so a copy that keeps the file sends the package back to
     claim a name (copynames._Claiming.reclaim).
 
+    Before any identifier, the marker of each of these files is read: one
+    that names the book's source is its own, whatever the identifiers can
+    say, and one that names another source is no number of it, and under its
+    plain name refuses it that name as a file of another identifier does. So
+    two books that declare no usable identifier keep their numbers when the
+    book before them leaves, and one added since is given no number a
+    deleted namesake left. A file no book of its crowd may have
+    (:mod:`epubconvert.run.telling`) is not kept either.
+
     :param books: Each package, in sorted order.
     :param shelf: The shelf's names, from :func:`shelf_names`.
     :param policy: The naming policy in force.
@@ -400,6 +432,7 @@ def kept_numbers(
         (:class:`~epubconvert.run.holders.Unopened`). Left unread whatever
         the run was asked, an evicted book kept nothing, and without the
         flag its only archive was listed as an orphan.
+    :param refused: The names of the files no book may keep.
 
     :return: What was found of each book whose files were looked at, by
         index into *books*: the file it keeps, whether its plain name's file
@@ -409,6 +442,7 @@ def kept_numbers(
     sharing = Counter(filesystem_key(policy.identity(book.base)) for book in books)
     directory = getattr(shelf, "directory", None)
     kept: dict[int, Keeping] = {}
+    sources = Counter(book.source for book in books if book.source)
 
     def forms(name: str) -> list[tuple[int, str]]:
         key = filesystem_key(policy.identity(name))
@@ -423,6 +457,7 @@ def kept_numbers(
             (number, found)
             for number, found in [*index.get(key, []), *itself]
             if found not in {keeping.file for keeping in kept.values()}
+            and found not in refused
             and (number <= 1 or filesystem_key(policy.identity(found)) not in sharing)
         )
 
@@ -439,8 +474,76 @@ def kept_numbers(
             )
         ):
             continue
-        kept[position] = _keeps(book, (numbers, marked_forms), directory, unopened)
+        kept[position] = _kept(
+            book, (numbers, marked_forms), directory, unopened, sources
+        )
     return kept
+
+
+def _kept(
+    book: Wanting,
+    forms: tuple[list[tuple[int, str]], list[tuple[int, str]]],
+    directory: Path,
+    unopened: Container[Path],
+    sources: Counter[str],
+) -> Keeping:
+    """
+    Name the file on the shelf that *book* keeps: by its marker, or else as
+    :func:`_keeps` finds it among the files no other book's marker names.
+
+    :param book: The package in question.
+    :param forms: The numbered files of its name and those of its marked
+        name, each lowest first.
+    :param directory: The shelf.
+    :param unopened: The books not to open for their identifier.
+    :param sources: How many books have each source.
+
+    :return: What it keeps, as :func:`_keeps` says.
+    """
+    unmarked, mine, refused = _unmarked(book, forms, directory, sources)
+    if mine:
+        return Keeping(mine, refused, book.identifier)
+    keeping = _keeps(book, unmarked, directory, unopened)
+    return keeping._replace(refused=True) if refused else keeping
+
+
+def _unmarked(
+    book: Wanting,
+    forms: tuple[list[tuple[int, str]], list[tuple[int, str]]],
+    directory: Path,
+    sources: Counter[str],
+) -> tuple[tuple[list[tuple[int, str]], list[tuple[int, str]]], str | None, bool]:
+    """
+    Settle what the markers of a book's files say, before any identifier.
+
+    :param book: The package in question.
+    :param forms: The numbered files of its name and those of its marked
+        name, each lowest first.
+    :param directory: The shelf.
+    :param sources: How many books have each source: a source two have names
+        neither.
+
+    :return: Its files less those whose marker names another source; the
+        first whose marker names its own, if any; and whether its plain
+        name's file names another.
+    """
+    numbers, marked_forms = forms
+    if book.source is None or sources[book.source] > 1:
+        return forms, None, False
+    marks = {
+        name: marker_on_shelf(directory / name) for _, name in [*numbers, *marked_forms]
+    }
+    others = {name for name, mark in marks.items() if mark not in (None, book.source)}
+    plain = next((name for number, name in numbers if number <= 1), None)
+    mine = [name for _, name in [*numbers, *marked_forms] if marks[name] == book.source]
+    return (
+        (
+            [entry for entry in numbers if entry[1] not in others],
+            [entry for entry in marked_forms if entry[1] not in others],
+        ),
+        mine[0] if mine else None,
+        plain in others,
+    )
 
 
 def _numbered_plain(key: str) -> str | None:
@@ -490,7 +593,7 @@ def _keeps(
 
     :param book: The package in question.
     :param forms: The numbered files of its name and those of its marked
-        name, each lowest first.
+        name, each lowest first, less those another book's marker names.
     :param directory: The shelf.
     :param unopened: The books not to open for their identifier.
 

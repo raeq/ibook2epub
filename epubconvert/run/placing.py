@@ -12,6 +12,7 @@ marked name.
 from __future__ import annotations
 
 import unicodedata
+from collections import Counter
 from collections.abc import Collection, Container, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -22,7 +23,13 @@ from ..collect.package import ValidationError, read_package_dir
 from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from .claims import MAX_SUFFIX, shelf_files, suffixed
-from .holders import foreign, holds_another_book
+from .holders import (
+    declares_one,
+    foreign,
+    holds_another_book,
+    same_identity,
+    written_for,
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +55,9 @@ class Shelf:
     live: frozenset[str] = field(default_factory=frozenset)
     #: The books not to open for their identifier (holders.Unopened).
     unopened: Container[Path] = frozenset()
+    #: How many books of the plan have each source, which an archive's
+    #: marker names (:func:`~epubconvert.run.holders.written_for`).
+    sources: Counter[str] = field(default_factory=Counter)
 
 
 class Place(NamedTuple):
@@ -90,7 +100,8 @@ def read_shelf(
     }
     spoken = {filesystem_key(item.identity) for item in assigned if item.filename}
     live = frozenset(unicodedata.normalize("NFC", item.identity) for item in assigned)
-    return Shelf(policy, existing, spoken, live, unopened)
+    sources = Counter(item.source for item in assigned if item.source)
+    return Shelf(policy, existing, spoken, live, unopened, sources)
 
 
 def place(assignment: Assignment, shelf: Shelf) -> Place:
@@ -139,6 +150,14 @@ def _foreign_to(
     """Say why *clash* is not this book's archive; None if free or its own."""
     if clash is None:
         return None
+    marked = _marked(clash, identity, assignment, shelf)
+    if marked is not None:
+        # The marker names a source: stronger than a name, and than an
+        # identifier two books may share. Identifiers that both declare and
+        # differ still say another book, whatever path it was written from.
+        if not marked:
+            return f"{clash.path.name} was written for another book"
+        return holds_another_book(clash.path, assignment.identifier)
     reason = foreign(
         clash.path,
         clash.identity,
@@ -152,7 +171,67 @@ def _foreign_to(
         # Settled by the claim pass, which read the sizes: a PDF has no
         # identifier for foreign to go by.
         return f"{clash.path.name} already holds this name"
+    if reason is None and _declares_none(assignment, shelf):
+        # The one read this costs is the one that gave the marker above.
+        return declares_one(clash.path)
     return reason
+
+
+def _declares_none(assignment: Assignment, shelf: Shelf) -> bool:
+    """
+    Say whether a book is known to declare no usable identifier.
+
+    Known under a policy that read each package document to name it, for a
+    package it named; a policy that names from the folder read nothing, and a
+    file copied through is judged by its bytes.
+
+    :param assignment: The book.
+    :param shelf: The shelf, and the policy it is read under.
+
+    :return: True when the book's identifier was read and there is none.
+    """
+    return (
+        assignment.identifier is None
+        and assignment.source is not None
+        and not assignment.unnamed
+        and bool(getattr(shelf.policy, "needs_metadata", False))
+    )
+
+
+def _marked(
+    clash: Existing, identity: str, assignment: Assignment, shelf: Shelf
+) -> bool | None:
+    """
+    Read what the marker of the archive under a book's name says of it.
+
+    Read only where the name alone was trusted, or the identifiers are read
+    anyway, so a rerun over a shelf of identified books reads nothing it did
+    not: where the plan read the book's identifier, the marker comes with the
+    archive's, from the one open (holders.marker_with_identifier); where it
+    knows the book declares none, that one open is the one read the book
+    pays; and a file of another spelling of its name, which may be its own
+    after a rename by case, pays for a read of the file's last bytes rather
+    than, first, of the book's package document. A book named from its
+    folder is otherwise trusted by its name, as before: checking that would
+    read every archive on every rerun. Two books of one name are told apart
+    when the names are claimed (:mod:`epubconvert.run.telling`), and before
+    a write (:func:`~epubconvert.run.planning.plan_exports`).
+
+    :param clash: The archive under the book's name.
+    :param identity: The identity of that name.
+    :param assignment: The book.
+    :param shelf: The shelf.
+
+    :return: True when the marker names this book, False when another, None
+        when it was not read or says nothing.
+    """
+    if assignment.source is None:
+        return None
+    if assignment.identifier is not None or _declares_none(assignment, shelf):
+        return written_for(clash.path, assignment.source, shelf.sources, read=True)
+    if not same_identity(clash.identity, identity):
+        return written_for(clash.path, assignment.source, shelf.sources)
+    return None
 
 
 def settled(
@@ -252,11 +331,34 @@ def placed(
             and unread
             and compared
             and item.package not in unopened
-            and holds_another_book(clash.path, _identifier_of(item.package))
+            and _holds_another(clash.path, item, shelf)
         ):
             clash = None
         found[item.package] = clash.path if clash is not None else None
     return found
+
+
+def _holds_another(found: Path, item: Assignment, shelf: Shelf) -> bool:
+    """
+    Say, before a write, whether an archive holds another book than *item*.
+
+    As the plan asks before ``--refresh`` or ``--force`` writes
+    (:func:`~epubconvert.run.planning.plan_exports`): its marker, then the
+    identifiers.
+
+    :param found: The archive the book is placed at.
+    :param item: The book, named from its folder.
+    :param shelf: The shelf.
+
+    :return: True when the archive is another book's.
+    """
+    marked = written_for(found, item.source, shelf.sources)
+    if marked is not None:
+        return not marked
+    identifier = _identifier_of(item.package)
+    if identifier is None and item.source is not None:
+        return declares_one(found) is not None
+    return holds_another_book(found, identifier) is not None
 
 
 def _identifier_of(package: Path) -> str | None:

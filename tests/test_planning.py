@@ -26,7 +26,7 @@ from epubconvert.export.naming import (
 )
 from epubconvert.run import convert, placing, planning, run
 from epubconvert.utils.policy import NamingPolicy
-from tests.conftest import make_metadata_package, make_package, remove_tree
+from tests.conftest import make_metadata_package, make_package, remove_tree, unmark
 
 
 def pending_count(
@@ -384,14 +384,31 @@ class TestANameOnTheShelfIsNotProofOfTheBook:
 
         assert listed["Dune (1965).epub"]["status"] == planning.EXPORTED
 
-    def test_a_placeholder_identifier_leaves_the_name_trusted(
+    def test_a_placeholder_identifier_is_told_apart_by_the_archives_marker(
         self, tmp_path, output_dir, capsys
     ):
-        # "none" says nothing about which book an archive is, so there is
-        # nothing to compare: the name decides, as it did before.
+        # "none" says nothing about which book an archive is. The marker the
+        # archive carries names the 1965 edition's folder, so the Ace edition
+        # is not taken for it once the 1965 one is deleted.
         library = self._library(tmp_path, identifiers=("none", "none", "none"))
         self._run(library, output_dir)
         remove_tree(library / "Dune (1965).epub")
+
+        listed = self._listed(library, output_dir, capsys)
+
+        assert listed["Dune (Ace).epub"]["status"] == planning.COLLISION
+
+    def test_a_placeholder_identifier_and_no_marker_leave_the_name_trusted(
+        self, tmp_path, output_dir, capsys
+    ):
+        # An archive written before markers, and a book alone in wanting it:
+        # nothing says whose it is, and the name decides, as it did before.
+        # Refusing it would write every such shelf again.
+        library = self._library(tmp_path, identifiers=("none", "none", "none"))
+        self._run(library, output_dir)
+        remove_tree(library / "Dune (1965).epub")
+        remove_tree(library / "Dune (Chilton).epub")
+        unmark(output_dir / "Frank Herbert - Dune.epub")
 
         listed = self._listed(library, output_dir, capsys)
 

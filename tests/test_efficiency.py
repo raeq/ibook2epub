@@ -26,7 +26,7 @@ from epubconvert.collect import package as package_reader
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
 from epubconvert.run import claims, convert, copynames, holders, placing, planning, run
-from tests.conftest import make_metadata_package, make_package
+from tests.conftest import make_metadata_package, make_package, unmark
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_copy_claims import zipped_book
 
@@ -408,15 +408,20 @@ class TestABookRenamedByCaseIsReadOnce:
     check -- and each placing read the book's package document again.
     """
 
+    @pytest.mark.parametrize("marked", [True, False], ids=["marked", "unmarked"])
     @pytest.mark.parametrize("listing", [[], ["--list"]])
     def test_its_package_document_is_read_once(
-        self, tmp_path, output_dir, monkeypatch, listing
+        self, tmp_path, output_dir, monkeypatch, listing, marked
     ):
         library = tmp_path / "lib"
         make_metadata_package(
             library / "b", "dune.epub", title="Dune", identifier="urn:uuid:D"
         )
         run.main(["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"])
+        if not marked:
+            # As an archive written before markers is: only the identifiers
+            # can say whose it is.
+            unmark(output_dir / "dune.epub")
         renamed = (library / "b" / "dune.epub").rename(library / "b" / "Dune.epub")
         reads: Counter[Path] = Counter()
         original = package_reader.read_package_dir
@@ -430,7 +435,8 @@ class TestABookRenamedByCaseIsReadOnce:
 
         run.main(["-s", str(library), "-o", str(output_dir), "-q", *cap, *listing])
 
-        assert reads == Counter({renamed: 1})
+        # The marker names the book's folder, case folded: nothing else is read.
+        assert reads == (Counter() if marked else Counter({renamed: 1}))
 
 
 def _source_reads(monkeypatch) -> tuple[Counter[Path], Counter[Path]]:
@@ -654,7 +660,9 @@ class TestARefreshReadsOnlyTheBooksItRewrites:
         code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
 
         assert code == 0
-        assert sources == ["Book 0.epub"]
+        # Its archive's marker names it, which settles it: no package
+        # document is read at all, where each book's was.
+        assert sources == []
         assert set(opened) == {"Book 0.epub"}
 
     @pytest.mark.parametrize("detached", ["notes.json", "notes.csv", "-"])

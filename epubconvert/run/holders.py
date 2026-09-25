@@ -39,6 +39,7 @@ Kept apart from the planner, which decides what to do about the answer.
 from __future__ import annotations
 
 import unicodedata
+from collections import Counter
 from collections.abc import Collection, Container
 from dataclasses import dataclass
 from functools import lru_cache
@@ -47,10 +48,12 @@ from pathlib import Path
 from ..collect.identifiers import usable_identifier
 from ..collect.package import (
     ValidationError,
+    read_archive_and_comment,
     read_archive_package,
     read_package_dir,
 )
 from ..collect.source import is_evicted
+from ..export import provenance
 
 
 def same_identity(first: str, second: str) -> bool:
@@ -91,22 +94,97 @@ def identifier_on_shelf(archive_path: Path) -> str | None:
 
     :return: Its identifier, or None when it has none or cannot be read.
     """
+    return _shelved(archive_path)[0]
+
+
+def marker_with_identifier(archive_path: Path) -> str | None:
+    """
+    Read the source an archive's marker names, where its identifier is read.
+
+    From the one open :func:`identifier_on_shelf` makes, and remembered with
+    it: a caller that compares identifiers has the marker for nothing, so a
+    rerun over a shelf of identified books reads no more than it did.
+
+    :param archive_path: The exported archive.
+
+    :return: The digest its marker names, or None when it has none or
+        cannot be read.
+    """
+    return _shelved(archive_path)[1]
+
+
+def _shelved(archive_path: Path) -> tuple[str | None, str | None]:
+    """Read an archive's identifier and marker, remembered while unchanged."""
     try:
         status = archive_path.stat()
     except OSError:
-        return None
+        return None, None
     return _identifier_of(
         archive_path, (status.st_ino, status.st_mtime_ns, status.st_size)
     )
 
 
 @lru_cache(maxsize=REMEMBERED)
-def _identifier_of(archive_path: Path, _stamp: tuple[int, int, int]) -> str | None:
-    """Read an archive's identifier; *_stamp* only keys what is remembered."""
+def _identifier_of(
+    archive_path: Path, _stamp: tuple[int, int, int]
+) -> tuple[str | None, str | None]:
+    """Read an archive's identifier and marker; *_stamp* only keys the cache."""
     try:
-        return usable_identifier(read_archive_package(archive_path))
+        package, comment = read_archive_and_comment(archive_path)
     except ValidationError:
+        return None, None
+    return usable_identifier(package), provenance.parse(comment)
+
+
+def marker_on_shelf(archive_path: Path) -> str | None:
+    """
+    Read the source an archive's marker names, and nothing else of it.
+
+    For a caller that reads no identifier: the last bytes of the file, one
+    short read, where the identifier would open the archive and parse its
+    package document. Remembered while the file is unchanged, as
+    :func:`identifier_on_shelf` is.
+
+    :param archive_path: The exported archive.
+
+    :return: The digest its marker names, or None when it has none or
+        cannot be read.
+    """
+    try:
+        status = archive_path.stat()
+    except OSError:
         return None
+    return _marker_of(archive_path, (status.st_ino, status.st_mtime_ns, status.st_size))
+
+
+@lru_cache(maxsize=REMEMBERED)
+def _marker_of(archive_path: Path, _stamp: tuple[int, int, int]) -> str | None:
+    """Read an archive's marker; *_stamp* only keys what is remembered."""
+    return provenance.read_source(archive_path)
+
+
+def written_for(
+    found: Path, source: str | None, live: Counter[str], *, read: bool = False
+) -> bool | None:
+    """
+    Say whether an archive's marker names this book's source.
+
+    :param found: The archive on the shelf.
+    :param source: This book's source
+        (:attr:`~epubconvert.utils.policy.Assignment.source`), or None.
+    :param live: How many books of the library have each source. A source two
+        books have -- two paths that differ by case alone, on a volume that
+        tells them apart -- names neither.
+    :param read: The caller reads the archive's identifier anyway: the marker
+        is taken from that read (:func:`marker_with_identifier`).
+
+    :return: True when the marker names this book, False when it names
+        another, None when there is no marker or nothing to compare it with.
+    """
+    if source is None or live[source] > 1:
+        return None
+    marked = marker_with_identifier(found) if read else marker_on_shelf(found)
+    return None if marked is None else marked == source
 
 
 def holds_another_book(found: Path, identifier: str | None) -> str | None:
@@ -121,6 +199,27 @@ def holds_another_book(found: Path, identifier: str | None) -> str | None:
     if identifier is None:
         return None
     return _held_by(found, identifier_on_shelf(found), identifier)
+
+
+def declares_one(found: Path) -> str | None:
+    """
+    Explain why an archive is not the file of a book that declares no identifier.
+
+    A book with no usable identifier of its own is never given a file that
+    declares one: that is another book's, as it is for a numbered file
+    (:func:`~epubconvert.run.claims.kept_numbers`).
+
+    :param found: The archive on the shelf under the book's name.
+
+    :return: The reason to report, or None when the archive declares none.
+    """
+    declared = identifier_on_shelf(found)
+    if declared is None:
+        return None
+    return (
+        f"{found.name} holds another book, {declared}; "
+        "this book declares no usable identifier"
+    )
 
 
 def _held_by(found: Path, holder: str | None, identifier: str) -> str | None:
