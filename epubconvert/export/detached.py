@@ -34,7 +34,6 @@ from ..collect.library import asset_sources
 from ..collect.library import collect as collect_library
 from ..utils import exits, schema
 from ..utils.app_logger import logger
-from ..utils.contained import is_free
 from ..utils.display import lose_report, printable, printable_json
 from ..utils.policy import Assignment, NamingPolicy
 from . import catalogue, notes
@@ -588,7 +587,7 @@ def library_refusal(
 
     :return: The reason, or None when the write can go ahead.
     """
-    if target.is_dir():
+    if _is_directory(target):
         return f"{printable(str(target))} is a directory; name a file to write."
     # Compared as the filesystem resolves them, never as they were typed:
     # "-ao vault --library-export ~/vault/l.csv" names one directory twice
@@ -598,26 +597,73 @@ def library_refusal(
     inside_vault = os.path.realpath(target.parent) in coming
     if inside_vault and _note_name(target.name):
         # A vault is written before the catalogue, so this target is a note
-        # that does not exist yet: is_free says the name is available and
-        # --force then wrote a CSV over the reader's highlights. Every other
-        # write in this tool refuses to go through a file it did not author.
+        # that does not exist yet: its name looks free, and --force then
+        # wrote a CSV over the reader's highlights. Every other write in this
+        # tool refuses to go through a file it did not author.
         return (
             f"{printable(str(target))} is the name of a note in that vault; "
             "the library export would write over it. Name a file the vault "
             "does not use, or put the catalogue outside it."
         )
-    if not inside_vault and not target.parent.is_dir():
-        return (
-            f"{printable(str(target.parent))} is not there; "
-            "the library export does not create directories."
-        )
-    if not force and not is_free(target):
+    homeless = None if inside_vault else _homeless(target)
+    if homeless is not None:
+        return homeless
+    # os.path.lexists, which never raises, and sees a dangling link as there:
+    # the write would go through it.
+    if not force and os.path.lexists(target):
         return (
             f"{printable(str(target))} is already there. The library export is a "
             "snapshot rather than a file that is merged into, so pass --force to "
             "replace it, or name another file."
         )
     return None
+
+
+def _is_directory(target: Path) -> bool:
+    """
+    Whether a path is a directory, without raising.
+
+    :param target: The path.
+
+    :return: True when it is one. False when it is not, or cannot be looked
+        at: ``Path.is_dir`` raised EACCES on Python 3.10 and 3.11 for a name
+        in a directory the run may not search, a traceback in the dry run and
+        the real run alike, where the directory above is judged instead.
+    """
+    try:
+        # os.stat, as the shelf is judged: Path.stat is its own binding on
+        # 3.10 and 3.14.
+        return stat.S_ISDIR(os.stat(target).st_mode)  # noqa: PTH116
+    except OSError:
+        return False
+
+
+def _homeless(target: Path) -> str | None:
+    """
+    Say why the library export cannot be written into its directory, if so.
+
+    Judged as the annotation export's directory is: only whether it was a
+    directory was asked, so one on a read-only volume, or one the run may not
+    write into, passed the dry run, and the real run read the whole library
+    before the write refused it. Beside ``-ao``, the highlights were written
+    first and the catalogue refused after them.
+
+    :param target: The file the run would write.
+
+    :return: The reason, or None when the directory can be written into.
+    """
+    folder = target.parent
+    try:
+        os.stat(folder)  # noqa: PTH116
+    except FileNotFoundError:
+        return (
+            f"{printable(str(folder))} is not there; "
+            "the library export does not create directories."
+        )
+    except OSError:
+        pass  # Named below, as the write would name it.
+    reason = _directory_refusal(folder)
+    return None if reason is None else _cannot_write(target, reason)
 
 
 def _note_name(name: str) -> bool:
