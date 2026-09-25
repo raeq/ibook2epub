@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Collection, Container, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
@@ -19,6 +19,7 @@ from ..collect.identifiers import usable_identifier
 from ..collect.package import ValidationError, read_archive_package, read_package_dir
 from ..collect.source import inspect_package
 from ..export.naming import disambiguator
+from ..export.provenance import source_of
 from ..utils.app_logger import logger
 from ..utils.opf import Package
 from ..utils.policy import Assignment, NamingPolicy
@@ -102,6 +103,10 @@ class PlanOptions:
     refresh: bool = False
     check_incomplete: bool = False
     on_collision: CollisionMode = SKIP
+    #: The library's root, which each archive's provenance marker is
+    #: relative to (:func:`~epubconvert.export.provenance.source_of`). None
+    #: writes and reads no marker.
+    library: Path | None = None
 
 
 @dataclass
@@ -212,6 +217,7 @@ def assign_names(
     *,
     shelf: Collection[str] = frozenset(),
     unopened: Container[Path] = frozenset(),
+    library: Path | None = None,
 ) -> list[Assignment]:
     """
     Give every package an output name, resolving collisions deterministically.
@@ -257,6 +263,8 @@ def assign_names(
     :param unopened: The books not to open, because opening them downloads
         them: under ``--skip-incomplete``, a package iCloud has evicted
         (:class:`~epubconvert.run.holders.Unopened`).
+    :param library: The library's root, which each book's source is named
+        relative to (:attr:`Assignment.source`); None names none.
 
     :return: One :class:`Assignment` per package, in sorted order.
     """
@@ -264,7 +272,7 @@ def assign_names(
         policy, on_collision, getattr(policy, "max_bytes", 0), unopened=unopened
     )
     unnamed = _left_unnamed(packages, policy, unopened)
-    return sorted(
+    named = sorted(
         [
             *_assign_all([p for p in packages if p not in unnamed], setup, shelf),
             *(
@@ -274,6 +282,9 @@ def assign_names(
         ],
         key=lambda item: item.package,
     )
+    if library is None:
+        return named
+    return [replace(item, source=source_of(item.package, library)) for item in named]
 
 
 def _assign_all(
@@ -604,6 +615,7 @@ def plan_exports(
             settings.on_collision,
             shelf=shelf_names(output_dir),
             unopened=unopened,
+            library=settings.library,
         )
     assignments = assigned
     shelf = read_shelf(output_dir, policy, assignments, unopened=unopened)

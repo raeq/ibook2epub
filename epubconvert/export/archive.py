@@ -35,6 +35,7 @@ from ..utils.app_logger import logger
 from ..utils.contained import contains, open_contained
 from ..utils.display import printable
 from ..utils.spec import CONTAINER_PATH, MIMETYPE_CONTENT, MIMETYPE_NAME, PACKAGE_SUFFIX
+from .provenance import stamp
 
 # Re-exported as well as used: these lived here until the module reached the
 # line limit, and their importers, and the tests that patch them, still look
@@ -433,6 +434,7 @@ def zip_package(
     target_archive: Path,
     validation: ValidationOptions | None = None,
     annotations: Sequence[dict[str, object]] | None = None,
+    provenance: str | None = None,
 ) -> int:
     """
     Write a single package directory out as a spec-valid epub archive.
@@ -453,6 +455,10 @@ def zip_package(
         None. Embedding here rather than rebuilding the finished archive
         afterwards halves the writing: the archive was being serialised once
         without them and once with.
+    :param provenance: The book's source, as
+        :func:`~epubconvert.export.provenance.source_of` digests it, to name
+        in the archive comment: what tells this archive from a namesake's on
+        a later run. None writes no marker.
 
     :return: The number of members stored, excluding ``mimetype``. Counts the
         embedded annotation set, which is not a package file.
@@ -507,6 +513,8 @@ def zip_package(
                 file_count += 1
 
             file_count += _embed_annotations(archive, annotations, stored)
+            if provenance is not None:
+                archive.comment = stamp(provenance)
 
         assert_is_a_book(target_archive.name, stored)
 
@@ -665,7 +673,7 @@ def index_by_package(
 
 
 def _same_annotations(
-    held: bytes | None, annotations: Sequence[dict[str, object]], expected: bytes
+    held: bytes | None, annotations: Sequence[dict[str, object]], embedded: str
 ) -> bool:
     """
     Whether an archive already carries exactly these annotations.
@@ -678,12 +686,15 @@ def _same_annotations(
 
     :param held: The embedded document as it stands, or None if there is none.
     :param annotations: What it should carry.
-    :param expected: What a rewrite would store, serialised.
+    :param embedded: What a rewrite would store, serialised.
 
     :return: True if a rewrite would change nothing.
     """
     if held is None:
         return not annotations
+    # As zipfile will store it. A document, not a name, so not through the
+    # name encoder; surrogates pass, so comparing never raises.
+    expected = bytes(embedded, "utf-8", "surrogatepass")
     if held == expected:
         return True
     if len(held) > 2 * len(expected) + _SPACING_ALLOWANCE:
@@ -724,6 +735,7 @@ def replace_annotations(
     annotations: Sequence[dict[str, object]],
     *,
     room: Callable[[], bool] | None = None,
+    provenance: str | None = None,
 ) -> bool:
     """
     Swap the embedded annotation set of an archive already on the shelf.
@@ -743,6 +755,10 @@ def replace_annotations(
         copy is started beside the original. Asking earlier refused a refresh
         that had nothing to write, and a shelf already up to date on a full
         volume reported a failure.
+    :param provenance: The book's source, to name in the rebuilt archive's
+        marker, as a fresh export names it: an archive written before
+        markers gains one when it is written anyway. None keeps the comment
+        the archive had.
 
     :return: True if the archive was rewritten, False if it already said this.
 
@@ -778,10 +794,7 @@ def replace_annotations(
             # looks at this one small blob: 7.86 MB of peak allocation on a
             # 6.4 MB book, to decide against rewriting it.
             embedded = embedded_json(list(annotations))
-            # As zipfile will store it. A document, not a name, so not through
-            # the name encoder; surrogates pass, so comparing never raises.
-            expected = bytes(embedded, "utf-8", "surrogatepass")
-            if _same_annotations(held, annotations, expected):
+            if _same_annotations(held, annotations, embedded):
                 return False
             if room is not None and not room():
                 raise NoRoomError(target_archive.name)
@@ -792,7 +805,7 @@ def replace_annotations(
             )
             partial = Path(temporary)  # Named first: a Ctrl-C may land on close.
             os.close(handle)
-            _rebuild(reading, members, partial, embedded)
+            _rebuild(reading, members, partial, (embedded, provenance))
             # After the rebuild, as write_atomically does: a book the user
             # made read-only would otherwise make its own partial unwritable.
             partial.chmod(mode)
@@ -831,7 +844,10 @@ def _open_shelved(path: Path) -> IO[bytes]:
 
 
 def _rebuild(
-    reading: ZipFile, members: list[ZipInfo], partial: Path, embedded: str
+    reading: ZipFile,
+    members: list[ZipInfo],
+    partial: Path,
+    written: tuple[str, str | None],
 ) -> None:
     """
     Copy members into a new archive a stream at a time, then the annotations.
@@ -845,8 +861,11 @@ def _rebuild(
     :param reading: The archive being refreshed, open for reading.
     :param members: What to carry across: mimetype first, as OCF asks, then as stored.
     :param partial: The new archive to write.
-    :param embedded: The annotation document to store after the members.
+    :param written: The annotation document to store after the members, and
+        the book's source to name in the archive comment, or None to keep the
+        comment *reading* has.
     """
+    embedded, provenance = written
     with ZipFile(partial, "w", ZIP_DEFLATED, compresslevel=COMPRESS_LEVEL) as writing:
         for info in sorted(
             members, key=lambda i: (member_name(i) != MIMETYPE_NAME, i.header_offset)
@@ -859,3 +878,4 @@ def _rebuild(
             ):
                 shutil.copyfileobj(source, target)
         writing.writestr(entry(EMBEDDED_PATH, compression_for(EMBEDDED_PATH)), embedded)
+        writing.comment = reading.comment if provenance is None else stamp(provenance)

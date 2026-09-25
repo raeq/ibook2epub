@@ -547,6 +547,7 @@ def _named(args: argparse.Namespace, policy: NamingPolicy) -> list[Assignment]:
         # The shelf the conversion weighed, so every route names alike.
         shelf=shelf_names(args.output_dir),
         unopened=Unopened(packages=args.skip_incomplete),
+        library=args.source_dir,
     )
 
 
@@ -726,7 +727,7 @@ def _refresh_each(
         if not mine:
             continue
         try:
-            if replace_annotations(target, mine, room=room):
+            if replace_annotations(target, mine, room=room, provenance=item.source):
                 tally.changed += 1
                 logger.info(
                     "%s Refreshed %d annotation(s) in %s",

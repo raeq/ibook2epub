@@ -162,6 +162,7 @@ def _shared_names(
             args.on_collision,
             shelf=shelf_names(args.output_dir),
             unopened=copies.unopened,
+            library=args.source_dir,
         ),
         copies.named,
         policy,
@@ -271,6 +272,7 @@ def _plan_options(args: argparse.Namespace) -> PlanOptions:
         refresh=args.refresh,
         check_incomplete=args.skip_incomplete,
         on_collision=args.on_collision,
+        library=args.source_dir,
     )
 
 
