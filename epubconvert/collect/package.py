@@ -710,11 +710,16 @@ def read_archive_package(path: Path) -> Package:
     :raises ValidationError: If the archive cannot be opened or read, or its
         package document is missing or unparsable -- an OSError included, as
         every caller treats a file it cannot open as one that cannot describe
-        itself. So is anything but a regular file.
+        itself. So is anything but a regular file, and one whose entries
+        share a local header.
     """
     try:
         # zipfile leaves a stream it was handed open, so it is closed here.
         with open_regular(path) as handle, ZipFile(handle) as archive:
+            # Unread: zipfile 3.13 and later print their own warning above
+            # the report on reading an entry whose header another shares.
+            if repeated_entries(archive) == SHARED_HEADER:
+                raise ValidationError(SHARED_HEADER)
             return read_package(archive)
     except UNREADABLE_MEMBER as exc:
         raise ValidationError(printable(str(exc))) from exc
