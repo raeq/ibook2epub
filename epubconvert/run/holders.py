@@ -48,7 +48,7 @@ from pathlib import Path
 from ..collect.identifiers import usable_identifier
 from ..collect.package import (
     ValidationError,
-    read_archive_and_comment,
+    read_archive_and_tail,
     read_archive_package,
     read_package_dir,
 )
@@ -130,10 +130,12 @@ def _identifier_of(
 ) -> tuple[str | None, str | None]:
     """Read an archive's identifier and marker; *_stamp* only keys the cache."""
     try:
-        package, comment = read_archive_and_comment(archive_path)
+        package, tail = read_archive_and_tail(archive_path, provenance.TAIL_BYTES)
     except ValidationError:
-        return None, None
-    return usable_identifier(package), provenance.parse(comment)
+        # No identifier, but its last bytes may still hold a marker, read as
+        # marker_on_shelf reads it: the two never disagree about a file.
+        return None, provenance.read_source(archive_path)
+    return usable_identifier(package), provenance.from_tail(tail)
 
 
 def marker_on_shelf(archive_path: Path) -> str | None:

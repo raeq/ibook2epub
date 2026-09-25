@@ -27,7 +27,7 @@ from epubconvert.collect.validate import validate_archive
 from epubconvert.export import provenance
 from epubconvert.export.archive import replace_annotations, zip_package
 from epubconvert.export.naming import disambiguator
-from epubconvert.run import annotating, run
+from epubconvert.run import annotating, holders, run
 from epubconvert.utils import exits
 from tests.conftest import make_metadata_package, make_package
 from tests.test_annotations import highlight, library_row, make_databases
@@ -160,6 +160,90 @@ class TestReadingAMarker:
         os.mkfifo(fifo)
 
         assert provenance.read_source(fifo) is None
+
+
+def _appended(data: bytes):
+    def mutate(path: Path) -> None:
+        with path.open("ab") as handle:
+            handle.write(data)
+
+    return mutate
+
+
+def _recommented(comment: bytes):
+    def mutate(path: Path) -> None:
+        with ZipFile(path, "a") as archive:
+            archive.comment = comment
+
+    return mutate
+
+
+#: A marker as a later version may write it, longer than a marker is read.
+_LONG = (
+    b"ibook2epub/9"
+    + b"".join(b" %s=%s" % (bytes([97 + i]) * 16, b"0" * 64) for i in range(7))
+    + b" src=0123abcd"
+)
+#: An end record for a directory of nothing, with a marker as its comment.
+_FAKE_END = (
+    b"PK\x05\x06"
+    + bytes(16)
+    + len(b"ibook2epub/1 src=deadbeef").to_bytes(2, "little")
+    + b"ibook2epub/1 src=deadbeef"
+)
+
+
+class TestBothReadersOfAMarkerAgree:
+    """
+    The planner reads a marker from the file's last bytes where it reads
+    nothing else (holders.marker_on_shelf), and with the identifier where it
+    opens the archive anyway (holders.marker_with_identifier). They must say
+    the same of every file, or a --list and a run disagree on whose it is.
+    """
+
+    @staticmethod
+    def _both(path: Path) -> tuple[str | None, str | None]:
+        return provenance.read_source(path), holders.marker_with_identifier(path)
+
+    @pytest.mark.parametrize("trailing", [b"JUNK", bytes(100)], ids=["junk", "nul"])
+    def test_bytes_after_the_comment_leave_no_marker(self, tmp_path, trailing):
+        _, _, target = exported(tmp_path, "a/Dune.epub")
+        _appended(trailing)(target)
+
+        assert self._both(target) == (None, None)
+        # Still an archive whose identifier is read, marker or not.
+        assert holders.identifier_on_shelf(target) is not None
+
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            _appended(b""),
+            _appended(b"JUNKJUNK"),
+            _recommented(_LONG),
+            _recommented(_LONG[:400]),
+            _recommented(b"x" * 600 + b" ibook2epub/1 src=0123abcd"),
+            _recommented(b"ibook2epub/2 src=0123abcd foo=bar"),
+            _recommented(_FAKE_END),
+            lambda path: os.truncate(path, path.stat().st_size - 5),
+        ],
+        ids=[
+            "plain",
+            "trailing",
+            "long",
+            "long-cut",
+            "long-other",
+            "later",
+            "nested-end",
+            "truncated",
+        ],
+    )
+    def test_on_every_file(self, tmp_path, mutate):
+        _, _, target = exported(tmp_path, "a/Dune.epub")
+        mutate(target)
+
+        tail, opened = self._both(target)
+
+        assert tail == opened
 
 
 class TestARefreshKeepsTheMarker:

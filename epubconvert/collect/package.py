@@ -629,21 +629,27 @@ def read_archive_package(path: Path) -> Package:
         itself. So is anything but a regular file, and one whose entries
         share a local header.
     """
-    return read_archive_and_comment(path)[0]
+    return read_archive_and_tail(path, 0)[0]
 
 
-def read_archive_and_comment(path: Path) -> tuple[Package, bytes]:
+def read_archive_and_tail(path: Path, tail: int) -> tuple[Package, bytes]:
     """
-    Parse an archive's package document, and keep its archive comment.
+    Parse an archive's package document, and keep the file's last bytes.
 
-    The comment is where an archive this tool wrote names its source
-    (:mod:`epubconvert.export.provenance`). ``ZipFile`` has read it by the
-    time it has read the directory, so a caller that opens an archive for its
-    identifier has the comment for nothing.
+    They hold the end of the central directory, where an archive this tool
+    wrote names its source in the archive comment
+    (:mod:`epubconvert.export.provenance`). Read from the open that reads the
+    identifier, so a caller that opens an archive for it has the marker for
+    one more short read; and read raw, as
+    :func:`~epubconvert.export.provenance.read_source` reads them, rather
+    than taken from ``ZipFile``'s comment: that is found in the last 64 KiB
+    whatever follows it, and the two readers disagreed about a file with
+    anything appended to it.
 
     :param path: The archive.
+    :param tail: How many of its last bytes to keep; none when 0.
 
-    :return: The package document, and the comment, empty when there is none.
+    :return: The package document, and the file's last bytes.
 
     :raises ValidationError: As :func:`read_archive_package` raises it.
     """
@@ -654,7 +660,12 @@ def read_archive_and_comment(path: Path) -> tuple[Package, bytes]:
             # the report on reading an entry whose header another shares.
             if repeated_entries(archive) == SHARED_HEADER:
                 raise ValidationError(SHARED_HEADER)
-            return read_package(archive), archive.comment
+            package = read_package(archive)
+            if tail <= 0:
+                return package, b""
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - tail))
+            return package, handle.read(tail)
     except UNREADABLE_MEMBER as exc:
         raise ValidationError(printable(str(exc))) from exc
 

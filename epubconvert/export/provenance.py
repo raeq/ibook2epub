@@ -66,6 +66,10 @@ _END_SIZE = 22
 #: The most of a comment worth reading for a marker. A marker is short; a
 #: longer comment is another tool's, and not read past this.
 MAX_MARKER_BYTES = 512
+#: How many of a file's last bytes are read for its marker: the end record
+#: and a comment as long as a marker is read, and no more, by either reader
+#: (:func:`read_source`, and the one that reads the identifier too).
+TAIL_BYTES = _END_SIZE + MAX_MARKER_BYTES
 
 
 def source_of(package: Path, library: Path | None) -> str | None:
@@ -136,13 +140,31 @@ def read_source(archive: Path) -> str | None:
         if not stat.S_ISREG(status.st_mode):
             # A FIFO would be waited on for ever.
             return None
-        span = min(status.st_size, _END_SIZE + MAX_MARKER_BYTES)
+        span = min(status.st_size, TAIL_BYTES)
         os.lseek(descriptor, status.st_size - span, os.SEEK_SET)
         tail = os.read(descriptor, span)
     except OSError:
         return None
     finally:
         os.close(descriptor)
+    return from_tail(tail)
+
+
+def from_tail(tail: bytes) -> str | None:
+    """
+    Find the source the marker in a file's last bytes names.
+
+    The one rule for both readers: the comment of an end record that ends the
+    file, no byte after it, within the last :data:`TAIL_BYTES`. ``ZipFile``
+    finds a comment wherever the last end record is, with anything after it,
+    so a file with bytes appended named its source to one reader and not the
+    other.
+
+    :param tail: The file's last :data:`TAIL_BYTES` bytes, or all of it when
+        it is shorter.
+
+    :return: The digest, or None when they end in no marker.
+    """
     return parse(_comment(tail))
 
 
