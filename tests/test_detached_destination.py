@@ -131,6 +131,28 @@ class TestAFileItCannotWrite:
         assert not list((tmp_path / "shelf").glob("*.epub"))
 
     @pytest.mark.parametrize("mode", EITHER_RUN)
+    @pytest.mark.parametrize("route", ROUTES)
+    def test_that_is_a_directory(self, library, tmp_path, capsys, route, mode):
+        # Said to be one, with the two ways on, rather than "already there and
+        # could not be read (not a regular file)" and advice to move it aside.
+        tmp_path = library.parent
+        if "-ar" in route:
+            assert run.main(["-s", str(library), "-o", str(tmp_path / "shelf")]) == 0
+        target = tmp_path / "notes"
+        target.mkdir()
+
+        code = _run(library, route, target, mode)
+
+        err = capsys.readouterr().err
+        assert code == exits.NO_OUTPUT
+        assert (
+            f"{target} is a directory; name a file, or pass --annotations-format "
+            "markdown to write one note per book into it." in err
+        )
+        assert "move it aside" not in err
+        assert not list(target.iterdir())
+
+    @pytest.mark.parametrize("mode", EITHER_RUN)
     def test_in_a_directory_it_may_not_write(
         self, library, tmp_path, monkeypatch, capsys, mode
     ):

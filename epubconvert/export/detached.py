@@ -302,6 +302,15 @@ def _existing_annotations(target: Path) -> dict[str, Any] | None:
 
     :raises ContainerUnavailableError: If it is there and is not one of ours.
     """
+    # os.path.isdir, which never raises, where Path.is_dir did on 3.10 and 3.11.
+    if os.path.isdir(target):  # noqa: PTH112
+        # Said to be one, with the two ways on: "already there and could not
+        # be read (not a regular file); move it aside" sent the reader to move
+        # a directory they had named on purpose, perhaps for a vault.
+        raise ContainerUnavailableError(
+            f"{printable(str(target))} is a directory; name a file, or pass "
+            "--annotations-format markdown to write one note per book into it."
+        )
     # Escaped: the name is the reader's, and every refusal below says it.
     name = printable(target.name)
     try:
