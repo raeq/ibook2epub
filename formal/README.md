@@ -487,9 +487,12 @@ What the model does not describe, and why:
   its name, marker unread, and so found where it moved either way. A book
   deleted and another added at its path is the same source; where both
   declare usable identifiers and they differ, or the file declares one and
-  the newcomer none, the file is still the other book's
-  (`tests/test_told_apart.py`); where the file declares none, the newcomer
-  is taken for its book, and `--force` or `--refresh` writes over it.
+  the newcomer none, the file is still the other book's before any write
+  (`tests/test_told_apart.py`) and, where the plan read the identifiers, in
+  what it reports; named from the folder, the newcomer can be reported
+  exported from it, the `FolderNamedReports` limit. Where the file declares
+  none, the newcomer is taken for its book, and `--force` or `--refresh`
+  writes over it.
 - **Two different files of one size and one modification time.** A copy's
   own bytes are told exactly here; the code tells them by size and
   modification time, which a copy keeps from its source
