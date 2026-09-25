@@ -17,6 +17,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `run/convert.py` to `run/summary.py`.
 - `run/planning.py` hands the listing and the report's tallies to
   `run/reporting.py`, and the orphan check to `run/orphans.py`.
+- Naming a zip member, and opening an archive the same way on every Python,
+  moves from `collect/package.py` to `collect/zipnames.py`.
 
 ### Fixed
 
@@ -1020,6 +1022,53 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   writing on the PDF with it, when that edition highlighted the note's
   passage. It is named and left alone, and the run exits `1`, as a note
   that cannot be moved is.
+
+- A Unicode Path extra field (0x7075) never names a member `mimetype`, nor
+  renames the one that is: a first member stored as `XXXXXXXX` with a field
+  saying `mimetype` passed `--verify`, and `-ae -ar` renamed a real
+  `mimetype` after a field saying `zzz`. `--verify` also requires the first
+  local header's own name to be `mimetype`.
+
+- A Unicode Path field Python 3.14's zipfile refuses — shorter than its
+  version and CRC, or vouching for the name in bytes that are not UTF-8 — is
+  damage on every Python: `--verify` exited `7` on 3.14 and `0` on 3.10 for
+  one book. Naming a book by its metadata and `-ae -ar` refuse it too.
+  zipfile's own `UserWarning: Empty unicode path extra field` no longer
+  appears above the report on 3.14.
+
+- A member's extra fields are read in time linear in their size: 64 KB of
+  empty records cost some 512 MB of copying per member.
+
+- `--library-export` through a symlink is judged in the directory the link
+  leads to, where the catalogue is written: a link into a directory the run
+  may not write passed the dry run and was refused after the library was
+  read, and a link out of one was refused though the write would go through.
+
+- `--library-export` naming the vault the same run makes, or a directory
+  above it (`-ao out2/vault --annotations-format markdown --library-export
+  out2`), is refused up front with exit code `5`; the dry run passed, and the
+  real run wrote the notes and then failed. So is a name too long for its
+  filesystem.
+
+- `--list`, `--list --json`, `--verify` and a run's summary are written as
+  UTF-8 under `PYTHONIOENCODING=ascii` or a Latin-1 locale. The first title
+  in another script ended each in a traceback and exit `1`, after the books
+  were written.
+
+- A dry run that would write a vault says that it did not open the vault's
+  notes: a note the real run leaves alone and exits `1` for went unmentioned,
+  and the dry run exited `0`.
+
+- A renamed book with two notes under older names, one of them at the name
+  an idle namesake is given, is told to merge them with the caveat that that
+  one may be the namesake's; the caveat was dropped. The log no longer calls
+  such a note the renamed book's.
+
+- A name ending in `(1)`, `(0)` or a number with a leading zero, such as a
+  book whose folder is `Dune (1)`, is not read as a number of `Dune`: taken
+  for that name's plain file, another book's, it had every `Dune` without an
+  identifier refused its own file and renumbered, a book reported exported
+  from another's file, and the first one's only archive listed as an orphan.
 
 ## [2.3.1] - 2026-09-11
 
