@@ -122,6 +122,9 @@ def disallowed_method(info: ZipInfo) -> str | None:
 #: General-purpose flag bit 11: the member's name is encoded in UTF-8.
 _UTF8_NAME = 0x800
 
+#: The Info-ZIP Unicode Path extra field's header ID (APPNOTE 4.6.9).
+_UNICODE_PATH = 0x7075
+
 
 def member_name(info: ZipInfo) -> str:
     """
@@ -137,11 +140,16 @@ def member_name(info: ZipInfo) -> str:
     name, and keeps the cp437 reading. ``ZipFile(metadata_encoding=)`` would
     say this once per archive, but it arrived in Python 3.11.
 
+    WinZip, and Info-ZIP on Windows, store such a name unflagged in the OEM
+    code page and its UTF-8 name in a Unicode Path extra field (0x7075). That
+    field names an unflagged member when its CRC-32 matches the name's bytes,
+    as Info-ZIP's unzip reads it: see :func:`_unicode_path`.
+
     Read from ``orig_filename``, the directory's own name decoded, and never
-    ``filename``: Python 3.14 replaces that with the name a Unicode Path
-    extra field (0x7075) claims, flagged or not, where 3.10 ignores the
-    field, so one book's member had a different name on each. The name ends
-    at a NUL, as zipfile ends ``filename``.
+    ``filename``: Python 3.14 replaces that with the field's name even for a
+    flagged name, where 3.10 ignores the field, so one book's member had a
+    different name on each. The name ends at a NUL, as zipfile ends
+    ``filename``.
 
     :param info: The member, as the archive's directory describes it.
 
@@ -153,9 +161,47 @@ def member_name(info: ZipInfo) -> str:
     try:
         # zipfile decoded the name as cp437, which maps every byte, so this
         # recovers the bytes the archive holds.
-        return name.encode("cp437").decode("utf-8")
-    except UnicodeError:
+        raw = info.orig_filename.encode("cp437")
+    except UnicodeError:  # A ZipInfo made here, not read from an archive.
         return name
+    # The name a Unicode Path field vouches for, if one does, else its own
+    # bytes; either is the name only if it is UTF-8.
+    for stated in (_unicode_path(info.extra, raw), raw):
+        try:
+            if stated is not None:
+                return stated.partition(b"\0")[0].decode("utf-8")
+        except UnicodeError:
+            continue
+    return name
+
+
+def _unicode_path(extra: bytes, raw: bytes) -> bytes | None:
+    """
+    Find the UTF-8 name a Unicode Path extra field gives a member's bytes.
+
+    Version 1, then the CRC-32 of the name bytes the header holds, then the
+    name in UTF-8 (APPNOTE 4.6.9). A field whose CRC differs was written for
+    another name -- a program renamed the member and left the field behind --
+    and is ignored, as is one whose name is empty, which Info-ZIP writes to
+    say the header's own bytes are the UTF-8 name.
+
+    :param extra: The member's extra fields, from the central directory.
+    :param raw: The name bytes the directory holds.
+
+    :return: The name's bytes, or None when no field vouches for *raw*.
+    """
+    while len(extra) >= 4:
+        kind = int.from_bytes(extra[:2], "little")
+        size = int.from_bytes(extra[2:4], "little")
+        body, extra = extra[4 : 4 + size], extra[4 + size :]
+        if (
+            kind == _UNICODE_PATH
+            and len(body) >= 5
+            and body[0] == 1
+            and int.from_bytes(body[1:5], "little") == zlib.crc32(raw)
+        ):
+            return body[5:] or None
+    return None
 
 
 def open_member(archive: ZipFile, info: ZipInfo) -> IO[bytes]:

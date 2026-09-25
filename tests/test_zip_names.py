@@ -146,34 +146,59 @@ class TestAnUnflaggedNameIsReadAsUTF8:
         assert member_name(info) == "café.xhtml"
 
 
-def unicode_path(stored: str, claimed: str) -> bytes:
+def unicode_path(stored: bytes, claimed: str, *, version: int = 1) -> bytes:
     """
     Build a Unicode Path extra field (0x7075) claiming *stored* is *claimed*.
 
-    Version 1, then the CRC-32 of the name bytes the header holds, then the
+    The version, then the CRC-32 of the name bytes the header holds, then the
     name it claims, in UTF-8.
     """
     body = (
-        b"\x01"
-        + zlib.crc32(stored.encode("utf-8")).to_bytes(4, "little")
+        version.to_bytes(1, "little")
+        + zlib.crc32(stored).to_bytes(4, "little")
         + claimed.encode("utf-8")
     )
     return (0x7075).to_bytes(2, "little") + len(body).to_bytes(2, "little") + body
 
 
-class TestAUnicodePathFieldDoesNotRenameAMember:
+#: CHAPTER as WinZip on a Japanese Windows stores it: in the OEM code page.
+OEM_CHAPTER = CHAPTER.encode("cp932")
+
+
+def winzip(path: Path) -> Path:
     """
-    Python 3.14's zipfile takes a member's name from a Unicode Path extra
-    field whose CRC matches the header's name, flagged or not; 3.10 and 3.11
-    ignore it. So one book named a member one way on one interpreter and
-    another way on the next. OCF names a member by its header, in UTF-8.
+    Write BOOK as WinZip and Info-ZIP on Windows do: the chapter's name in
+    the OEM code page, unflagged, and its UTF-8 name in a Unicode Path field.
+
+    zipfile writes only ASCII or flagged UTF-8, so the chapter is written
+    under a stand-in of the same length and its bytes are swapped in after.
+    """
+    stand_in = "#" * len(OEM_CHAPTER)
+    with ZipFile(path, "w") as writing:
+        for name, text in BOOK.items():
+            info = ZipInfo(stand_in if name == CHAPTER else name)
+            if name == CHAPTER:
+                info.extra = unicode_path(OEM_CHAPTER, CHAPTER)
+            writing.writestr(info, text)
+    path.write_bytes(path.read_bytes().replace(stand_in.encode(), OEM_CHAPTER))
+    return path
+
+
+class TestAUnicodePathFieldNamesAnUnflaggedMember:
+    """
+    WinZip, and Info-ZIP on Windows, store a name past ASCII unflagged, in
+    the OEM code page, and its UTF-8 name in a Unicode Path extra field
+    (0x7075) carrying the CRC-32 of the bytes it stands for. Info-ZIP's unzip
+    takes the field's name when that CRC matches and the name is unflagged,
+    and so does every Python here: 3.10 ignores the field and 3.14 honours it
+    even for a flagged name, so the rule is read from the bytes on both.
     """
 
     @staticmethod
-    def _written(path: Path, stored: str, claimed: str, *, flagged: bool) -> Path:
+    def _written(path: Path, stored: str, field: bytes, *, flagged: bool) -> Path:
         with ZipFile(path, "w") as writing:
             info = ZipInfo(stored)
-            info.extra = unicode_path(stored, claimed)
+            info.extra = field
             writing.writestr(info, "<html/>")
         if not flagged:
             with ZipFile(path) as reading:
@@ -181,28 +206,84 @@ class TestAUnicodePathFieldDoesNotRenameAMember:
             path.write_bytes(_cleared(bytearray(path.read_bytes()), entries, None))
         return path
 
-    @pytest.mark.parametrize(
-        ("stored", "flagged"),
-        [("a.xhtml", False), (CHAPTER, False), (CHAPTER, True)],
-        ids=["ascii", "unflagged", "flagged"],
-    )
-    def test_the_header_names_it_on_every_python(self, tmp_path, stored, flagged):
-        path = self._written(tmp_path / "Book.epub", stored, "b.xhtml", flagged=flagged)
-
+    def _named(self, path: Path) -> list[str]:
         with ZipFile(path) as reading:
-            named = [member_name(info) for info in reading.infolist()]
+            return [member_name(info) for info in reading.infolist()]
 
-        assert named == [stored]
+    def test_the_oem_name_is_read_from_the_field(self, tmp_path):
+        assert self._named(winzip(tmp_path / "Book.epub")) == list(BOOK)
+
+    @pytest.mark.parametrize("stored", ["a.xhtml", CHAPTER], ids=["ascii", "utf8"])
+    def test_an_unflagged_name_whose_crc_matches_takes_the_field(
+        self, tmp_path, stored
+    ):
+        # The archive's own statement of the UTF-8 name, which unzip honours.
+        field = unicode_path(stored.encode("utf-8"), "b.xhtml")
+        path = self._written(tmp_path / "Book.epub", stored, field, flagged=False)
+
+        assert self._named(path) == ["b.xhtml"]
+
+    def test_a_flagged_name_is_its_own_utf8_name(self, tmp_path):
+        # Info-ZIP reads the field only for an unflagged name; 3.14 reads it
+        # for this one too, so this is where the two Pythons disagreed.
+        field = unicode_path(CHAPTER.encode("utf-8"), "b.xhtml")
+        path = self._written(tmp_path / "Book.epub", CHAPTER, field, flagged=True)
+
+        assert self._named(path) == [CHAPTER]
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            unicode_path(b"other", "b.xhtml"),
+            unicode_path(b"a.xhtml", "b.xhtml", version=2),
+            unicode_path(b"a.xhtml", ""),
+            b"\x75\x70\x06\x00\x01"
+            + zlib.crc32(b"a.xhtml").to_bytes(4, "little")
+            + b"\xff",
+            b"\x75\x70\x03\x00\x01\x00\x00",
+        ],
+        ids=["crc", "version", "empty", "not-utf8", "short"],
+    )
+    def test_a_field_that_does_not_vouch_for_the_name_is_ignored(self, field):
+        # Unwritten: 3.14's zipfile will not open an archive whose field is
+        # not UTF-8, and warns of an empty one, so what it hands over is made.
+        info = ZipInfo("a.xhtml")
+        info.extra = field
+
+        assert member_name(info) == "a.xhtml"
+
+    def test_a_name_no_archive_holds_is_left_alone(self):
+        assert member_name(ZipInfo(CHAPTER)) == CHAPTER
+
+    def test_the_fields_name_ends_at_a_nul(self):
+        info = ZipInfo("a.xhtml")
+        info.extra = unicode_path(b"a.xhtml", "b.xhtml\x00.exe")
+
+        assert member_name(info) == "b.xhtml"
 
     def test_verify_finds_the_chapter_the_manifest_names(self, tmp_path):
+        assert validate_archive(winzip(tmp_path / "Book.epub")) == []
+
+    def test_verify_finds_a_flagged_chapter_whatever_a_field_claims(self, tmp_path):
         path = tmp_path / "Book.epub"
         with ZipFile(path, "w") as writing:
             for name, text in BOOK.items():
                 info = ZipInfo(name)
                 if name == CHAPTER:
-                    info.extra = unicode_path(name, "OEBPS/other.xhtml")
+                    info.extra = unicode_path(name.encode(), "OEBPS/other.xhtml")
                 writing.writestr(info, text)
 
+        assert validate_archive(path) == []
+
+    def test_a_refresh_writes_the_fields_name_flagged(self, tmp_path):
+        path = winzip(tmp_path / "Book.epub")
+
+        assert shelf.replace_annotations(path, [NOTE])
+
+        with ZipFile(path) as reading:
+            chapter = [i for i in reading.infolist() if member_name(i) == CHAPTER]
+        assert [info.flag_bits & 0x800 for info in chapter] == [0x800]
+        assert CHAPTER in names(path)
         assert validate_archive(path) == []
 
     def test_a_nul_ends_the_name_as_zipfile_ends_it(self):
