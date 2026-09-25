@@ -14,7 +14,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   the library, NFC-normalized and case folded. Readers ignore it and the book
   validates as before. `-ae -ar` keeps it, and writes it into an older archive
   it rewrites anyway; nothing is rewritten only to add one, and files copied
-  through stay byte for byte.
+  through stay byte for byte. It is read by one rule wherever it is read: the
+  comment of the end record that ends the file, so a comment with other bytes
+  after it is no marker. Two books whose paths differ only by case, on a
+  case-sensitive volume, share one digest, and a marker naming it tells
+  neither from the other: their names and identifiers decide, as before.
 - Where two books that nothing tells apart -- no usable identifier, or one
   between them -- want an archive written before markers, neither is given
   it: under `--on-collision suffix` each is written under a name of its own,
@@ -25,18 +29,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - The planner takes an archive's marker over its name and over an identifier
   two books share: a book keeps the file its marker names, numbered or not,
   in either mode, and a file whose marker names a book no longer in the
-  library is listed as an orphan and never taken or written over. The marker
-  is read where the identifiers are read anyway, from the same open, where
-  two books want one name, and before a write: a rerun over a shelf of books
-  with identifiers of their own reads nothing more.
+  library is listed as an orphan, and neither taken for another book nor
+  written over, but by a book that declares a usable identifier no other book
+  declares and the file declares too (a moved book, below). The marker is
+  read where the identifiers are read anyway, from the same open, where two
+  books want one name, and before a write: a rerun over a shelf of books with
+  identifiers of their own reads nothing more, but for a short read of the
+  last bytes of each file of a name two books want, in skip mode under the
+  policies that name a book from its folder.
 - A book moved to another folder in the library keeps its archive where it
   and the archive declare a usable identifier no other book declares: found,
   reported exported, not listed as an orphan, and written with its new folder
-  only when written anyway. A moved book declaring no usable identifier, or
-  one another book declares, has another source: its old archive is listed as
-  an orphan and the book is written again, or in skip mode is a collision.
-  A book that shared its identifier with one since deleted, and has no file
-  of its own, is taken for that book moved.
+  only when written anyway. So it does where another book has since been
+  added at its old folder, which the archive's marker names, if that book is
+  known to declare another identifier or none; that book is then given a
+  name of its own, or is a collision in skip mode. Named from the folder in
+  skip mode, a report reads no identifier there, and the newcomer is reported
+  exported from the moved book's archive but never written over it. A moved
+  book declaring no usable identifier, or one another book declares, has
+  another source: its old archive is listed as an orphan and the book is
+  written again, or in skip mode is a collision. A book that shared its
+  identifier with one since deleted, and has no file of its own, is taken for
+  that book moved, reported exported from its archive and written over it by
+  `--force` or `--refresh`, as releases before markers did.
 - `export/archive.py` hands `copy_through`, `write_atomically` and the
   partial-file names to `export/writing.py`, and re-exports them.
 

@@ -129,7 +129,10 @@
  *   - what a marker keys on. A book is its source here; the code names its
  *     path in the library, case folded, so a book moved to another folder
  *     is another source, and one deleted and another added at its path is
- *     the same one (formal/README.md).
+ *     the same one (formal/README.md). So a book added at a moved book's
+ *     old path, which the moved book's archive names, cannot be written:
+ *     holders.moved lets the identifiers decide there, where the newcomer
+ *     is known not to declare the moved book's (tests/test_moved_books.py).
  * A digest marker is " [b]" for book b, or for the least book of SharedId;
  * a real digest is a hash of the identifier, equal for equal identifiers.
  *)
