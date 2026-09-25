@@ -937,10 +937,15 @@ def write_atomically(target: Path, text: str) -> None:
     target, mode = _what_to_replace(target)
     partial: Path | None = None
     try:  # Made inside: a Ctrl-C as its descriptor closed left it behind.
-        handle, temporary = tempfile.mkstemp(
-            dir=target.parent, prefix=PARTIAL_PREFIX, suffix=PARTIAL_SUFFIX
-        )
-        partial = Path(temporary)
+        # Named before it is made: a Ctrl-C as mkstemp returned left its .part
+        # in a vault. Made exclusively, so a name already taken is not removed.
+        while partial is None:
+            name = f"{PARTIAL_PREFIX}{os.urandom(8).hex()}{PARTIAL_SUFFIX}"
+            partial = target.parent / name
+            try:
+                handle = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                partial = None
         os.close(handle)
         partial.write_text(text, encoding="utf-8")
         _sync(partial)
