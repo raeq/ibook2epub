@@ -21,6 +21,7 @@ nothing depends on a ``zip`` binary being installed.
 
 import ast
 import warnings
+import zlib
 from pathlib import Path
 from zipfile import ZIP_BZIP2, ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
@@ -145,6 +146,69 @@ class TestAnUnflaggedNameIsReadAsUTF8:
         assert member_name(info) == "café.xhtml"
 
 
+def unicode_path(stored: str, claimed: str) -> bytes:
+    """
+    Build a Unicode Path extra field (0x7075) claiming *stored* is *claimed*.
+
+    Version 1, then the CRC-32 of the name bytes the header holds, then the
+    name it claims, in UTF-8.
+    """
+    body = (
+        b"\x01"
+        + zlib.crc32(stored.encode("utf-8")).to_bytes(4, "little")
+        + claimed.encode("utf-8")
+    )
+    return (0x7075).to_bytes(2, "little") + len(body).to_bytes(2, "little") + body
+
+
+class TestAUnicodePathFieldDoesNotRenameAMember:
+    """
+    Python 3.14's zipfile takes a member's name from a Unicode Path extra
+    field whose CRC matches the header's name, flagged or not; 3.10 and 3.11
+    ignore it. So one book named a member one way on one interpreter and
+    another way on the next. OCF names a member by its header, in UTF-8.
+    """
+
+    @staticmethod
+    def _written(path: Path, stored: str, claimed: str, *, flagged: bool) -> Path:
+        with ZipFile(path, "w") as writing:
+            info = ZipInfo(stored)
+            info.extra = unicode_path(stored, claimed)
+            writing.writestr(info, "<html/>")
+        if not flagged:
+            with ZipFile(path) as reading:
+                entries = reading.infolist()
+            path.write_bytes(_cleared(bytearray(path.read_bytes()), entries, None))
+        return path
+
+    @pytest.mark.parametrize(
+        ("stored", "flagged"),
+        [("a.xhtml", False), (CHAPTER, False), (CHAPTER, True)],
+        ids=["ascii", "unflagged", "flagged"],
+    )
+    def test_the_header_names_it_on_every_python(self, tmp_path, stored, flagged):
+        path = self._written(tmp_path / "Book.epub", stored, "b.xhtml", flagged=flagged)
+
+        with ZipFile(path) as reading:
+            named = [member_name(info) for info in reading.infolist()]
+
+        assert named == [stored]
+
+    def test_verify_finds_the_chapter_the_manifest_names(self, tmp_path):
+        path = tmp_path / "Book.epub"
+        with ZipFile(path, "w") as writing:
+            for name, text in BOOK.items():
+                info = ZipInfo(name)
+                if name == CHAPTER:
+                    info.extra = unicode_path(name, "OEBPS/other.xhtml")
+                writing.writestr(info, text)
+
+        assert validate_archive(path) == []
+
+    def test_a_nul_ends_the_name_as_zipfile_ends_it(self):
+        assert member_name(ZipInfo("a.xhtml\x00.exe")) == "a.xhtml"
+
+
 class TestARefreshKeepsTheRealName:
     def test_the_rebuild_writes_the_member_under_its_utf8_name(self, tmp_path):
         path = unflagged(tmp_path / "Book.epub", BOOK)
@@ -207,7 +271,9 @@ class TestRuleEveryReaderKnowsAMemberByItsUTF8Name:
     def test_no_reader_asks_zipfile_for_a_name(self):
         # zipfile's own name for a member is its cp437 reading when the flag
         # is clear, so a lookup by name, a listing of names or a ZipInfo's
-        # filename is a reader this rule missed. Derived, so a new one fails.
+        # filename is a reader this rule missed, and 3.14 lets a Unicode Path
+        # field rewrite filename. The directory's orig_filename is read only
+        # by member_name. Derived, so a new one fails.
         offenders = []
         for path in sorted(Path("epubconvert").rglob("*.py")):
             text = path.read_text(encoding="utf-8")
@@ -218,12 +284,15 @@ class TestRuleEveryReaderKnowsAMemberByItsUTF8Name:
                     continue
                 if node.attr in _ASKED_BY_NAME:
                     offenders.append(f"{path}:{node.lineno} {node.attr}")
+                if node.attr == "orig_filename":
+                    if not _inside(tree, node, "member_name"):
+                        offenders.append(f"{path}:{node.lineno} orig_filename")
+                    continue
                 if node.attr != "filename" or not reads_archives:
                     continue
                 # An OSError's filename, in archive._shown, is a path on disk.
-                if _inside(tree, node, "_shown") or _inside(tree, node, "member_name"):
-                    continue
-                offenders.append(f"{path}:{node.lineno} filename")
+                if not _inside(tree, node, "_shown"):
+                    offenders.append(f"{path}:{node.lineno} filename")
 
         assert offenders == [], f"name a member through member_name: {offenders}"
 

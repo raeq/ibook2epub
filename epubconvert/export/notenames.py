@@ -181,11 +181,11 @@ class Vault:
         if listed is None:
             return Held(Holding.ABSENT)
         if listed not in self._held:
-            self._held[listed] = _read(self.directory / listed)
+            self._held[listed] = read_note(self.directory / listed)
         return self._held[listed]
 
 
-def _read(target: Path) -> Held:
+def read_note(target: Path) -> Held:
     """Read one file of the vault for whose note it is."""
     if not readable(target):
         return Held(Holding.UNREADABLE)
@@ -320,6 +320,8 @@ class _Names:
         #: package it is the note of, or None when two books hold it alike.
         self.owners: dict[str, Path | None] = {}
         self._wanting: dict[str, list[Assignment]] | None = None
+        #: Each book's notes by the evidence alone (:meth:`_evident`).
+        self._evidence: dict[Path, list[str]] | None = None
         #: Each highlight, as :func:`_words` has it, and the books holding it.
         self._with_words: dict[str, set[Path]] | None = None
         #: Each tag, and the books with highlights answering to it.
@@ -406,7 +408,7 @@ class _Names:
 
         Tagged for the book; or tagged for no book the run knows, or for
         none, and naming the file the book is read from; or, naming no file
-        either, holding nothing but the book's highlights (:meth:`holders`).
+        either, holding nothing but the book's highlights (:meth:`decide`).
         Only a tagged note was looked for under the names a book had before,
         but every release up to 2.3.1 wrote its notes untagged, and a book
         removed from Books and added again keeps its note tagged for the
@@ -417,11 +419,28 @@ class _Names:
 
         :return: Its package, or None when no book or more than one is its.
         """
+        if listed in self.owners:
+            return self.owners[listed]
+        held = self.vault.held(listed)
+        if held.kind is Holding.UNCLAIMED and self.silent(held):
+            return self.decide(listed)
+        return self._evident(listed)
+
+    def _evident(self, listed: str) -> Path | None:
+        """
+        The one book a note says it is the note of, by itself.
+
+        As :meth:`owner`, but a silent note is the book's only when that
+        book alone holds it: what the note and the highlights say, whatever
+        else the run gives, so the answer is the same on every run.
+
+        :param listed: The note's name, as the vault lists it.
+
+        :return: Its package, or None when no book or more than one is its.
+        """
         held = self.vault.held(listed)
         if held.kind is not Holding.UNCLAIMED:
             return None
-        if listed in self.owners:
-            return self.owners[listed]
         if self.silent(held):
             owners = self.holders(held)
         elif held.tag is not None and self.knows(held.tag):
@@ -434,6 +453,59 @@ class _Names:
                 is not Holding.ANOTHER
             ]
         return owners[0] if len(owners) == 1 else None
+
+    def decide(self, listed: str) -> Path | None:
+        """
+        The one book a silent note (:meth:`silent`) goes to, if any.
+
+        Held by one book alone, it is that book's, wherever it lies. Held by
+        more, every one of them is weighed, not only those still waiting for
+        a name that want it: a book given its own note first -- the fresh one
+        the tie itself had numbered it on the run before -- dropped out, and
+        the other took the note, its region written over and the reader's
+        writing left under that book's highlights.
+
+        A holder drops out only when it wants the note's name and has a note
+        of its own elsewhere in the vault (:meth:`_evident`): it is not the
+        book the note was written for. The note then goes to the one holder
+        left, and only if that one wants its name too. A holder that does not
+        -- a book renamed -- never drops out and is never handed the note,
+        since this may be the note it had before or another's: the fresh note
+        a tie gave it cannot be told from one of its own, and counting it
+        handed the note to the other holder on the next run. Anything else
+        is nobody's, on every run alike.
+
+        :param listed: The note's name, as the vault lists it.
+
+        :return: Its package, or None when no book or more than one is its.
+        """
+        holders = self.holders(self.vault.held(listed))
+        if len(holders) < 2:
+            return holders[0] if holders else None
+        left = [
+            package
+            for package in holders
+            if not self._wants(package, listed) or not self._provided(package, listed)
+        ]
+        if len(left) == 1 and self._wants(left[0], listed):
+            return left[0]
+        return None
+
+    def _wants(self, package: Path, listed: str) -> bool:
+        """Whether *package* could be given the name *listed*."""
+        return any(other.package == package for other in self._wanted(listed))
+
+    def _provided(self, package: Path, listed: str) -> bool:
+        """Whether *package* has a note besides *listed* (:meth:`_evident`)."""
+        if self._evidence is None:
+            self._evidence = {}
+            for note in self.vault.notes():
+                if (found := self._evident(note)) is not None:
+                    self._evidence.setdefault(found, []).append(note)
+        key = filesystem_key(listed)
+        return any(
+            filesystem_key(note) != key for note in self._evidence.get(package, ())
+        )
 
     def adopts(self, listed: str, item: Assignment, book: Claimant) -> bool:
         """
@@ -481,18 +553,20 @@ class _Names:
 
         :return: True when *item* is not the one book that wants it.
         """
+        wanting = [
+            other for other in self._wanted(listed) if source in (None, _source(other))
+        ]
+        return [other.package for other in wanting] != [item.package]
+
+    def _wanted(self, listed: str) -> list[Assignment]:
+        """Every book of the run that could be given the name *listed*."""
         if self._wanting is None:
             self._wanting = {}
             for other in self.named:
                 for name in _candidates(other, suffix=self.suffix):
                     key = filesystem_key(name)
                     self._wanting.setdefault(key, []).append(other)
-        wanting = [
-            other
-            for other in self._wanting.get(filesystem_key(listed), [])
-            if source in (None, _source(other))
-        ]
-        return [other.package for other in wanting] != [item.package]
+        return self._wanting.get(filesystem_key(listed), [])
 
 
 def note_names(
@@ -755,7 +829,8 @@ def _by_evidence(
     one book holding every one of its highlights (:func:`holding`). Two
     books holding them all are a guess, and it goes to neither: to both it
     is another book's, so each is numbered past it, or without suffix is
-    refused it.
+    refused it. A note naming no book or file is weighed against every
+    book holding it, not only those claiming it here (:meth:`_Names.decide`).
 
     :param named: Every book of the run with a name, in the run's order.
     :param claimants: Each book with highlights.
@@ -777,7 +852,10 @@ def _by_evidence(
                 claims.setdefault(listed, []).append(item.package)
                 sought.setdefault(item.package, []).append(listed)
     for listed, claim in claims.items():
-        names.owners[listed] = claim[0] if len(claim) == 1 else None
+        if names.silent(names.vault.held(listed)):
+            names.owners[listed] = names.decide(listed)
+        else:
+            names.owners[listed] = claim[0] if len(claim) == 1 else None
     for item in named:
         for listed in sought.get(item.package, ()):
             if names.owners[listed] == item.package:

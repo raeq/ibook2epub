@@ -108,6 +108,55 @@ class TestNamedFromTheFolder:
         assert "Exported 0 epub file(s)" in again.out
         assert "orphan" not in first.out + again.out
 
+    def test_a_namesake_takes_no_number_a_deleted_book_left(
+        self, tmp_path, output_dir, capsys
+    ):
+        # c/Dune.epub left the library and its archive, "Dune (2)", stayed.
+        # a/Dune.epub, added since, read its identifier and that archive's
+        # to find its own file among them, found they differ, and was still
+        # reported exported from it: the deleted book's archive, maybe its
+        # last copy, was not listed as an orphan.
+        library = tmp_path / "lib"
+        for folder in ("b", "c"):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier=f"urn:{folder}"
+            )
+        run.main([*_argv(library, output_dir), "-q"])
+        assert identifier_of(output_dir / "Dune (2).epub") == "urn:c"
+        remove_tree(library / "c")
+        make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:a"
+        )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*_argv(library, output_dir), "-d"])
+        dry = capsys.readouterr()
+        run.main(_argv(library, output_dir))
+        first = capsys.readouterr()
+        run.main(_argv(library, output_dir))
+        again = capsys.readouterr()
+
+        assert sorted((row["status"], Path(row["target"]).name) for row in rows) == [
+            ("exported", "Dune.epub"),
+            ("orphan", "Dune (2).epub"),
+            ("pending", "Dune (3).epub"),
+        ]
+        assert "Dry run: would export 1 epub file(s)" in dry.out
+        assert "1 orphaned" in dry.out
+        assert "Exported 1 epub file(s)" in first.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert {
+            path.name: identifier_of(path) for path in output_dir.glob("*.epub")
+        } == {
+            "Dune.epub": "urn:b",
+            "Dune (2).epub": "urn:c",
+            "Dune (3).epub": "urn:a",
+        }
+
     def test_not_a_numbered_file_a_copy_keeps(self, tmp_path, output_dir, capsys):
         # A zipped book copied as "Dune (2)" while a package of its name was
         # left out of a run: the package, alone among the packages, kept the
@@ -434,6 +483,165 @@ class TestAnEvictedNumberedBook:
         assert ("Dune (2).epub", "orphan") not in listed
         assert "orphan" not in ran.out
         assert shelf(output_dir) == ["Dune (2).epub", "Dune.epub"]
+
+
+class TestATitleThatLooksNumberedRenamedByCase:
+    """
+    ``c/Dune (2).epub`` is exported and renamed by case to
+    ``c/dune (2).epub``, and two books ``Dune`` are added. The shelf's
+    ``Dune (2).epub`` was indexed only as a number of ``Dune``, which the
+    renamed book's own name was never looked up under, and its exact name
+    is no longer on the shelf to claim first: the second ``Dune`` took the
+    file as its number and was reported exported from it on every run, and
+    the renamed book was written again under ``dune (2) (2).epub``.
+    """
+
+    def test_it_keeps_its_file(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir)
+        make_metadata_package(
+            library / "c", "Dune (2).epub", title="Dune", identifier="urn:c"
+        )
+        run.main([*argv, "-q"])
+        (library / "c" / "Dune (2).epub").rename(library / "c" / "moving")
+        (library / "c" / "moving").rename(library / "c" / "dune (2).epub")
+        for folder in ("a", "b"):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier=f"urn:{folder}"
+            )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-d"])
+        dry = capsys.readouterr()
+        run.main(argv)
+        ran = capsys.readouterr()
+        run.main(argv)
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["source"]).parent.name, Path(row["target"]).name)
+            for row in rows
+        ) == [
+            ("exported", "c", "Dune (2).epub"),
+            ("pending", "a", "Dune.epub"),
+            ("pending", "b", "Dune (3).epub"),
+        ]
+        assert "Dry run: would export 2 epub file(s)" in dry.out
+        assert "skipped 1 already present" in dry.out
+        assert "Exported 2 epub file(s)" in ran.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in dry.out + ran.out + again.out
+        written = {path.name: identifier_of(path) for path in output_dir.glob("*.epub")}
+        assert written == {
+            "Dune.epub": "urn:a",
+            "Dune (2).epub": "urn:c",
+            "Dune (3).epub": "urn:b",
+        }
+
+
+class TestANamesakeOfATitleThatLooksNumbered:
+    """
+    ``b/Dune (2).epub`` is exported alone and ``a/Dune (2).epub`` added. The
+    shelf's ``Dune (2).epub`` was indexed only as a number of ``Dune``, so
+    the two books that want it were never found to share a file: the
+    newcomer, sorting first, was reported exported from the other's
+    archive, and the other was written again as ``Dune (2) (2).epub``.
+    """
+
+    def test_the_book_on_the_shelf_keeps_its_file(self, tmp_path, output_dir, capsys):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir)
+        make_metadata_package(
+            library / "b", "Dune (2).epub", title="Dune", identifier="urn:b"
+        )
+        run.main([*argv, "-q"])
+        make_metadata_package(
+            library / "a", "Dune (2).epub", title="Dune", identifier="urn:a"
+        )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-d"])
+        dry = capsys.readouterr()
+        run.main(argv)
+        ran = capsys.readouterr()
+        run.main(argv)
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["source"]).parent.name, Path(row["target"]).name)
+            for row in rows
+        ) == [
+            ("exported", "b", "Dune (2).epub"),
+            ("pending", "a", "Dune (2) (2).epub"),
+        ]
+        assert "Dry run: would export 1 epub file(s)" in dry.out
+        assert "Exported 1 epub file(s)" in ran.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in dry.out + ran.out + again.out
+        written = {path.name: identifier_of(path) for path in output_dir.glob("*.epub")}
+        assert written == {"Dune (2).epub": "urn:b", "Dune (2) (2).epub": "urn:a"}
+
+
+class TestACopyTitledLikeANumber:
+    """
+    A zipped ``z/Dune (2).epub`` is copied, and two packages ``Dune`` are
+    added. The copy's file was indexed only as a number of ``Dune``, so the
+    copy never found it: the second package took the name, and the copy was
+    copied again as ``Dune (2) (2).epub``, while the package was reported
+    exported from the copy's file or, where the identifiers told, written
+    under another number and the copy's first file listed as an orphan.
+    """
+
+    @pytest.mark.parametrize("identifier", ["urn:z", "none"])
+    def test_the_copy_keeps_its_file(self, tmp_path, output_dir, capsys, identifier):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir)
+        zipped_book(tmp_path, library / "z" / "Dune (2).epub", identifier, "Dune (2)")
+        run.main([*argv, "-q"])
+        for folder in ("a", "c"):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier=f"urn:{folder}"
+            )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-d"])
+        dry = capsys.readouterr()
+        run.main(argv)
+        ran = capsys.readouterr()
+        run.main(argv)
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["source"]).parent.name, Path(row["target"]).name)
+            for row in rows
+        ) == [
+            ("copied", "z", "Dune (2).epub"),
+            ("pending", "a", "Dune.epub"),
+            ("pending", "c", "Dune (3).epub"),
+        ]
+        assert "Dry run: would export 2 epub file(s)" in dry.out
+        assert "Exported 2 epub file(s)" in ran.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in dry.out + ran.out + again.out
+        assert " copied" not in ran.out + again.out
+        written = {path.name: identifier_of(path) for path in output_dir.glob("*.epub")}
+        assert written == {
+            "Dune.epub": "urn:a",
+            "Dune (2).epub": identifier,
+            "Dune (3).epub": "urn:c",
+        }
 
 
 def len_then_name(path: Path) -> tuple[int, str]:

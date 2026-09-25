@@ -182,7 +182,13 @@ class _Progress:  # pylint: disable=too-few-public-methods
         #: card every worker started a write during the one measurement that
         #: would have refused them.
         self.measuring = False
-        self._measured = threading.Condition(_REPORT_LOCK)
+        #: Guards the sampling state above, and only that. It was built over
+        #: the report lock, which is not reentrant and shared by every run in
+        #: the process: a Ctrl-C landing in the condition's exit, before the
+        #: release, left that lock held, and the next run in the process hung
+        #: at its first count. Its own, and reentrant, so the reset below
+        #: still gets in after such an exit on the thread that made it.
+        self._measured = threading.Condition(threading.RLock())
 
     def should_check_room(self) -> bool:
         """
@@ -190,7 +196,7 @@ class _Progress:  # pylint: disable=too-few-public-methods
 
         Counts the checks rather than the completions: workers start together
         and would all read the same completion count, so every one of them
-        sampled. The caller holds the report lock, which makes this atomic.
+        sampled. The caller holds the sampler's lock, which makes this atomic.
         """
         self.checks += 1
         return (self.checks - 1) % self.interval == 0
@@ -210,21 +216,26 @@ class _Progress:  # pylint: disable=too-few-public-methods
 
         :return: True when the write may go ahead.
         """
-        with self._measured:
-            self._measured.wait_for(lambda: not self.measuring)
-            if self.floor_crossed:
-                return False
-            if not self.should_check_room():
-                return True
-            self.measuring = True
         room = True
+        measured = False
+        # One try around both, so that nothing -- a Ctrl-C included -- can
+        # land between setting ``measuring`` and the reset that clears it.
         try:
+            with self._measured:
+                self._measured.wait_for(lambda: not self.measuring)
+                if self.floor_crossed:
+                    return False
+                if not self.should_check_room():
+                    return True
+                measured = True
+                self.measuring = True
             room = _has_room(output_dir, min_free_mb)
         finally:
-            with self._measured:
-                self.measuring = False
-                self.floor_crossed = not room
-                self._measured.notify_all()
+            if measured:
+                with self._measured:
+                    self.measuring = False
+                    self.floor_crossed = not room
+                    self._measured.notify_all()
         return room
 
     def tick(self) -> str:

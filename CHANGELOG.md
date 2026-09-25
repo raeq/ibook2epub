@@ -20,6 +20,55 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `-ae -ar` writes a book's members in the order the file stores them, not
+  the order its central directory lists them. A book storing `mimetype`
+  first but listing it later passed `--verify`, was rewritten with
+  `mimetype` not first, and then failed it.
+
+- A container's rootfile media type is compared without regard to case or
+  parameters, so `application/oebps-package+xml; charset=utf-8` names the
+  package document. Without a match, the first rootfile declaring no media
+  type is taken ahead of one declaring another: a PDF listed ahead of an
+  untyped package document was parsed as the package document.
+
+- A zip member is named by its own header on every Python. Python 3.14 took
+  the name from a Unicode Path extra field (0x7075) instead, where 3.10 and
+  3.11 ignore it, so a member stored as `a.xhtml` with such a field saying
+  `b.xhtml` had a different name on each, and `--verify` and `-ae -ar` read
+  the book differently.
+
+- `-ad` naming the shelf or a directory the run makes above it (`-ad Books
+  -o Books` on a first run) is refused before anything is converted, with
+  "Is a directory" and exit code `5`. The dry run exited `0`, and the real run
+  converted every book and then exited `5`.
+
+- A vault of notes (`--annotations-format markdown`) that is a file, sits
+  under a file, or is on a volume the run cannot write is refused before
+  anything is converted, in the dry run and the real run alike, with exit
+  code `5`. The dry run exited `0`, and the real run converted every book and
+  then refused the vault. A vault that is not there yet is still created.
+
+- A dry run of `--library-export` refuses a file the real run would refuse,
+  with exit code `5`, as a dry run of `-ao` does. It only warned ("A real run
+  would refuse to write") and exited `0`. So does `-ao --library-export -d`.
+
+- A highlights file in a directory the run may not search is refused as
+  "Permission denied" on every Python; on 3.10 and 3.11 it was said to be
+  "already there and could not be read" when it was not there at all. A
+  directory on a read-only volume is named as "Read-only file system" rather
+  than "Permission denied".
+
+- A copy whose name on the shelf cannot be looked at (an I/O error from a
+  share or USB volume that dropped, on Python 3.10 and 3.11) no longer ends
+  the run, a dry run or `--list` in a traceback with exit code `1` and no
+  summary: the name is taken as free, as the copy workers already took it,
+  and a copy that then fails is counted and says why.
+
+- A Ctrl-C landing exactly as the `--min-free` sampler released its lock no
+  longer leaves the report's lock held for the rest of the process, which
+  hung a second run started in it; nor can one leave a measurement marked
+  as under way for good.
+
 - Under `--on-collision suffix`, a book declaring no usable identifier no
   longer keeps a numbered-looking file that declares one. A deleted
   `Dune (1965)` left `Dune (1965).epub`, and an unidentified `Dune` added
@@ -33,6 +82,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   other's archive and never written, the other was written again under a
   number, and the next run wrote the newcomer too and left the second copy
   an orphan.
+
+- Under `--on-collision suffix --skip-incomplete`, a book renamed by case
+  and evicted by iCloud, beside a namesake added under its old spelling,
+  keeps its archive. The newcomer was reported exported from that archive
+  though both identifiers had been read and differ, and with `--refresh` a
+  newcomer declaring no usable identifier wrote over it, the evicted book's
+  only one. A book whose plain file declares a usable identifier it does not
+  have is now written under a number of its name.
+
+- Under `--on-collision suffix`, a book titled like a number (`Dune (2)`)
+  and renamed by case keeps its archive beside two books `Dune` added
+  since. The second `Dune` was reported exported from it on every run, and
+  the renamed book was written again as `dune (2) (2).epub`. Two books of
+  such a title, one exported alone and the other added since, now read
+  their identifiers too: the newcomer was reported exported from the
+  other's archive and the other written again under a number. A zipped
+  book of such a title keeps its copy when packages of the plain name are
+  added, rather than being copied again under a number while a package is
+  reported exported from its file.
+
+- Under `--on-collision suffix`, a book named from its folder whose
+  identifier was read to find its numbered file is no longer reported
+  exported from a number a deleted namesake left: it is written under the
+  next free number, and the deleted book's archive is listed as an orphan.
 
 - A package added beside a zipped book already copied, when either declares
   no usable identifier, is no longer placed at the copy's file: under
@@ -130,6 +203,26 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `Dune.pdf` beside the renamed `Dune.epub`) is no longer handed such a note
   to write its own highlights over; the run names the note and exits 1, or
   under `--on-collision suffix` numbers the namesake.
+
+- A note written by 2.3.1 or earlier that two editions both match now goes to
+  neither on every run, not just the first. Once that first run had given one
+  edition a fresh note, the next run, with nothing changed, handed the old note
+  to the other edition and wrote its highlights over what you had written for
+  the first. An edition that has another note of its own now steps aside, so
+  the PDF's old `Dune.md` beside the EPUB's `Dune (2).md` stays the PDF's. A
+  renamed edition's old note is never handed to a namesake that highlighted the
+  same passage. A rerun with nothing changed writes nothing.
+
+- When a renamed book's note cannot be moved because a file is already at its
+  new name, the error now says what that file is (a file ibook2epub did not
+  write, or another book's note) and asks you to move that file aside, instead
+  of telling you to move the note onto it, which would have replaced it. When
+  the book has two old notes, you are asked to merge them.
+
+- A renamed book's note is no longer held back, with exit 1 on every run,
+  because a namesake with no highlights (a `Dune.pdf` beside the renamed
+  `Dune.epub`) keeps the old name. The note moves to the book's new name, and
+  the namesake starts its own note once it has highlights.
 
 - A package holding a file whose name is not valid UTF-8 is reported failed
   with that file's name ("member name is not UTF-8"), instead of a bare codec
@@ -816,9 +909,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
     is found. A name stored twice, once flagged and once not, is reported as
     a duplicate.
 
-- `--verify` and `--validate` report a `mimetype` member whose local header
-  carries an extra field, which OCF forbids and epubcheck rejects. `zip`
-  run without `-X` writes one.
+- `--verify` and `--validate` warn of a `mimetype` member whose local header
+  carries an extra field, which OCF asks against and epubcheck rejects.
+  `zip` run without `-X` writes one, and readers open such a book, so it is
+  said on stderr (`Hand Made.epub: mimetype carries a 28-byte extra field;
+  OCF asks for none, readers open it`) and not counted damaged: the exit
+  code is unchanged and no repair is advised. A book copied through keeps
+  its bytes, so calling it damaged had `--verify` advise a rerun that copied
+  the same bytes back, and it never passed. Under `--epubcheck`, epubcheck's
+  own verdict still stands.
 
 - A container that lists another rendition, such as a PDF, ahead of the
   package document is read at the package document: the first rootfile whose

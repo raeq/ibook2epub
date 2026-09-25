@@ -13,6 +13,7 @@ the writer chose, so it says nothing about what comes first in the file.
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 # pylint: disable=protected-access
 
+import io
 import unicodedata
 import warnings
 from pathlib import Path
@@ -21,8 +22,11 @@ from zipfile import ZIP_STORED, ZipFile, ZipInfo
 import pytest
 
 from epubconvert.collect import validate
-from epubconvert.export.archive import zip_package
+from epubconvert.collect.package import find_opf_path
+from epubconvert.export.archive import replace_annotations, zip_package
 from epubconvert.export.naming import filesystem_key
+from epubconvert.run.run import main
+from epubconvert.utils import exits
 from epubconvert.utils.spec import fold_name
 from tests.conftest import make_metadata_package
 from tests.test_validate import MEMBERS, write_epub
@@ -83,6 +87,33 @@ class TestMimetypeIsPhysicallyFirst:
 
         assert validate.validate_archive(path) == []
 
+    def test_a_refresh_keeps_mimetype_first_whatever_the_index_says(
+        self, tmp_path: Path
+    ):
+        # The refresh copied members in the central directory's order, so a
+        # book storing mimetype first but listing it last passed --verify,
+        # and was rewritten with mimetype last, which --verify then rejected.
+        path = tmp_path / "IndexedLater.epub"
+        with ZipFile(path, "w") as archive:
+            archive.writestr(
+                ZipInfo("mimetype"), "application/epub+zip", compress_type=ZIP_STORED
+            )
+            for name, body in MEMBERS.items():
+                archive.writestr(name, body)
+            archive.filelist.append(archive.filelist.pop(0))
+        assert validate.validate_archive(path) == []
+
+        assert replace_annotations(path, [{"id": "A", "text": "hi"}])
+
+        with ZipFile(path) as archive:
+            first = min(archive.infolist(), key=lambda info: info.header_offset)
+            assert first.filename == "mimetype"
+            assert [info.filename for info in archive.infolist()][:-1] == [
+                "mimetype",
+                *MEMBERS,
+            ]
+        assert validate.validate_archive(path) == []
+
     def test_an_archive_written_properly_still_passes(self, tmp_path: Path):
         assert validate.validate_archive(write_epub(tmp_path / "Good.epub")) == []
 
@@ -99,8 +130,27 @@ class TestMimetypeIsPhysicallyFirst:
 
 
 class TestMimetypeCarriesNoExtraField:
-    #: The timestamp field Info-ZIP adds to every member unless given -X.
-    TIMESTAMP = b"UT\x05\x00\x01" + (0).to_bytes(4, "little")
+    """
+    OCF asks for no extra field in ``mimetype``'s local header, and epubcheck
+    fails a book for one (PKG-005), but readers open it: Info-ZIP given no
+    ``-X`` writes one, which is how many books are zipped by hand. Such a book
+    is copied through byte for byte, so calling it damaged sent --verify into
+    a loop: move it aside, rerun, and the same bytes came back.
+    """
+
+    #: What Info-ZIP adds to every member unless given -X: a UT timestamp
+    #: field with two times, and a ux field with a four-byte uid and gid.
+    INFO_ZIP = (
+        b"UT\x09\x00\x03"
+        + bytes(8)
+        + b"ux\x0b\x00\x01\x04"
+        + bytes(4)
+        + b"\x04"
+        + bytes(4)
+    )
+    WARNING = (
+        "mimetype carries a 28-byte extra field; OCF asks for none, readers open it"
+    )
 
     def _written(self, path: Path, extra: bytes) -> Path:
         with ZipFile(path, "w") as archive:
@@ -111,50 +161,79 @@ class TestMimetypeCarriesNoExtraField:
                 archive.writestr(name, body)
         return path
 
-    def test_an_extra_field_in_its_local_header_is_reported(self, tmp_path: Path):
-        # OCF forbids one, and epubcheck fails the book for it (PKG-005): the
-        # field sits between the name and the content, so the bytes a reader
-        # sniffs at offset 38 are no longer "application/epub+zip". zip given
-        # no -X writes exactly this, and the validator called it sound.
-        path = self._written(tmp_path / "Extra.epub", self.TIMESTAMP)
+    def test_an_extra_field_is_a_warning_not_damage(self, tmp_path: Path):
+        path = self._written(tmp_path / "Extra.epub", self.INFO_ZIP)
         assert path.read_bytes()[38:58] != b"application/epub+zip"
 
-        problems = validate.validate_archive(path)
+        verdict = validate.check_archive(path)
 
-        assert "mimetype carries a 9-byte extra field; it must carry none" in problems
+        assert verdict.problems == []
+        assert verdict.warnings == [self.WARNING]
+        assert validate.validate_archive(path) == []
 
     def test_the_local_header_is_the_one_judged(self, tmp_path: Path):
         # The central directory's copy is what zipfile reports, and the two
         # need not agree. The one at offset 0 is the one a reader sees.
-        path = self._written(tmp_path / "LocalOnly.epub", self.TIMESTAMP)
+        path = self._written(tmp_path / "LocalOnly.epub", self.INFO_ZIP)
         raw = bytearray(path.read_bytes())
         entry = raw.index(b"PK\x01\x02")  # mimetype's, the first listed
         raw[entry + 30 : entry + 32] = b"\x00\x00"
-        raw[entry + 46 + 8 : entry + 46 + 8 + 9] = b""
-        # The end record's directory size, nine bytes shorter now.
-        raw[-10:-6] = (int.from_bytes(raw[-10:-6], "little") - 9).to_bytes(4, "little")
+        raw[entry + 46 + 8 : entry + 46 + 8 + 28] = b""
+        # The end record's directory size, 28 bytes shorter now.
+        raw[-10:-6] = (int.from_bytes(raw[-10:-6], "little") - 28).to_bytes(4, "little")
         path.write_bytes(bytes(raw))
         with ZipFile(path) as archive:
             assert archive.getinfo("mimetype").extra == b""
 
-        problems = validate.validate_archive(path)
-
-        assert "mimetype carries a 9-byte extra field; it must carry none" in problems
+        assert validate.check_archive(path).warnings == [self.WARNING]
 
     def test_a_damaged_local_header_is_left_to_the_read(self, tmp_path: Path):
         # No header, no extra field to measure: reading the member reports it.
         path = self._written(tmp_path / "Damaged.epub", b"")
         path.write_bytes(b"XX" + path.read_bytes()[2:])
 
-        problems = validate.validate_archive(path)
+        verdict = validate.check_archive(path)
 
-        assert len(problems) == 1
-        assert problems[0].startswith("not a readable zip archive")
+        assert len(verdict.problems) == 1
+        assert verdict.problems[0].startswith("not a readable zip archive")
+        assert verdict.warnings == []
 
     def test_none_is_not_reported(self, tmp_path: Path):
         path = self._written(tmp_path / "Plain.epub", b"")
 
-        assert validate.validate_archive(path) == []
+        assert validate.check_archive(path) == validate.Verdict([], [])
+
+    def test_verify_says_it_once_and_passes_the_book(self, tmp_path: Path, capsys):
+        library, shelf = tmp_path / "lib", tmp_path / "out"
+        library.mkdir()
+        self._written(library / "Hand Made.epub", self.INFO_ZIP)
+        flags = ["-s", str(library), "-o", str(shelf), "-q"]
+        assert main(flags) == exits.SUCCESS
+        copied = (shelf / "Hand Made.epub").read_bytes()
+        assert copied == (library / "Hand Made.epub").read_bytes()
+        capsys.readouterr()
+
+        code = main([*flags, "--verify"])
+
+        out, err = capsys.readouterr()
+        assert code == exits.SUCCESS
+        assert err.count(f"Hand Made.epub: {self.WARNING}") == 1
+        assert "0 damaged" in out
+        assert "Move each" not in out
+        assert main(flags) == exits.SUCCESS
+        assert (shelf / "Hand Made.epub").read_bytes() == copied
+
+    def test_an_export_checked_with_validate_warns_of_nothing(
+        self, tmp_path: Path, capsys
+    ):
+        library, shelf = tmp_path / "lib", tmp_path / "out"
+        make_metadata_package(library, "Book.epub", title="Book")
+
+        code = main(["-s", str(library), "-o", str(shelf), "--validate", "-q"])
+
+        assert code == exits.SUCCESS
+        assert validate.check_archive(shelf / "Book.epub") == validate.Verdict([], [])
+        assert "extra field" not in capsys.readouterr().err
 
 
 class TestEveryMemberNameIsUnique:
@@ -318,3 +397,62 @@ class TestFoldingIsCanonicalCaselessMatching:
 
     def test_full_folding_is_kept(self):
         assert fold_name("Straße") == fold_name("STRASSE")
+
+
+class TestTheContainerNamesThePackageDocument:
+    """
+    OCF names the package document as the first rootfile whose media type is
+    ``application/oebps-package+xml``. The type was compared whole, so one
+    carrying a parameter was missed, and without a match the first rootfile
+    of any type was taken: a PDF listed ahead of an untyped package document.
+    """
+
+    PDF = '<rootfile full-path="book.pdf" media-type="application/pdf"/>'
+
+    @staticmethod
+    def _opf_path(rootfiles: str) -> str:
+        container = (
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            f"<rootfiles>{rootfiles}</rootfiles></container>"
+        )
+        buffer = io.BytesIO()
+        with ZipFile(buffer, "w") as archive:
+            archive.writestr("META-INF/container.xml", container)
+        with ZipFile(buffer) as archive:
+            return find_opf_path(archive)
+
+    @pytest.mark.parametrize(
+        "media_type",
+        [
+            "application/oebps-package+xml; charset=utf-8",
+            "Application/OEBPS-Package+XML ;charset=UTF-8",
+            " application/oebps-package+xml ",
+        ],
+    )
+    def test_a_parameter_or_case_does_not_hide_the_type(self, media_type):
+        opf = f'<rootfile full-path="content.opf" media-type="{media_type}"/>'
+
+        assert self._opf_path(self.PDF + opf) == "content.opf"
+
+    def test_an_untyped_rootfile_is_preferred_to_one_of_another_type(self):
+        untyped = '<rootfile full-path="content.opf"/>'
+
+        assert self._opf_path(self.PDF + untyped) == "content.opf"
+
+    def test_the_first_untyped_rootfile_is_the_one_taken(self):
+        rootfiles = '<rootfile full-path="a.opf"/><rootfile full-path="b.opf"/>'
+
+        assert self._opf_path(rootfiles) == "a.opf"
+
+    def test_a_typed_one_still_wins_over_an_untyped_one_ahead(self):
+        rootfiles = (
+            '<rootfile full-path="a.opf"/><rootfile full-path="b.opf"'
+            ' media-type="application/oebps-package+xml"/>'
+        )
+
+        assert self._opf_path(rootfiles) == "b.opf"
+
+    def test_with_only_other_types_the_first_is_still_taken(self):
+        other = '<rootfile full-path="c.xml" media-type="text/xml"/>'
+
+        assert self._opf_path(self.PDF + other) == "book.pdf"

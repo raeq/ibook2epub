@@ -142,8 +142,8 @@ file of its name), or the file of its marked name once its crowd has left it; wi
 usable identifier, the one numbered file when no other package wants the name
 and nothing holds the plain name, and with `AskNumbered` only when that file
 declares no usable identifier either. `KeepShared` asks the same where two
-packages want one name and no file of it is numbered: the one whose
-identifier the plain file declares keeps it. A copy that keeps that file sends the
+packages want one name and a file of it is on the shelf, numbered or not:
+the one whose identifier the plain file declares keeps it. A copy that keeps that file sends the
 package back to claim a name (`_Claiming.reclaim`). `ReclaimOwn` widens that
 to any package given the name of a file the claim pass kept as a copy's own
 bytes: in suffix mode it claims its marked or numbered name, and in skip mode
@@ -241,7 +241,9 @@ What the configurations that fail show:
   `exported` from the other book's file and its archive is not reported as
   an orphan. It is never written over. In suffix mode a namesake added
   beside it no longer is, where both declare a usable identifier
-  (`NamesakeAdded`).
+  (`NamesakeAdded`), nor a namesake whose identifier was read to find its
+  numbered file (`claims.kept_numbers`): it carries that identifier to
+  placing, and moves on past a number a deleted namesake left.
   `tests/test_planning.py::TestAFolderNameIsNotProofOfTheBook` replays the
   writes against the CLI.
 
@@ -349,6 +351,16 @@ What the configurations that fail show:
   both against the CLI. Skip mode is unchanged: the `FolderNamedReports`
   limit.
 
+  Under `--skip-incomplete` the renamed book, evicted by iCloud, is left
+  unopened and keeps nothing, and the newcomer, whose identifier and the
+  file's had been read and differ, was reported exported from the renamed
+  book's archive; with `--refresh`, a newcomer declaring no identifier wrote
+  over it, the evicted book's only one. Now a book whose plain file declares
+  a usable identifier it does not have, its own read, is refused that file:
+  with no digest to move on to it claims its name numbered, and the renamed
+  book, which nothing read, is trusted with the file.
+  `tests/test_case_namesakes.py` replays it against the CLI.
+
 Under `--name-by author-title` the check adds no reads on the source side,
 because naming already read every package document.
 
@@ -373,4 +385,9 @@ What the model does not describe, and why:
   file on the shelf ahead of the rest -- whatever put the file there: a
   namesake by case, the book's own archive or another's, or a title that
   looks like a number -- and the model's packages claim in sorted order. The
-  copies claim in its order.
+  copies claim in its order. A book titled like a number and renamed by
+  case, `c/Dune (2).epub` to `c/dune (2).epub`, no longer claims first, and
+  the second of two books `Dune` added since took its file as a number;
+  `claims.kept_numbers` now reads the identifiers where a book's own name
+  looks like a number of a name another book wants, and the book the file
+  declares keeps it (`tests/test_numbered_names.py`).

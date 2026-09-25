@@ -19,7 +19,12 @@ from pathlib import Path
 from ..collect.annotations import STDOUT
 from ..collect.coredata import FULL_DISK_ACCESS
 from ..collect.validate import epubcheck_available
-from ..export.detached import LIBRARY_SKIPPED, annotations_refusal, vault_of
+from ..export.detached import (
+    LIBRARY_SKIPPED,
+    annotations_refusal,
+    vault_of,
+    vault_refusal,
+)
 from ..utils import exits
 from ..utils.app_logger import logger
 from ..utils.defaults import SOURCE_CANDIDATES
@@ -261,20 +266,19 @@ def _check_shelf(args: argparse.Namespace) -> int | None:
 
 def _check_detached(args: argparse.Namespace) -> int | None:
     """
-    Check the highlights file can be written, when the run writes one.
+    Check the highlights file or vault can be written, when the run writes one.
 
     Judged here, before a book is read or converted, as the shelf is: a run
     with ``-ad`` into a directory that is not there converted the whole
     library and then exited 5, and its dry run exited 0. Standard output
-    has nothing to judge, and a vault is its own route
-    (:func:`~epubconvert.export.notes.write_vault`).
+    has nothing to judge.
 
     :param args: Parsed command line arguments.
 
     :return: An exit code, or None when the file can be written.
     """
     destination = args.annotations_only or args.annotations_detached
-    if not destination or destination == STDOUT or vault_of(args) is not None:
+    if not destination or destination == STDOUT:
         return None
     # A conversion makes its shelf, and the directories above it, before it
     # writes the file; -ar refreshes a shelf that must already be there.
@@ -287,7 +291,12 @@ def _check_detached(args: argparse.Namespace) -> int | None:
             if not os.path.lexists(path)
         ]
     )
-    refusal = annotations_refusal(Path(destination), pending=makes)
+    vault = vault_of(args)
+    refusal = (
+        annotations_refusal(Path(destination), pending=makes)
+        if vault is None
+        else vault_refusal(vault, pending=makes)
+    )
     if refusal is None:
         return None
     logger.critical("%s", refusal)

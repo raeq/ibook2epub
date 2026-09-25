@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..collect.package import ValidationError, read_package_dir
-from ..collect.validate import ValidationOptions
+from ..collect.validate import ValidationOptions, report_warnings
 from ..utils.app_logger import logger
 from ..utils.contained import is_free, open_contained, resolve
 from ..utils.display import printable
@@ -281,10 +281,13 @@ def verify_output(
     ) as pool:
         results = list(pool.map(options.check, archives))
 
-    for position, (archive, problems) in enumerate(
+    for position, (archive, verdict) in enumerate(
         zip(archives, results, strict=True), start=1
     ):
-        if problems:
+        # Said, and not counted: readers open the book, and a rerun copying
+        # it through again would bring back the same bytes.
+        report_warnings(archive.name, verdict.warnings)
+        if problems := verdict.problems:
             damaged += 1
             broken.append(archive.name)
             logger.error(

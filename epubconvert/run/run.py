@@ -63,6 +63,7 @@ from .copying import (
     CopyPlan,
     copy_decisions,
     copy_through_all,
+    on_shelf,
     placed_copies,
     plan_copies,
     select_copies,
@@ -481,7 +482,7 @@ def _copies_pending(copies: CopyPlan, output_dir: Path) -> bool:
     return any(
         name is not None
         and source not in copies.evicted
-        and not (output_dir / name).exists()
+        and not on_shelf(output_dir / name)
         for source, name in copies.named
     )
 

@@ -156,7 +156,8 @@ def annotations_refusal(target: Path, *, pending: Sequence[Path] = ()) -> str | 
     :param target: The file the run would write.
     :param pending: Directories the run makes before it writes this, so a
         file inside a shelf the run is about to create is not refused for
-        being judged before the shelf exists.
+        being judged before the shelf exists, and one that is that shelf,
+        or a directory above it, is.
 
     :return: The reason, or None when the write can go ahead.
     """
@@ -165,20 +166,111 @@ def annotations_refusal(target: Path, *, pending: Sequence[Path] = ()) -> str | 
     except ContainerUnavailableError as exc:
         return str(exc)
     # Where the write lands: through a link, beside the file it resolves to.
-    folder = Path(os.path.realpath(target)).parent
-    if str(folder) in {os.path.realpath(path) for path in pending}:
-        return None
+    landing = os.path.realpath(target)
+    coming = {os.path.realpath(path) for path in pending}
+    if landing in coming:
+        # The shelf, or a directory the run makes above it: not there yet, so
+        # judged only by its parent it passed, and the write found a directory
+        # once every book had been converted into it.
+        return _cannot_write(target, os.strerror(errno.EISDIR))
+    folder = Path(landing).parent
+    reason = None if str(folder) in coming else _directory_refusal(folder)
+    return None if reason is None else _cannot_write(target, reason)
+
+
+def _directory_refusal(folder: Path) -> str | None:
+    """
+    Say why this run cannot write into a directory that is there, if it cannot.
+
+    :param folder: The directory.
+
+    :return: The reason, as the operating system puts it, or None when it is
+        a directory this run may write into.
+    """
     try:
         # os.stat, as the shelf is judged: Path.stat is its own binding on
         # 3.10 and 3.14.
         mode = os.stat(folder).st_mode  # noqa: PTH116
     except OSError as exc:
-        return _cannot_write(target, exc.strerror or str(exc))
+        return exc.strerror or str(exc)
     if not stat.S_ISDIR(mode):
-        return _cannot_write(target, os.strerror(errno.ENOTDIR))
+        return os.strerror(errno.ENOTDIR)
     if not os.access(folder, os.W_OK | os.X_OK):
-        return _cannot_write(target, os.strerror(errno.EACCES))
+        return _unwritable_reason(folder)
     return None
+
+
+def vault_refusal(directory: Path, *, pending: Sequence[Path] = ()) -> str | None:
+    """
+    Say why a vault of notes cannot be written, if it cannot.
+
+    Asked up front, as :func:`annotations_refusal` is of a file: a vault was
+    left to :func:`~epubconvert.export.notes.write_vault`, so one that was a
+    file, sat under a file or was on a read-only volume passed the dry run,
+    and the real run converted every book and then exited 5. The write still
+    judges it, for a vault that changes in between.
+
+    :param directory: The vault the run would write.
+    :param pending: Directories the run makes before it writes the vault, so
+        a vault inside a shelf the run is about to create is not judged by
+        what is there before the shelf is.
+
+    :return: The reason, or None when the vault can be written: it is a
+        directory this run may write into, or the nearest directory above it
+        is one it may create the vault in.
+    """
+    coming = {os.path.realpath(path) for path in pending}
+    for candidate in (directory, *directory.parents):
+        if os.path.realpath(candidate) in coming:
+            return None
+        if os.path.lexists(candidate):
+            # As mkdir(parents=True) meets it, and as the write then opens it.
+            return _vault_home_refusal(directory, candidate)
+    return None
+
+
+def _vault_home_refusal(directory: Path, nearest: Path) -> str | None:
+    """
+    Say why a vault cannot be written into, or created in, what is there.
+
+    :param directory: The vault the run would write.
+    :param nearest: The vault itself, when it is there, else the nearest
+        part of the path above it that is.
+
+    :return: The reason, or None when the vault can be written.
+    """
+    name = printable(str(directory))
+    if nearest == directory and os.path.isfile(directory):  # noqa: PTH113
+        # The words the write uses.
+        return (
+            f"{name} is a file; --annotations-format markdown writes one "
+            "note per book and needs a directory."
+        )
+    reason = _directory_refusal(nearest)
+    if reason is None:
+        return None
+    verb = "write into" if nearest == directory else "create"
+    return f"Could not {verb} {name}: {printable(reason)}"
+
+
+def _unwritable_reason(folder: Path) -> str:
+    """
+    Say why a directory ``os.access`` refused cannot be written into.
+
+    A read-only volume refuses root too, and the write says so; called a
+    permission, it sent the reader to chmod a mount that no mode would open.
+
+    :param folder: The directory, already found not writable.
+
+    :return: The reason, as the operating system puts it.
+    """
+    read_only = getattr(os, "ST_RDONLY", 0)
+    try:
+        # Not on every platform: Windows has no statvfs.
+        mounted = os.statvfs(folder).f_flag if read_only else 0
+    except (AttributeError, OSError):
+        mounted = 0
+    return os.strerror(errno.EROFS if mounted & read_only else errno.EACCES)
 
 
 def _cannot_write(target: Path, reason: str) -> str:
@@ -357,7 +449,10 @@ def _read_back(target: Path) -> str | None:
     :raises ValueError: If it is not an ordinary file of a plausible size. A
         FIFO blocks ``read_text`` until a writer appears, which is never.
     """
-    if not target.exists():
+    # os.path.exists, which never raises: Path.exists raises EACCES on 3.10
+    # and 3.11 for a file in a directory the run may not search, and a file
+    # that is not there was refused as "already there and could not be read".
+    if not os.path.exists(target):  # noqa: PTH110
         return None
     if not target.is_file():
         raise ValueError("not a regular file")
@@ -569,7 +664,10 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
             target, force=args.force, pending=() if vault is None else (vault,)
         )
     )
-    if refusal is not None and not args.dry_run:
+    if refusal is not None:
+        # In a dry run too, with the real run's exit code, as -ao refuses a
+        # file it cannot write: said only as a warning, the rehearsal exited
+        # 0 for a run that could not write.
         logger.critical("%s", refusal)
         return exits.NO_OUTPUT
     try:
@@ -585,10 +683,6 @@ def library_export(args: argparse.Namespace, policy: NamingPolicy) -> int:
     else:
         logger.info("Read %d book(s) from the library.", len(found))
     if args.dry_run:
-        if refusal is not None:
-            # Said rather than exited on: the estimate is what a dry run is
-            # for, and a real run would stop here with exit code 5.
-            logger.warning("A real run would refuse to write: %s", refusal)
         logger.info("Dry run: %d book(s) read; nothing was written.", len(found))
         return exits.SUCCESS
 

@@ -39,6 +39,11 @@ MAX_SUFFIX = 99
 #: number, and the extension.
 NUMBERED = re.compile(r"(?P<stem>.*) \((?P<position>\d+)\)(?P<extension>\.[^.]*)?")
 
+#: The place in :func:`kept_numbers`'s forms of a file found under a book's
+#: own name where that name looks numbered (``Dune (2)``), which the shelf's
+#: index files as a number of another name.
+ITSELF = 0
+
 #: A name marked by planning._stable_base, numbered or not, as a filesystem
 #: key: its stem, the digest, and the extension.
 MARKED = re.compile(
@@ -281,6 +286,19 @@ def numbered_names(
     return index
 
 
+class Keeping(NamedTuple):
+    """What :func:`kept_numbers` found of one package's files on the shelf."""
+
+    #: The file it keeps, if any.
+    file: str | None = None
+    #: The file of its plain name is another book's, as its identifier
+    #: says: the package is not given that file for its own.
+    refused: bool = False
+    #: Its usable identifier, where one was read to find its file: placing
+    #: compares it with the file it is given (holders.foreign).
+    identifier: str | None = None
+
+
 class Wanting(NamedTuple):
     """What :func:`kept_numbers` needs to know of one package."""
 
@@ -301,7 +319,7 @@ def kept_numbers(
     shelf: Collection[str],
     policy: NamingPolicy,
     unopened: Container[Path] = frozenset(),
-) -> dict[int, str]:
+) -> dict[int, Keeping]:
     """
     Find the numbered file on the shelf each package in suffix mode keeps.
 
@@ -321,7 +339,17 @@ def kept_numbers(
     declare the file's identifier, since nobody read its own: it keeps the
     file, as before.
     A file under a name another book wants is never kept, as for a title
-    that looks like a number (``Dune (2)``).
+    that looks like a number (``Dune (2)``). The book of that title keeps
+    it, as its own name, where its identifier is the file's: renamed by
+    case to ``dune (2)``, it was never looked for there, and no longer
+    claimed first by its exact name (:func:`claim_order`), so the second of
+    two books ``Dune`` added since took the file as its number and was
+    reported exported from it on every run. And two books of that title,
+    ``b/Dune (2).epub`` exported alone and ``a/Dune (2).epub`` added since,
+    were never found to share the file: the newcomer was reported exported
+    from the other's archive, and the other written again under a number.
+    Without an identifier to go by, the file is as much a number of the
+    plain name, as before.
 
     Two books whose names are one file on the shelf ask the same, numbered
     files or not: ``b/Cafe.epub``, exported and renamed by case to
@@ -333,13 +361,27 @@ def kept_numbers(
     wrote the newcomer too, leaving that copy an orphan. Now the book whose
     identifier the file declares keeps it.
 
+    And a book the plain file is not is refused its name, where the file
+    declares a usable identifier and the book, read, has another or none.
+    With no digest of its identifier to move on to, as a book whose name
+    holds another book does (:func:`epubconvert.run.placing.place`), it
+    claims its name numbered instead. Under
+    ``--skip-incomplete`` the owner above is left unopened and keeps
+    nothing, and the newcomer, whose identifier and the file's had both been
+    read, was reported exported from the owner's archive, or with
+    ``--refresh`` written over it: the evicted book's only one, where the
+    newcomer declared no identifier to compare. The identifier read goes
+    with the book to placing, which compares it with the file the book is
+    given: a number a deleted namesake left is another book's too.
+
     A book that has left its crowd wants its plain name again, and its
     archive is under its marked name, or that name numbered where it shares
     its identifier: it keeps that too, rather than being written again
     under the plain name and its archive listed as an orphan.
 
     Identifiers are read only for a name with numbered files on the shelf,
-    a marked name with any, or a name two books want with a file: under a
+    a marked name with any, a name two books want with a file, or one with
+    a file that looks like a number of a name a book wants: under a
     policy that names from the folder, the book's own too, unless the run
     leaves it unopened. A rerun over a shelf with none of these reads
     nothing. A copy's own bytes are its own whatever an
@@ -355,35 +397,77 @@ def kept_numbers(
         the run was asked, an evicted book kept nothing, and without the
         flag its only archive was listed as an orphan.
 
-    :return: The file kept, by index into *books*.
+    :return: What was found of each book whose files were looked at, by
+        index into *books*: the file it keeps, whether its plain name's file
+        is another book's, and the identifier read.
     """
     index = numbered_names(shelf, policy)
     sharing = Counter(filesystem_key(policy.identity(book.base)) for book in books)
     directory = getattr(shelf, "directory", None)
-    kept: dict[int, str] = {}
+    kept: dict[int, Keeping] = {}
 
     def forms(name: str) -> list[tuple[int, str]]:
+        key = filesystem_key(policy.identity(name))
+        # A name that looks numbered is filed as a number of its plain name;
+        # its own file is found there, as its name, but told apart.
+        itself = [
+            (ITSELF, found)
+            for _, found in index.get(_numbered_plain(key) or "", [])
+            if filesystem_key(policy.identity(found)) == key
+        ]
         return sorted(
             (number, found)
-            for number, found in index.get(filesystem_key(policy.identity(name)), [])
-            if found not in kept.values()
-            and (number == 1 or filesystem_key(policy.identity(found)) not in sharing)
+            for number, found in [*index.get(key, []), *itself]
+            if found not in {keeping.file for keeping in kept.values()}
+            and (number <= 1 or filesystem_key(policy.identity(found)) not in sharing)
         )
 
     for position, book in enumerate(books):
         numbers = forms(book.base)
         marked_forms = forms(book.stable) if book.stable != book.base else []
-        shared = (
-            bool(numbers) and sharing[filesystem_key(policy.identity(book.base))] > 1
-        )
         if directory is None or (
-            all(n == 1 for n, _ in numbers) and not marked_forms and not shared
+            all(n <= 1 for n, _ in numbers)
+            and not marked_forms
+            # Nor shared: no other book wants the file, as its name or as a
+            # number of its own.
+            and not (
+                numbers and _shared(filesystem_key(policy.identity(book.base)), sharing)
+            )
         ):
             continue
-        keeps = _keeps(book, (numbers, marked_forms), directory, unopened)
-        if keeps is not None:
-            kept[position] = keeps
+        kept[position] = _keeps(book, (numbers, marked_forms), directory, unopened)
     return kept
+
+
+def _numbered_plain(key: str) -> str | None:
+    """
+    Return the plain name *key* is a number of, if it looks numbered.
+
+    :param key: A book's name, as a filesystem key.
+
+    :return: The plain name's key, or None when *key* does not look
+        numbered.
+    """
+    numbered = NUMBERED.fullmatch(key)
+    if numbered is None:
+        return None
+    return numbered["stem"] + (numbered["extension"] or "")
+
+
+def _shared(key: str, sharing: Counter[str]) -> bool:
+    """
+    Say whether another book may claim the file of the name *key*.
+
+    Two books want the name, or one wants the plain name *key* looks like a
+    number of: ``Dune (2).epub``, the name of a book titled like a number,
+    is the second ``Dune``'s number too.
+
+    :param key: A book's name, as a filesystem key.
+    :param sharing: How many books want each name, by filesystem key.
+
+    :return: True when another book may claim it.
+    """
+    return sharing[key] > 1 or _numbered_plain(key) in sharing
 
 
 def _keeps(
@@ -391,9 +475,14 @@ def _keeps(
     forms: tuple[list[tuple[int, str]], list[tuple[int, str]]],
     directory: Path,
     unopened: Container[Path],
-) -> str | None:
+) -> Keeping:
     """
     Name the file on the shelf that *book* keeps, of those its name has.
+
+    And whether the file under its plain name is another book's: one that
+    declares a usable identifier this book, read, does not have. Such a file
+    is no number of the book's either, and the book is not given its name
+    (:attr:`Keeping.refused`).
 
     :param book: The package in question.
     :param forms: The numbered files of its name and those of its marked
@@ -401,28 +490,39 @@ def _keeps(
     :param directory: The shelf.
     :param unopened: The books not to open for their identifier.
 
-    :return: The file it keeps, or None.
+    :return: The file it keeps, if any, whether the plain file is another
+        book's, and the book's identifier.
     """
     numbers, marked_forms = forms
     identifier = book.identifier
     unknown = identifier is None and book.unread in unopened
     if identifier is None and book.unread and not unknown:
         identifier = source_identifier(book.unread)
+    plain = next((name for number, name in numbers if number <= 1), None)
+    declared = (
+        None if unknown or plain is None else identifier_on_shelf(directory / plain)
+    )
+    foreign = declared is not None and declared != identifier
+    if foreign:
+        numbers = [entry for entry in numbers if entry[1] != plain]
     if identifier is not None:
         found = [
             name
             for _, name in [*numbers, *marked_forms]
             if identifier_on_shelf(directory / name) == identifier
         ]
-        return found[0] if found else None
+        return Keeping(found[0] if found else None, foreign, identifier)
+    # Without an identifier, a name that looks numbered has no file of its
+    # own name to go by: that file is as much the plain name's number.
+    numbers = [entry for entry in numbers if entry[0] != ITSELF]
     if (
         book.alone
         and len(numbers) == 1
         and numbers[0][0] > 1
         and (unknown or identifier_on_shelf(directory / numbers[0][1]) is None)
     ):
-        return numbers[0][1]
-    return None
+        return Keeping(numbers[0][1], foreign)
+    return Keeping(None, foreign)
 
 
 def claim_order(candidates: Sequence[str], shelf: Collection[str]) -> list[int]:

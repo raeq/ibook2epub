@@ -112,18 +112,36 @@ class TestTheCommandLineMode:
         assert code == 5
         assert target.read_text(encoding="utf-8") == "precious"
 
-    def test_a_dry_run_says_what_a_real_run_would_refuse(
+    def test_a_dry_run_refuses_what_a_real_run_would_refuse(
         self, tmp_path, monkeypatch, capsys
     ):
+        # It only warned and exited 0, while a dry run of -ao refuses a file
+        # it cannot write with the real run's exit code.
         flags = _container(monkeypatch, tmp_path)
         target = tmp_path / "library.csv"
         target.write_text("precious", encoding="utf-8")
 
         code = main([*flags, "--library-export", str(target), "--dry-run"])
 
-        assert code == 0
-        assert "would refuse" in capsys.readouterr().err
+        err = capsys.readouterr().err
+        assert code == 5
+        assert "library.csv is already there" in err
+        assert "Read " not in err
         assert target.read_text(encoding="utf-8") == "precious"
+
+    def test_a_dry_run_beside_the_highlights_refuses_it_too(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        flags = _container(monkeypatch, tmp_path)
+        target = tmp_path / "missing" / "library.csv"
+
+        code = main(
+            [*flags, "-ao", str(tmp_path / "h.json")]
+            + ["--library-export", str(target), "--dry-run"]
+        )
+
+        assert code == 5
+        assert "does not create directories" in capsys.readouterr().err
 
 
 class TestWhenItCannotWrite:
@@ -247,10 +265,10 @@ class TestWhenItCannotWrite:
         assert code == 0
         assert (vault / "library.csv").is_file()
 
-    def test_a_dry_run_does_not_predict_a_refusal_of_a_vault_it_would_make(
+    def test_a_dry_run_does_not_refuse_a_vault_it_would_make(
         self, tmp_path, monkeypatch, capsys
     ):
-        # The prediction is what a dry run is for, and this one was made
+        # A dry run refuses what the real run would, and this was judged
         # against a vault the real run creates moments earlier.
         _container(monkeypatch, tmp_path)
         vault = tmp_path / "vault"
@@ -270,7 +288,7 @@ class TestWhenItCannotWrite:
         )
 
         assert code == 0
-        assert "would refuse" not in capsys.readouterr().err
+        assert "does not create directories" not in capsys.readouterr().err
 
 
 class TestWhenTheDestinationIsWrong:

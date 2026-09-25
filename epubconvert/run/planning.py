@@ -26,6 +26,7 @@ from ..utils.spec import PACKAGE_SUFFIX
 from .claims import (
     MAX_SUFFIX,
     Claims,
+    Keeping,
     Wanting,
     claim_order,
     kept_numbers,
@@ -293,7 +294,8 @@ def _assign_all(
     claims = Claims()
 
     bases = [_bases(name, metadata, setup, crowded) for _, name, metadata in wanted]
-    kept = _kept_on_shelf(wanted, bases, crowded, setup, shelf)
+    keeping = _kept_on_shelf(wanted, bases, crowded, setup, shelf)
+    kept = [index for index, found in keeping.items() if found.file]
     named: dict[int, Assignment] = {}
     for index in [
         *kept,
@@ -304,7 +306,7 @@ def _assign_all(
             setup=setup,
             claims=claims,
             crowded=crowded,
-            kept=kept.get(index),
+            keeping=keeping.get(index, Keeping()),
         )
     return [named[index] for index in range(len(wanted))]
 
@@ -336,7 +338,7 @@ def _kept_on_shelf(
     crowded: Counter[str],
     setup: _Naming,
     shelf: Collection[str],
-) -> dict[int, str]:
+) -> dict[int, Keeping]:
     """
     Find the books that keep a numbered or marked file of theirs on the shelf.
 
@@ -348,7 +350,8 @@ def _kept_on_shelf(
     :param setup: The naming configuration.
     :param shelf: The names of the files on the shelf.
 
-    :return: The file each such book keeps, by its index in *wanted*.
+    :return: What was found of each book whose files were looked at, by its
+        index in *wanted*.
     """
     if setup.on_collision != SUFFIX:
         return {}
@@ -418,7 +421,7 @@ def _assign_one(
     setup: _Naming,
     claims: Claims,
     crowded: Counter[str],
-    kept: str | None = None,
+    keeping: Keeping,
 ) -> Assignment:
     """
     Settle one package's output name against the names already taken.
@@ -429,26 +432,40 @@ def _assign_one(
     :param setup: The naming configuration.
     :param claims: Names already spoken for, updated in place.
     :param crowded: How many packages wanted each identity.
-    :param kept: The numbered file on the shelf it keeps, if any
-        (:func:`~epubconvert.run.claims.kept_numbers`).
+    :param keeping: What :func:`~epubconvert.run.claims.kept_numbers` found
+        of its files on the shelf: the numbered one it keeps, if any; whether
+        the file of its plain name is another book's, when, with no digest
+        of its identifier to move on to, it claims from its first number;
+        and its identifier, read to find them, which it carries so placing
+        can tell another book's file from its own.
 
     :return: The assignment, with an empty filename if the book lost.
     """
     base, stable = _bases(name, metadata, setup, crowded)
     group = setup.policy.identity(base)
+    identifier = usable_identifier(metadata) or keeping.identifier
 
+    # Refused, with a digest to go by, placing moves the book on to its
+    # marked name (placing.place), which holds still; without one its plain
+    # name is not claimed at all, and stays free for the file's own book,
+    # which may be one nothing read.
     taken = (
-        (kept, setup.policy.identity(kept))
-        if kept and claims.keep(group, setup.policy.identity(kept), kept)
-        else _claim(claims, base, group, setup=setup)
+        (keeping.file, setup.policy.identity(keeping.file))
+        if keeping.file
+        and claims.keep(group, setup.policy.identity(keeping.file), keeping.file)
+        else _claim(
+            claims,
+            base,
+            group,
+            setup=setup,
+            first=2 if keeping.refused and stable == base else 1,
+        )
     )
     if taken is None:
         # Carries its identifier though it has no name, so an archive of it
         # already on the shelf is still recognised as a live book's.
         reason = lost_to(claims.holder(group, base), metadata)
-        return Assignment(
-            package, "", group, reason, identifier=usable_identifier(metadata)
-        )
+        return Assignment(package, "", group, reason, identifier=identifier)
 
     filename, key = taken
     return Assignment(
@@ -458,13 +475,13 @@ def _assign_one(
         None,
         _named_without_author(metadata),
         _named_from_folder(metadata, setup.policy),
-        usable_identifier(metadata),
+        identifier,
         # Where it goes if its name holds another book; see placing.place.
         # Its own name, numbered, when it has no digest: a copy already on
         # the shelf keeps its file (copynames.claim_copies), and a package
         # with nowhere to go was a collision on every run in suffix mode.
         stable if setup.on_collision == SUFFIX else None,
-        kept_number=filename == kept,
+        kept_number=filename == keeping.file,
     )
 
 
@@ -528,7 +545,7 @@ def _named_from_folder(metadata: Package | None, policy: NamingPolicy) -> bool:
 
 
 def _claim(
-    claims: Claims, base: str, group: str, *, setup: _Naming
+    claims: Claims, base: str, group: str, *, setup: _Naming, first: int = 1
 ) -> tuple[str, str] | None:
     """
     Take the first free candidate name for a book, or report that none is.
@@ -537,12 +554,13 @@ def _claim(
     :param base: The name to start from.
     :param group: The identity group this book competes in.
     :param setup: The naming configuration.
+    :param first: The first position this book may take.
 
     :return: The claimed filename and its identity, or None if the group is
         exhausted.
     """
     limit = MAX_SUFFIX if setup.on_collision == SUFFIX else 1
-    for position in range(claims.resume(group), limit + 1):
+    for position in range(max(claims.resume(group), first), limit + 1):
         candidate = suffixed(base, position, setup.budget)
         key = setup.policy.identity(candidate)
         if claims.take(group, position, key, candidate):

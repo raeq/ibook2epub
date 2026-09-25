@@ -23,7 +23,8 @@ import shutil
 import subprocess
 import unicodedata
 from collections import Counter
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 from zipfile import ZIP_STORED, BadZipFile, ZipFile, ZipInfo
@@ -98,37 +99,92 @@ def storable(name: str, arcname: str) -> None:
 
 
 @dataclass(frozen=True)
+class Verdict:
+    """
+    What checking one archive found, by what it means for the book.
+
+    Problems are damage: a reader may fail on the book, so a check before
+    writing refuses it and --verify counts it damaged. Warnings are lapses
+    from the specification that readers accept, such as an extra field in
+    ``mimetype``'s local header: said, and the book kept. A book copied
+    through cannot be mended by this tool, and calling such a lapse damage
+    had --verify advise a rerun that copied the same bytes back.
+    """
+
+    problems: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def report_warnings(name: str, warnings: Sequence[str]) -> None:
+    """
+    Log what a check warned of in one archive, naming it.
+
+    :param name: The archive's name as the reader knows it.
+    :param warnings: The check's warnings.
+    """
+    for warning in warnings:
+        logger.warning("%s: %s", printable(name), warning)
+
+
+@dataclass(frozen=True)
 class ValidationOptions:
     """How thoroughly to check an archive after writing it."""
 
     enabled: bool = False
     epubcheck: bool = False
 
-    def check(self, path: Path) -> list[str]:
+    def check(self, path: Path) -> Verdict:
         """
         Run the configured checks over *path*.
 
         :param path: The archive to check.
 
-        :return: A list of problems; empty means it passed.
+        :return: What was found; no problems means it passed.
         """
         if not self.enabled:
-            return []
-        problems = validate_archive(path)
-        if problems or not self.epubcheck:
-            return problems
-        return run_epubcheck(path)
+            return Verdict()
+        verdict = check_archive(path)
+        if verdict.problems or not self.epubcheck:
+            return verdict
+        return Verdict(run_epubcheck(path), verdict.warnings)
+
+    def enforce(self, path: Path, name: str) -> None:
+        """
+        Refuse an archive the checks find damaged, and say what they warn of.
+
+        :param path: The archive to check.
+        :param name: Its name as the reader knows it: not a temporary's.
+
+        :raises ArchiveInvalidError: If the checks found a problem.
+        """
+        verdict = self.check(path)
+        if verdict.problems:
+            raise ArchiveInvalidError(name, verdict.problems)
+        report_warnings(name, verdict.warnings)
 
 
 def validate_archive(path: Path) -> list[str]:
     """
-    Check one exported archive and describe anything wrong with it.
+    Check one exported archive and describe any damage to it.
 
     :param path: The epub file to check.
 
-    :return: A list of problems; empty means the archive is sound.
+    :return: A list of problems; empty means the archive is sound. What
+        :func:`check_archive` only warns of is not among them.
+    """
+    return check_archive(path).problems
+
+
+def check_archive(path: Path) -> Verdict:
+    """
+    Check one archive and describe anything wrong with it.
+
+    :param path: The epub file to check.
+
+    :return: Its problems, none when it is sound, and its warnings.
     """
     problems: list[str] = []
+    warnings: list[str] = []
 
     try:
         # Judged on the descriptor, not a stat of the name: a FIFO swapped in
@@ -141,7 +197,8 @@ def validate_archive(path: Path) -> list[str]:
             names = [member_name(info) for info in entries]
             members = set(names)
             by_name = dict(zip(names, entries, strict=True))
-            problems.extend(_check_mimetype(archive, by_name, handle))
+            problems.extend(_check_mimetype(archive, by_name))
+            warnings.extend(_mimetype_warnings(by_name, handle))
             problems.extend(_check_unique(names))
             repeated = repeated_entries(archive)
             if repeated == SHARED_HEADER:
@@ -154,19 +211,19 @@ def validate_archive(path: Path) -> list[str]:
             if not methods and repeated is None:
                 problems.extend(_check_contents(archive, members, size))
     except ValidationError as exc:
-        return [str(exc)]
+        return Verdict([str(exc)])
     except BadZipFile as exc:
-        return [f"not a readable zip archive: {exc}"]
+        return Verdict([f"not a readable zip archive: {exc}"])
     except OSError as exc:
-        return [f"could not open: {exc}"]
+        return Verdict([f"could not open: {exc}"])
     except UNREADABLE_MEMBER as exc:
         # Everything else a damaged member raises: BadZipFile and OSError are
         # caught above, each with its own wording. --verify is the one command
         # whose job is finding damage, so it must report a hostile archive
         # rather than die on it and check nothing further.
-        return [f"unreadable archive: {exc}"]
+        return Verdict([f"unreadable archive: {exc}"])
 
-    return problems
+    return Verdict(problems, warnings)
 
 
 def _check_contents(archive: ZipFile, members: set[str], size: int) -> list[str]:
@@ -334,17 +391,13 @@ def _check_methods(archive: ZipFile) -> list[str]:
     return disallowed
 
 
-def _check_mimetype(
-    archive: ZipFile, members: dict[str, ZipInfo], handle: IO[bytes]
-) -> list[str]:
+def _check_mimetype(archive: ZipFile, members: dict[str, ZipInfo]) -> list[str]:
     """
     Check the ``mimetype`` entry the epub specification mandates.
 
     :param archive: The open archive.
     :param members: Its members by name, built once by the caller; the last
         listing of a name, as zipfile's own lookup keeps.
-    :param handle: The file the archive was opened from, to read the local
-        header zipfile does not report.
 
     :return: A list of problems.
     """
@@ -374,11 +427,6 @@ def _check_mimetype(
     stored = info.compress_type == ZIP_STORED
     if not stored:
         problems.append("mimetype is compressed; it must be stored")
-    extra = _local_extra(handle, info)
-    if extra:
-        problems.append(
-            f"mimetype carries a {extra}-byte extra field; it must carry none"
-        )
     # The specification fixes this member's length exactly, so a declared size
     # that differs settles it without reading anything. --verify runs over
     # files this tool may not have written, and a member declaring 512 MiB was
@@ -393,16 +441,38 @@ def _check_mimetype(
     return problems
 
 
+def _mimetype_warnings(members: dict[str, ZipInfo], handle: IO[bytes]) -> list[str]:
+    """
+    Warn of an extra field in ``mimetype``'s local header.
+
+    OCF asks for none: it sits between the name and the content, so the
+    content no longer starts at offset 38, where a program sniffing the file
+    looks for ``application/epub+zip``, and epubcheck fails the book for it.
+    Readers open it all the same, and zip run without ``-X`` writes one, as
+    a book zipped by hand often is, so it is a warning and not damage.
+
+    :param members: The archive's members by name.
+    :param handle: The file the archive was opened from.
+
+    :return: One warning, or none.
+    """
+    info = members.get(MIMETYPE_NAME)
+    extra = 0 if info is None else _local_extra(handle, info)
+    if not extra:
+        return []
+    return [
+        f"mimetype carries a {extra}-byte extra field; "
+        "OCF asks for none, readers open it"
+    ]
+
+
 def _local_extra(handle: IO[bytes], info: ZipInfo) -> int:
     """
     Measure the extra field in a member's local header.
 
-    OCF forbids one on ``mimetype``: it sits between the name and the content,
-    so the content no longer starts at offset 38, where a reader sniffing the
-    file looks for ``application/epub+zip``. zip run without ``-X`` adds one,
-    and epubcheck fails the book for it. zipfile reports only the central
-    directory's extra field, which need not match, so the local header at the
-    front of the file, the one a reader sees, is read here.
+    zipfile reports only the central directory's extra field, which need not
+    match, so the local header, the one at the front of the file that a
+    reader sees, is read here.
 
     :param handle: The file the archive was opened from.
     :param info: The member.
