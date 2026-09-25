@@ -131,12 +131,15 @@ def _unicode_fields(extra: bytes) -> Iterator[bytes]:
 
     :return: The bodies, in order.
     """
-    while len(extra) >= 4:
-        kind = int.from_bytes(extra[:2], "little")
-        size = int.from_bytes(extra[2:4], "little")
-        body, extra = extra[4 : 4 + size], extra[4 + size :]
+    # By offset: slicing off each record's tail copied what remained, so
+    # 64 KB of empty records cost 512 MB of copying for one member.
+    at = 0
+    while at + 4 <= len(extra):
+        kind = int.from_bytes(extra[at : at + 2], "little")
+        size = int.from_bytes(extra[at + 2 : at + 4], "little")
         if kind == _UNICODE_PATH:
-            yield body
+            yield extra[at + 4 : at + 4 + size]
+        at += 4 + size
 
 
 def open_archive(handle: IO[bytes]) -> ZipFile:

@@ -21,7 +21,7 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
 
 import pytest
 
-from epubconvert.collect import annotations, source
+from epubconvert.collect import annotations, source, zipnames
 from epubconvert.collect import package as package_reader
 from epubconvert.export import archive, inspect_output
 from epubconvert.export.naming import PassthroughNaming
@@ -696,3 +696,29 @@ class TestARefreshReadsOnlyTheBooksItRewrites:
 
         assert code == 0
         assert opened == []
+
+
+class _Counted(bytes):
+    """Bytes that tally how many bytes their slices copy, slices included."""
+
+    copied = [0]
+
+    def __getitem__(self, key):
+        got = super().__getitem__(key)
+        if not isinstance(key, slice):
+            return got
+        self.copied[0] += len(got)
+        return _Counted(got)
+
+
+class TestExtraFieldsAreWalkedOnce:
+    def test_a_member_s_extra_fields_are_copied_about_once(self):
+        # 16,383 empty records: the most 64 KB of extra field holds. Walked by
+        # slicing off each record's tail, every step copied what remained,
+        # 512 MB of copying for one member, before zipfile had even warned.
+        extra = _Counted(b"\x99\x99\x00\x00" * 16_383 + b"\x75\x70\x05\x00\x01")
+        _Counted.copied[0] = 0
+
+        zipnames._unicode_path(extra, b"a.xhtml")  # pylint: disable=protected-access
+
+        assert _Counted.copied[0] <= 2 * len(extra)
