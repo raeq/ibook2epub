@@ -268,12 +268,12 @@ What the configurations that fail show:
   **`UnidentifiableLegacy`** is the limit that remains: a file from before
   markers that declares no usable identifier, whose book has left the
   library, is taken by the name by a book alone in wanting it -- with or
-  without an identifier of its own, since the file has none to compare. A
-  file copied through carries no marker either, so a deleted zipped book
-  that declares no identifier is the same case.
-  Refusing a book alone its unmarked file would write every shelf made
-  before markers again. It is never written over: before a write the book's
-  identifier and the file's are compared, as before. Files written by this
+  without an identifier of its own, since the file has none to compare --
+  and `--refresh` writes over it, as NeverWritesOverAnotherBook would show
+  too. So is one declaring an identifier the book shares with the book that
+  left. A file copied through carries no marker either, so a deleted zipped
+  book's file is the same case. Refusing a book alone its unmarked file
+  would write every shelf made before markers again. Files written by this
   version carry their marker, and are not taken this way.
   `tests/test_told_apart.py` replays these against the CLI.
 - **`ChangingSuffixStuck`** is what the check cost suffix mode before

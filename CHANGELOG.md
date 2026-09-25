@@ -53,8 +53,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `--force`, `--refresh` or `-ae -ar`, wherever that archive names its source
   (formal/README.md, `Unidentifiable`). A book known to declare no usable
   identifier is never given a file that declares one. What remains is a file
-  with no marker -- from an earlier release, or copied through -- that
-  declares no identifier, taken by the name by a book alone in wanting it.
+  with no marker -- from an earlier release, or copied through -- whose book
+  has left the library: judged as before, it is taken by the name by a book
+  alone in wanting it where the identifiers cannot say otherwise.
 - Three books of one name with no usable identifier keep their numbered
   files as one of them leaves (`NumberedRemovalsCrowd`).
 

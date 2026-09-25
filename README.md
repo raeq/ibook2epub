@@ -707,10 +707,12 @@ a name of its own"); in skip mode both are collisions, and the file, which may
 be either one's only archive, is not listed as an orphan. A book that declares
 no usable identifier is never given a file that declares one. A book alone in
 wanting an unmarked file of its name keeps it, so upgrading exports nothing
-again -- which leaves one case the marker cannot cover: a file with no marker,
-from an earlier release or copied through, that declares no identifier and
-whose book has since left the library, is taken by the name by a book alone in
-wanting it. It is not written over.
+again -- which leaves what the marker cannot cover. A file with no marker, from
+an earlier release or copied through, whose book has since left the library,
+is judged as before: a book alone in wanting it takes it by its name wherever
+the identifiers cannot say otherwise -- the file declares none, or the one the
+book declares, shared with the book that left -- and `--force` or `--refresh`
+can write over it.
 
 Two things cost a rewrite, never a book. A book moved to another folder in the
 library, or a library pointed at with `-s` from another level, has another
