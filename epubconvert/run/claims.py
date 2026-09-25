@@ -513,6 +513,11 @@ def _movers(
     """
     Find the books that keep a file from before a move, before any other claims.
 
+    A book is asked only where no file the planner looks at here names its
+    source: one not yet written, or moved to another folder. A book whose
+    own archive is under a name another book wants is not found among the
+    files of its own names, and was asked on every run.
+
     :param books: Each package, in sorted order.
     :param looked_at: The files of a book's names on the shelf, or None
         when they are not looked at.
@@ -521,10 +526,28 @@ def _movers(
 
     :return: The file each such book keeps, by index into *books*.
     """
-    movers = {}
+    looked = {}
     for position, book in enumerate(books):
         found = looked_at(book)
-        mine = None if found is None else _moved_here(book, found, directory, library)
+        if found is not None:
+            looked[position] = [name for entries in found for _, name in entries]
+    marks = {
+        name: marker_on_shelf(directory / name)
+        for names in looked.values()
+        for name in names
+    }
+    written = set(marks.values())
+    movers = {}
+    for position, names in looked.items():
+        book = books[position]
+        if book.source is None or book.source in written:
+            continue
+        candidates = [
+            name
+            for name in names
+            if marks[name] in library.by_source and marks[name] != book.source
+        ]
+        mine = _moved_here(book, candidates, directory, library) if candidates else None
         if mine is not None:
             movers[position] = mine
     return movers
@@ -588,36 +611,26 @@ def declared_by(book: Wanting, unopened: Container[Path]) -> object:
 
 
 def _moved_here(
-    book: Wanting, forms: _Forms, directory: Path, library: _Library
+    book: Wanting, candidates: Sequence[str], directory: Path, library: _Library
 ) -> Keeping | None:
     """
     Find a book's own file from before a move, whose marker names another book.
 
-    Asked only of a book no file of whose names its marker names: one not yet
-    written, or moved to another folder. Another book added at its old path
-    is named by the marker of its archive, which is still the moved book's
-    where the identifiers say so (holders.moved).
+    Another book added at the moved book's old path is named by the marker
+    of its archive, which is still the moved book's where the identifiers say
+    so (holders.moved).
 
-    :param book: The book.
-    :param forms: The numbered files of its name and those of its marked
-        name, each lowest first.
+    :param book: The book, which no file looked at names.
+    :param candidates: The files of its names whose marker names another
+        book of the library, lowest first.
     :param directory: The shelf.
     :param library: The sources and identifiers of the library.
 
     :return: The file it keeps, or None when it has none such.
     """
-    if book.source is None or library.sources[book.source] > 1:
+    if library.sources[book.source or ""] > 1:
         return None
-    names = [name for entries in forms for _, name in entries]
-    marks = {name: marker_on_shelf(directory / name) for name in names}
-    if book.source in marks.values():
-        return None
-    candidates = [
-        name
-        for name in names
-        if marks[name] in library.by_source.keys() - {book.source}
-    ]
-    identifier = declared_by(book, library.unopened) if candidates else None
+    identifier = declared_by(book, library.unopened)
     if not isinstance(identifier, str):
         return None
     for name in candidates:

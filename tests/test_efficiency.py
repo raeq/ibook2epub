@@ -450,6 +450,43 @@ class TestAFileTwoBooksWantIsOpenedOnce:
         assert set(opened.values()) == {1}
 
 
+class TestABookWithAnArchiveOfItsOwnIsNotAskedWhetherItMoved:
+    """
+    In suffix mode a book no file of whose names its own marker names is
+    asked whether a file naming another book is its own, from before a move,
+    which reads both books' identifiers (claims._moved_here). A book whose
+    own archive is under a name another book wants -- ``c/Dune.epub``'s
+    ``Dune (2).epub`` beside a book titled ``Dune (2)`` -- was asked on every
+    rerun, named from the folder: two package documents read for nothing.
+    """
+
+    def test_a_rerun_reads_no_package_document(self, tmp_path, output_dir, monkeypatch):
+        library = tmp_path / "lib"
+        for folder in ("b", "c"):
+            make_metadata_package(
+                library / folder,
+                "Dune.epub",
+                title="Dune",
+                identifier=f"urn:uuid:{folder}",
+            )
+        argv = ["-s", str(library), "-o", str(output_dir), "-m", "0", "-q"]
+        run.main([*argv, "--on-collision", "suffix"])
+        make_metadata_package(
+            library / "d", "Dune (2).epub", title="Dune (2)", identifier="urn:uuid:d"
+        )
+        run.main([*argv, "--on-collision", "suffix"])
+        assert sorted(path.name for path in output_dir.glob("*.epub")) == [
+            "Dune (2) (2).epub",
+            "Dune (2).epub",
+            "Dune.epub",
+        ]
+        reads, _ = _source_reads(monkeypatch)
+
+        run.main([*argv, "--on-collision", "suffix"])
+
+        assert reads == Counter()
+
+
 class TestABookRenamedByCaseIsReadOnce:
     """
     A file of another spelling of a book's name may be its own archive, and
