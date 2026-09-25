@@ -409,6 +409,44 @@ class TestANamesakeWithNothingToWrite:
         assert (vault / "Dune (Deluxe).md").read_bytes() == before["Dune (Deluxe).md"]
 
 
+class TestTwoStraysOneAtAnIdleBooksName:
+    """
+    The renamed ``Dune.epub`` has two legacy notes: ``Old Dune.md``, and
+    ``Dune.md`` at the name the idle ``Dune.pdf`` is given, which may be the
+    PDF's. Asked to merge the two, the reader lost round 9's caveat that one
+    may be the PDF's, and the log called both the renamed book's note.
+    """
+
+    def test_the_merge_advice_names_the_one_that_may_be_the_namesakes(
+        self, vault: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        app_logger.configure(verbosity=0)
+        _legacy(vault / "Dune.md")
+        (vault / "Old Dune.md").write_bytes((vault / "Dune.md").read_bytes())
+        found = [_highlight("x"), _highlight("y")]
+        before = _snapshot(vault)
+
+        named = [
+            Assignment(Path("Dune.epub"), "Dune (Deluxe).epub", "dune (deluxe).epub"),
+            Assignment(Path("Dune.pdf"), "Dune.pdf", "dune.pdf"),
+        ]
+        assets = TestANamesakeWithNothingToWrite.ASSETS
+
+        code = notes.write_vault(found, str(vault), named, copyable=(), assets=assets)
+
+        assert code == exits.FAILED
+        assert _snapshot(vault) == before
+        reported = capsys.readouterr().err
+        assert "Merge them into Dune (Deluxe).md yourself" in reported
+        assert (
+            "Only the highlights in Dune.md say it is this book's, and another "
+            "book in the library is given its name: leave it out if it is that "
+            "book's."
+        ) in reported
+        assert "it holds the highlights of the book now given" in reported
+        assert "it is the note of the book now given" not in reported
+
+
 class TestALegacyNoteAtAnIdleBooksName:
     """
     ``Dune.pdf`` has lost every highlight in Books; its note ``Dune.md``, as
