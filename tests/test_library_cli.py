@@ -14,11 +14,14 @@ run, the flags that contradict it, and the flags a run that converts nothing
 # pylint: disable=use-implicit-booleaness-not-comparison,too-few-public-methods
 
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from epubconvert.collect import annotations, library
+from epubconvert.export import detached
 from epubconvert.export.catalogue import schema_problems
 from epubconvert.run import cli
 from epubconvert.run.run import main
@@ -553,6 +556,51 @@ class TestWhenTheDestinationIsWrong:
 
         rows = _csv_rows(target.read_text(encoding="utf-8"))
         assert {row["Exclusive Shelf"] for row in rows} == {"to-read"}
+
+
+def _closed(monkeypatch: pytest.MonkeyPatch, closed: Path) -> None:
+    """Make *closed* a directory this run may not write into, as for root."""
+    allowed = os.access
+
+    def access(path: Any, how: int, **kwargs: Any) -> bool:
+        if how & os.W_OK and Path(os.fspath(path)) == closed:
+            return False
+        return allowed(path, how, **kwargs)
+
+    monkeypatch.setattr(os, "access", access)
+
+
+class TestALinkIsJudgedWhereItLeads:
+    """
+    The catalogue is written beside the file a link resolves to, as the
+    highlights file is judged, so that directory is the one asked about: the
+    link's own was, so a link into a closed directory passed and the write
+    refused it after the library was read, and a link out of one was refused
+    though the write would have gone through.
+    """
+
+    def test_a_link_into_a_directory_it_may_not_write_is_refused(
+        self, tmp_path, monkeypatch
+    ):
+        (tmp_path / "closed").mkdir()
+        (tmp_path / "closed" / "real.csv").write_text("old")
+        link = tmp_path / "link.csv"
+        link.symlink_to(tmp_path / "closed" / "real.csv")
+        _closed(monkeypatch, tmp_path / "closed")
+
+        refusal = detached.library_refusal(link, force=True)
+
+        assert refusal == f"Could not write {link}: Permission denied"
+
+    def test_a_link_out_of_one_is_written_through(self, tmp_path, monkeypatch):
+        (tmp_path / "closed").mkdir()
+        (tmp_path / "open").mkdir()
+        (tmp_path / "open" / "real.csv").write_text("old")
+        link = tmp_path / "closed" / "link.csv"
+        link.symlink_to(tmp_path / "open" / "real.csv")
+        _closed(monkeypatch, tmp_path / "closed")
+
+        assert detached.library_refusal(link, force=True) is None
 
 
 class TestTheFlagsRefuseWhatTheyCannotDo:

@@ -603,8 +603,12 @@ def library_refusal(
     # and was refused for the spelling. The same normalisation the two
     # destinations are already compared with.
     coming = {os.path.realpath(path) for path in pending}
-    inside_vault = os.path.realpath(target.parent) in coming
-    if inside_vault and _note_name(target.name):
+    # Where the write lands: through a link, beside the file it resolves to,
+    # as the highlights file is judged. Judged by the link's own directory, a
+    # link into a closed one passed and the write refused it after the read.
+    landing = Path(os.path.realpath(target))
+    inside_vault = str(landing.parent) in coming
+    if inside_vault and _note_name(landing.name):
         # A vault is written before the catalogue, so this target is a note
         # that does not exist yet: its name looks free, and --force then
         # wrote a CSV over the reader's highlights. Every other write in this
@@ -614,7 +618,7 @@ def library_refusal(
             "the library export would write over it. Name a file the vault "
             "does not use, or put the catalogue outside it."
         )
-    homeless = None if inside_vault else _homeless(target)
+    homeless = None if inside_vault else _homeless(target, landing.parent)
     if homeless is not None:
         return homeless
     # os.path.lexists, which never raises, and sees a dangling link as there:
@@ -647,7 +651,7 @@ def _is_directory(target: Path) -> bool:
         return False
 
 
-def _homeless(target: Path) -> str | None:
+def _homeless(target: Path, folder: Path) -> str | None:
     """
     Say why the library export cannot be written into its directory, if so.
 
@@ -658,10 +662,10 @@ def _homeless(target: Path) -> str | None:
     first and the catalogue refused after them.
 
     :param target: The file the run would write.
+    :param folder: The directory the write lands in.
 
     :return: The reason, or None when the directory can be written into.
     """
-    folder = target.parent
     try:
         os.stat(folder)  # noqa: PTH116
     except FileNotFoundError:
