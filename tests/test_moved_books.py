@@ -24,7 +24,7 @@ import pytest
 
 from epubconvert.collect import annotations
 from epubconvert.run import annotating, run
-from tests.conftest import make_package
+from tests.conftest import make_metadata_package, make_package
 from tests.test_annotations import highlight, library_row, make_databases
 from tests.test_told_apart import (
     AUTHOR_TITLE,
@@ -146,6 +146,144 @@ class TestABookWithAnIdentifierOfItsOwn:
         assert listed["b"] == ("exported", "Dune.epub")
         assert shelf(output_dir) == before
         assert not [key for key in listed if key.startswith("orphan:")]
+
+
+def _reoccupied(
+    tmp_path: Path,
+    output_dir: Path,
+    *extra: str,
+    title: str = "Dune",
+    theirs: str = "urn:uuid:NEWCOMER",
+) -> Path:
+    """
+    a/Dune.epub, declaring an identifier of its own, exported, then moved to
+    b/, and another book added at a/Dune.epub, where its archive's marker
+    points.
+    """
+    library = _moved(tmp_path, output_dir, *extra)
+    convert(library, output_dir, "-q", *extra)
+    make_metadata_package(
+        library / "a",
+        "Dune.epub",
+        title=title,
+        creator="Frank Herbert",
+        identifier=theirs,
+    )
+    return library
+
+
+class TestItsOldFolderTakenByAnotherBook:
+    """
+    The marker of a moved book's archive names a path another book has since
+    been added at. Where the file declares the moved book's identifier, which
+    no other book declares -- that book's included -- the identifier decides:
+    the file is the moved book's, and the newcomer moves on as it would from
+    any other book's file. Taken for the newcomer's by its marker, the file
+    was refused the moved book: in skip mode a collision with its only
+    archive listed as an orphan, and in suffix mode written again.
+    """
+
+    #: Where each policy and mode puts the moved book, in a crowd with the
+    #: newcomer: its old file; in skip mode named from the folder, a report
+    #: reads no identifier and the newcomer is reported from the file its
+    #: marker names (formal/README.md, FolderNamedReports), a write reads
+    #: them; named from the package document in suffix mode, a book entering
+    #: a crowd gains its marked name, as it did before markers.
+    CROWDED = {
+        ("folder", "skip"): ("collision", None),
+        ("folder", "suffix"): ("exported", "Dune.epub"),
+        ("author-title", "skip"): ("exported", NAME),
+        ("author-title", "suffix"): ("pending", "Frank Herbert - Dune [f7953308].epub"),
+    }
+
+    @POLICIES
+    @MODES
+    def test_named_alike_its_file_is_neither_orphaned_nor_given_away(
+        self, tmp_path, output_dir, capsys, policy, mode
+    ):
+        library = _reoccupied(tmp_path, output_dir, *policy, *mode)
+        name = _name(policy)
+        held = (output_dir / name).read_bytes()
+        expected = self.CROWDED[
+            "author-title" if policy else "folder", "suffix" if mode else "skip"
+        ]
+
+        listed = listing(library, output_dir, capsys, *policy, *mode)
+        convert(library, output_dir, "-q", *policy, *mode)
+        after = shelf(output_dir)
+        convert(library, output_dir, "-q", *policy, *mode, "--force")
+
+        assert listed["b"] == expected
+        if expected[0] != "pending":
+            assert not [key for key in listed if key.startswith("orphan:")]
+        if expected[0] == "exported":
+            assert listed["a"][0] == ("pending" if mode else "collision")
+            assert listed["a"][1] != name
+            # --force writes the moved book over it, with its new folder.
+            assert source(output_dir, name) == mine("b")
+        else:
+            # Never written over by the newcomer.
+            assert (output_dir / name).read_bytes() == held
+        assert set(shelf(output_dir)) == set(after)
+
+    @POLICIES
+    @MODES
+    def test_a_quiet_rerun_writes_nothing(self, tmp_path, output_dir, policy, mode):
+        library = _reoccupied(tmp_path, output_dir, *policy, *mode)
+        convert(library, output_dir, "-q", *policy, *mode)
+        after = shelf(output_dir)
+
+        convert(library, output_dir, "-q", *policy, *mode)
+
+        assert shelf(output_dir) == after
+
+    @MODES
+    def test_titled_otherwise_it_keeps_its_file(
+        self, tmp_path, output_dir, capsys, mode
+    ):
+        library = _reoccupied(tmp_path, output_dir, *AUTHOR_TITLE, *mode, title="Other")
+
+        listed = listing(library, output_dir, capsys, *AUTHOR_TITLE, *mode)
+
+        assert listed["b"] == ("exported", NAME)
+        assert listed["a"] == ("pending", "Frank Herbert - Other.epub")
+        assert not [key for key in listed if key.startswith("orphan:")]
+
+    @POLICIES
+    @MODES
+    def test_the_listing_the_dry_run_and_the_run_agree(
+        self, tmp_path, output_dir, capsys, policy, mode
+    ):
+        library = _reoccupied(tmp_path, output_dir, *policy, *mode)
+        listed = listing(library, output_dir, capsys, *policy, *mode)
+        pending = sorted(
+            str(name) for status, name in listed.values() if status == "pending"
+        )
+
+        convert(library, output_dir, *policy, *mode, "-d")
+        dry = capsys.readouterr().out
+        before = set(shelf(output_dir))
+        convert(library, output_dir, "-q", *policy, *mode)
+
+        assert sorted(set(shelf(output_dir)) - before) == pending
+        assert f"would export {len(pending)} epub file(s)" in dry
+
+    @MODES
+    def test_a_newcomer_declaring_its_identifier_keeps_the_markers_word(
+        self, tmp_path, output_dir, capsys, mode
+    ):
+        # Two books of one identifier: nothing but the marker says which the
+        # file is, and it names the newcomer's path.
+        library = _reoccupied(
+            tmp_path, output_dir, *AUTHOR_TITLE, *mode, theirs="urn:uuid:MOVED"
+        )
+
+        listed = listing(library, output_dir, capsys, *AUTHOR_TITLE, *mode)
+        convert(library, output_dir, "-q", *AUTHOR_TITLE, *mode, "--force")
+
+        assert listed["b"] != ("exported", NAME)
+        # Not written over by the moved book: taken for the newcomer's.
+        assert source(output_dir, NAME) == mine("a")
 
 
 class TestTheSafeSideStands:

@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import unicodedata
 from collections import Counter
-from collections.abc import Collection, Container
+from collections.abc import Callable, Collection, Container
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -207,11 +207,17 @@ def written_for(
     return None if marked is None else marked == source
 
 
+#: What is known of a book's identifier where nothing was read, because
+#: reading it downloads the book (:class:`Unopened`).
+UNREAD = object()
+
+
 def moved(
     found: Path,
     identifier: str | None,
-    live: Container[str],
+    live: Counter[str],
     declared: Counter[str],
+    theirs: Callable[[str], object] | None = None,
 ) -> bool:
     """
     Say whether an archive naming another source is this book's own, moved.
@@ -222,27 +228,40 @@ def moved(
     or in skip mode it was a collision until the old file was moved away.
     Where the book declares a usable identifier that no other book of the
     library is known to declare, and the archive declares it too, the archive
-    is the book's, from before the move. A marker naming a book still in the
-    library is never overruled, and a book without an identifier of its own
-    has nothing to say it moved.
+    is the book's, from before the move. A book without an identifier of its
+    own has nothing to say it moved.
+
+    And where another book has since been added at that path, the marker
+    names it: taken at its word, the moved book lost its only archive to it
+    -- in skip mode a collision with that archive listed as an orphan, in
+    suffix mode written again -- which the identifiers had kept apart before
+    markers. The identifier decides there too, where the book at the path is
+    known not to declare it: another usable one, or none. One that declares
+    it, or one not read, keeps the marker's word, as a source two books share
+    names neither.
 
     :param found: An archive whose marker names another source than this
         book's.
     :param identifier: This book's usable identifier, or None.
-    :param live: The sources of the books of the library.
+    :param live: How many books of the library have each source.
     :param declared: How many books of the library are known to declare each
         identifier, this one's included when it was read.
+    :param theirs: What the book of a source declares: its usable identifier,
+        None for none, or :data:`UNREAD`. Without it, a marker naming a book
+        of the library is never overruled.
 
     :return: True when the archive is this book's, moved.
     """
     if identifier is None or declared[identifier] > 1:
         return False
     marked = marker_on_shelf(found)
-    return (
-        marked is not None
-        and marked not in live
-        and identifier_on_shelf(found) == identifier
-    )
+    if marked is None:
+        return False
+    if marked in live:
+        declares = UNREAD if theirs is None or live[marked] > 1 else theirs(marked)
+        if declares is UNREAD or declares == identifier:
+            return False
+    return identifier_on_shelf(found) == identifier
 
 
 def holds_another_book(found: Path, identifier: str | None) -> str | None:

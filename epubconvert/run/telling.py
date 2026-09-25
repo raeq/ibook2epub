@@ -41,17 +41,14 @@ from typing import NamedTuple
 
 from ..export.naming import filesystem_key
 from ..utils.policy import NamingPolicy
-from .claims import Wanting, numbered_names
+from .claims import Wanting, declared_by, numbered_names
 from .holders import (
+    UNREAD,
     identifier_on_shelf,
     marker_on_shelf,
     marker_with_identifier,
     moved,
-    source_identifier,
 )
-
-#: A book whose identifier was not read, because reading it downloads it.
-_UNREAD = object()
 
 
 class Told(NamedTuple):
@@ -168,6 +165,12 @@ class _Judge:
         self.told = Told({}, {}, {}, {})
         #: How many books have each source: a source two have names neither.
         self.sources = Counter(book.source for book in books if book.source)
+        #: The book of each source only one book has.
+        self.by_source = {
+            book.source: book
+            for book in books
+            if book.source and self.sources[book.source] == 1
+        }
         #: The file is opened for its identifier anyway: the marker is read
         #: from that open (holders.marker_with_identifier).
         self.opened = opened
@@ -196,29 +199,40 @@ class _Judge:
             # What the names and identifiers say stands, as before markers.
             return True
         owners = [i for i in found.crowd if self.books[i].source == source]
-        if not owners and source not in self.sources:
-            owners = self._moved(found)
+        if source not in self.sources:
+            owners = self._moved(found, found.crowd)
+        elif not owners or (self.opened and found.kept):
+            # It names another book of the library, which may have been
+            # added since at the old path of a book of the crowd that moved:
+            # the moved book's where the identifiers say so. Asked where the
+            # file would be refused, and where it is claimed in skip mode and
+            # the identifiers are known, as naming read them; in suffix mode
+            # kept_numbers asks for the book the marker names.
+            others = [i for i in found.crowd if self.books[i].source != source]
+            owners = self._moved(found, others) or owners
         if not owners:
             self.told.refused[name] = f"{name} was written for another book"
         elif found.kept:
             self.told.keeps.setdefault(owners[0], name)
         return True
 
-    def _moved(self, found: _File) -> list[int]:
+    def _moved(self, found: _File, crowd: Sequence[int]) -> list[int]:
         """
         Find the book of a crowd that moved from the source a file names.
 
-        No book of the library has that source any more. The file is the
-        book's, from before it moved to another folder, where it declares the
-        book's usable identifier and no other book is known to declare that
-        (:func:`~epubconvert.run.holders.moved`): each book of the crowd has
-        its identifier read, as for a file that names no source.
+        The file is the book's, from before it moved to another folder, where
+        it declares the book's usable identifier, no other book is known to
+        declare that, and the book of the library at that source, if any, is
+        known not to (:func:`~epubconvert.run.holders.moved`): each book of
+        the crowd has its identifier read, as for a file that names no
+        source, and so has that book.
 
         :param found: The file.
+        :param crowd: The books of its crowd to ask, by index.
 
         :return: That book, by index, or nothing.
         """
-        identifiers = {i: self._identifier(self.books[i]) for i in found.crowd}
+        identifiers = {i: self._identifier(self.books[i]) for i in crowd}
         declared = Counter(
             book.identifier for book in self.books if book.identifier is not None
         )
@@ -231,8 +245,13 @@ class _Judge:
             i
             for i, identifier in identifiers.items()
             if isinstance(identifier, str)
-            and moved(found.path, identifier, self.sources, declared)
+            and moved(found.path, identifier, self.sources, declared, self._declares)
         ]
+
+    def _declares(self, source: str) -> object:
+        """Say what the one book of *source* declares, as naming or a read says."""
+        book = self.by_source.get(source)
+        return UNREAD if book is None else self._identifier(book)
 
     def unmarked(self, found: _File) -> None:
         """
@@ -257,8 +276,8 @@ class _Judge:
         untold = [
             i
             for i, identifier in identifiers.items()
-            if (identifier is None or counts[identifier] > 1 or identifier is _UNREAD)
-            and (declared is None or identifier in (_UNREAD, declared))
+            if (identifier is None or counts[identifier] > 1 or identifier is UNREAD)
+            and (declared is None or identifier in (UNREAD, declared))
         ]
         if len(untold) < 2:
             return
@@ -278,10 +297,6 @@ class _Judge:
         :param book: The book.
 
         :return: The identifier, None when it declares none, or
-            :data:`_UNREAD`.
+            :data:`UNREAD`.
         """
-        if book.identifier is not None or book.unread is None:
-            return book.identifier
-        if book.unread in self.unopened:
-            return _UNREAD
-        return source_identifier(book.unread)
+        return declared_by(book, self.unopened)

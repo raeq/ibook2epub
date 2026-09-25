@@ -24,6 +24,7 @@ from ..export.naming import filesystem_key
 from ..utils.policy import Assignment, NamingPolicy
 from .claims import MAX_SUFFIX, shelf_files, suffixed
 from .holders import (
+    UNREAD,
     declares_one,
     foreign,
     holds_another_book,
@@ -64,6 +65,10 @@ class Shelf:
     #: book moved to another folder finds its archive by one that is its own
     #: (:func:`~epubconvert.run.holders.moved`).
     declared: Counter[str] = field(default_factory=Counter)
+    #: The book of each source only one book has: one added at a moved
+    #: book's old path, which the moved book's archive names, is asked what
+    #: it declares.
+    by_source: dict[str, Assignment] = field(default_factory=dict)
 
 
 class Place(NamedTuple):
@@ -108,7 +113,12 @@ def read_shelf(
     live = frozenset(unicodedata.normalize("NFC", item.identity) for item in assigned)
     sources = Counter(item.source for item in assigned if item.source)
     declared = Counter(item.identifier for item in assigned if item.identifier)
-    return Shelf(policy, existing, spoken, live, unopened, sources, declared)
+    by_source = {
+        item.source: item
+        for item in assigned
+        if item.source and sources[item.source] == 1
+    }
+    return Shelf(policy, existing, spoken, live, unopened, sources, declared, by_source)
 
 
 def place(assignment: Assignment, shelf: Shelf) -> Place:
@@ -208,7 +218,29 @@ def moved_here(
         identifier or assignment.identifier,
         shelf.sources,
         shelf.declared,
+        lambda source: _declared_by(shelf.by_source.get(source), shelf),
     )
+
+
+def _declared_by(item: Assignment | None, shelf: Shelf) -> object:
+    """
+    Say what a book of the plan declares, reading it if the plan did not.
+
+    :param item: The book, if any.
+    :param shelf: The shelf, with the books not to open.
+
+    :return: Its usable identifier, None for none, or
+        :data:`~epubconvert.run.holders.UNREAD`.
+    """
+    if item is None:
+        return UNREAD
+    if item.identifier is not None:
+        return item.identifier
+    if _declares_none(item, shelf):
+        return None
+    if item.package in shelf.unopened:
+        return UNREAD
+    return source_identifier(item.package)
 
 
 def written_before_writing(
@@ -219,9 +251,11 @@ def written_before_writing(
 
     Its marker is read whatever the policy read before, one short read paid
     only by a book about to replace something. One naming a source no book of
-    the library has, from a book that moved there, is its own where their
-    identifiers say so (holders.moved): the book's is read for it, under a
-    policy that names from the folder, as it is for the comparison after.
+    the library has, or one another book has been added at since, from a book
+    that moved there, is its own where their identifiers say so
+    (holders.moved): the book's is read for it, under a policy that names
+    from the folder, as it is for the comparison after, and so is that other
+    book's.
 
     :param found: The archive, if any.
     :param assignment: The book.
