@@ -83,6 +83,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   number, and the next run wrote the newcomer too and left the second copy
   an orphan.
 
+- Under `--on-collision suffix --skip-incomplete`, a book renamed by case
+  and evicted by iCloud, beside a namesake added under its old spelling,
+  keeps its archive. The newcomer was reported exported from that archive
+  though both identifiers had been read and differ, and with `--refresh` a
+  newcomer declaring no usable identifier wrote over it, the evicted book's
+  only one. A book whose plain file declares a usable identifier it does not
+  have is now written under a number of its name.
+
+- Under `--on-collision suffix`, a book titled like a number (`Dune (2)`)
+  and renamed by case keeps its archive beside two books `Dune` added
+  since. The second `Dune` was reported exported from it on every run, and
+  the renamed book was written again as `dune (2) (2).epub`. Two books of
+  such a title, one exported alone and the other added since, now read
+  their identifiers too: the newcomer was reported exported from the
+  other's archive and the other written again under a number. A zipped
+  book of such a title keeps its copy when packages of the plain name are
+  added, rather than being copied again under a number while a package is
+  reported exported from its file.
+
+- Under `--on-collision suffix`, a book named from its folder whose
+  identifier was read to find its numbered file is no longer reported
+  exported from a number a deleted namesake left: it is written under the
+  next free number, and the deleted book's archive is listed as an orphan.
+
 - A package added beside a zipped book already copied, when either declares
   no usable identifier, is no longer placed at the copy's file: under
   `--on-collision suffix` it gets a numbered name of its own, under `skip` it
