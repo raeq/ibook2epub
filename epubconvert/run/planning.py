@@ -868,12 +868,13 @@ def _decide_before_writing(
         # the other over its archive, likely the last copy. One source read,
         # paid only by a book about to replace something.
         # A marker naming this book does not excuse the comparison: a book
-        # deleted and another added at its path, whose identifiers differ.
+        # deleted and another added at its path, whose identifiers differ, or
+        # where it declares none and the file one.
         identifier = usable_identifier(_metadata_of(package, True))
         other = _decide_against_holder(package, found, identifier)
         if other is not None:
             return other
-        if identifier is None and settings.library is not None and not own:
+        if identifier is None and settings.library is not None:
             declared = declares_one(found)
             if declared is not None:
                 return Decision(package, COLLISION, reason=declared)

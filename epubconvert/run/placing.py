@@ -151,21 +151,26 @@ def _foreign_to(
     if clash is None:
         return None
     marked = _marked(clash, identity, assignment, shelf)
-    if marked is not None:
-        # The marker names a source: stronger than a name, and than an
-        # identifier two books may share. Identifiers that both declare and
-        # differ still say another book, whatever path it was written from.
-        if not marked:
-            return f"{clash.path.name} was written for another book"
-        return holds_another_book(clash.path, assignment.identifier)
-    reason = foreign(
-        clash.path,
-        clash.identity,
-        identity,
-        assignment.identifier,
-        source=assignment.package,
-        live=shelf.live,
-        unopened=shelf.unopened,
+    if marked is False:
+        # The marker names another source: stronger than a name, and than an
+        # identifier two books may share.
+        return f"{clash.path.name} was written for another book"
+    # One naming this book settles the name, not the identifiers: those that
+    # both declare and differ still say another book, whatever path it was
+    # written from, as does one the file declares where the book declares
+    # none.
+    reason = (
+        holds_another_book(clash.path, assignment.identifier)
+        if marked
+        else foreign(
+            clash.path,
+            clash.identity,
+            identity,
+            assignment.identifier,
+            source=assignment.package,
+            live=shelf.live,
+            unopened=shelf.unopened,
+        )
     )
     if reason is None and assignment.not_own:
         # Settled by the claim pass, which read the sizes: a PDF has no
@@ -358,7 +363,7 @@ def _holds_another(found: Path, item: Assignment, shelf: Shelf) -> bool:
     # A marker naming this book does not excuse the comparison: a book
     # deleted and another added at its path, whose identifiers differ.
     identifier = _identifier_of(item.package)
-    if identifier is None and marked is None and item.source is not None:
+    if identifier is None and item.source is not None:
         return declares_one(found) is not None
     return holds_another_book(found, identifier) is not None
 
