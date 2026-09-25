@@ -105,6 +105,13 @@
  *   find_orphans               a marked file is an orphan unless the book it
  *       names is in the library and was given no name; a loser holds the
  *       file of its name when the marker names it
+ *   holders.moved              with AcceptMoved, a marked file naming a book
+ *       not in the library is still a package's own where both declare a
+ *       usable identifier no other book of the library declares: a book
+ *       moved to another folder. A book is its source here, so a move cannot
+ *       be written; what the planner sees of one -- the book that wrote the
+ *       file gone, another of its identifier present -- is a book of
+ *       SharedId deleted beside its mate, and that is what is checked.
  *
  * Not modelled:
  *   - case folding and Unicode normalization. Names are strings compared
@@ -161,8 +168,10 @@ CONSTANTS
     SourceMarked,  \* each archive written for a package names its source
     RefuseAmbiguous, \* no book is given a file nothing tells from another's,
                    \* and one declaring no identifier none declaring one
-    Legacy         \* the files on the shelf before the first run, written
+    Legacy,        \* the files on the shelf before the first run, written
                    \* before markers: <<k, b>> is b's name numbered k
+    AcceptMoved    \* a file marked by a book gone from the library is the
+                   \* book's own that alone declares its identifier
 
 Books == 1..N
 
@@ -202,6 +211,18 @@ CopiesOf(X) == X \cap Copies
 
 \* Two books declaring one identifier: one book, to anything that reads it.
 Mate(b, c) == b = c \/ (b \in SharedId /\ c \in SharedId)
+
+\* holders.moved: n's marker names a package no longer in the library, and
+\* n declares b's usable identifier, which no other book of it declares.
+Moved(b, n) ==
+    /\ AcceptMoved
+    /\ b \notin Copies
+    /\ mark[n]
+    /\ shelf[n] \notin Packages(lib)
+    /\ b \in Usable
+    /\ shelf[n] \in Usable
+    /\ Mate(shelf[n], b)
+    /\ \A c \in lib \ {b} : ~(c \in Usable /\ Mate(c, b))
 
 Crowd(S, want) == Cardinality({c \in S : Wanted[c] = want})
 
@@ -253,7 +274,8 @@ Numbered(S, order, taken) ==
              Own(nm, T) == {k \in T : mark[Suffixed(nm, k)]
                                      /\ shelf[Suffixed(nm, k)] = b}
              Unmarked(nm, T) == {k \in T : ~mark[Suffixed(nm, k)]
-                                          \/ shelf[Suffixed(nm, k)] = b}
+                                          \/ shelf[Suffixed(nm, k)] = b
+                                          \/ Moved(b, Suffixed(nm, k))}
              shared == Cardinality({d \in S : Base(S, d) = base}) > 1
              look   == /\ KeepNumbered
                        /\ OnCollision = "suffix"
@@ -319,15 +341,19 @@ Untold(C, n) ==
     {c \in C : /\ c \notin Usable \/ \E d \in C \ {c} : Mate(c, d)
                /\ shelf[n] \notin Usable \/ (c \in Usable /\ Mate(c, shelf[n]))}
 
+\* The book of C that moved from the book n's marker names, or 0.
+Mover(C, n) ==
+    IF \E c \in C : Moved(c, n) THEN CHOOSE c \in C : Moved(c, n) ELSE 0
+
 \* The book of C that keeps n by what n says, or 0.
 TellKeep(C, n) ==
-    IF mark[n] THEN (IF shelf[n] \in C THEN shelf[n] ELSE 0)
+    IF mark[n] THEN (IF shelf[n] \in C THEN shelf[n] ELSE Mover(C, n))
     ELSE IF RefuseAmbiguous THEN Declarer(C, n)
     ELSE 0
 
 \* n is spoken for, so no book of the plan claims it.
 TellRefused(C, n) ==
-    IF mark[n] THEN shelf[n] \notin C
+    IF mark[n] THEN shelf[n] \notin C /\ Mover(C, n) = 0
     ELSE /\ RefuseAmbiguous
          /\ Declarer(C, n) = 0
          /\ Cardinality(Untold(C, n)) >= 2
@@ -465,8 +491,9 @@ Holds(b, n) == /\ VerifyHolder
                /\ shelf[n] \in Usable
                /\ ~Mate(shelf[n], b)
 
-\* The marker of n names another book than b: a package's file only.
-MarkedOther(b, n) == b \notin Copies /\ mark[n] /\ shelf[n] # b
+\* The marker of n names another book than b: a package's file only, and not
+\* one b moved from.
+MarkedOther(b, n) == b \notin Copies /\ mark[n] /\ shelf[n] # b /\ ~Moved(b, n)
 
 \* A book known to declare no usable identifier, at a file declaring one.
 DeclaresNone(b, n) ==

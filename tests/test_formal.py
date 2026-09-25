@@ -130,6 +130,12 @@ EXPECTED = {
     "RerunPlanner.SharedIdLoose": (
         "Invariant ExportedMeansTheBooksOwnFile is violated."
     ),
+    # A moved book finds its archive by an identifier that is its own alone;
+    # a book that shared one with a book since deleted, and has no file of
+    # its own, looks the same, and is taken for it.
+    "RerunPlanner.SharedIdMoved": (
+        "Invariant ExportedMeansTheBooksOwnFile is violated."
+    ),
     # A file from before markers, wanted by two books nothing tells apart:
     # neither is given it. Without refusing, the first in sorted order was.
     "RerunPlanner.UnidentifiableRefuse": HOLDS,

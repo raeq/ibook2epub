@@ -330,8 +330,9 @@ class TestTwoBooksThatShareAnIdentifier:
     other leaves. In skip mode the survivor was a collision and has none: the
     other's file, naming a source no book has and declaring the identifier
     the survivor now alone declares, is what a book moved from that folder
-    finds (holders.moved), and it is taken for one. Pinned as the cost of
-    finding a moved book's archive.
+    finds (holders.moved), and it is taken for one -- as it is in suffix mode
+    by a survivor not yet written. Pinned as the cost of finding a moved
+    book's archive (formal/README.md, ``SharedIdMoved``).
     """
 
     SHARED = "urn:uuid:template"

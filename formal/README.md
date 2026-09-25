@@ -170,9 +170,17 @@ tells apart -- no usable identifier, or one between them -- want it, it is
 spoken for; and a book known to declare no usable identifier is never placed
 at a file that declares one. `Legacy` is the files on the shelf before the
 first run, written before markers: `LegacyOfTwo` is book 2's archive under
-the plain name. Every configuration written before markers sets the three to
-`FALSE`, `FALSE` and `NoLegacy`, and so keeps its outcome; with both switches
-on, each of those that holds still holds.
+the plain name. `AcceptMoved` is `holders.moved`: a marked file naming a
+package no longer in the library is still a book's own where both declare a
+usable identifier that no other book of the library declares -- the archive
+of a book moved to another folder. Every configuration written before markers
+sets the four to `FALSE`, `FALSE`, `NoLegacy` and `FALSE`, and so keeps its
+outcome; with the three switches on, each of those that holds still holds.
+
+A move itself cannot be written in this model, where a book is its source.
+What the planner sees of one -- the book that wrote the file gone from the
+library, another declaring its identifier present -- is a book of `SharedId`
+deleted beside its mate, and that is what `SharedIdMoved` checks.
 
 | Configuration | Runs | Library | Identifiers | Check | Outcome |
 |---|---|---|---|---|---|
@@ -213,6 +221,7 @@ on, each of those that holds still holds.
 | `SharedIdMarked` | `--match`, `--refresh`, two packages of one name and one identifier, with markers | books added and removed | one, shared | on | the three hold |
 | `SharedIdSuffixMarked` | the same, suffix mode | books added and removed | one, shared | on | all but NoArchiveOfTheLibraryIsAnOrphan hold |
 | `SharedIdLoose` | `SharedIdMarked` without markers | books added and removed | one, shared | on | **ExportedMeansTheBooksOwnFile violated** |
+| `SharedIdMoved` | `SharedIdMarked` with `AcceptMoved` | books added and removed | one, shared | on | **ExportedMeansTheBooksOwnFile violated** |
 | `UnidentifiableRefuse` | `--match`, `--refresh`, two packages of one name, book 2's archive from before markers | fixed | none | on | the three hold |
 | `UnidentifiableRefuseSuffix` | the same, suffix mode | fixed | none | on | ExportedMeansTheBooksOwnFile and NeverWritesOverAnotherBook hold |
 | `UnidentifiableRefuseLoose` | `UnidentifiableRefuse` without `RefuseAmbiguous` | fixed | none | on | **ExportedMeansTheBooksOwnFile violated** |
@@ -249,7 +258,13 @@ What the configurations that fail show:
 
   Every archive a run writes now names its source, and `UnidentifiableMarked`,
   `SharedIdMarked` and `SharedIdSuffixMarked` hold over the same libraries:
-  where the identifiers cannot tell two books apart, the marker does. It is
+  where the identifiers cannot tell two books apart, the marker does. The
+  two `SharedId` ones leave `AcceptMoved` off: with it, a book that shared
+  its identifier with a book since deleted, and has no file of its own -- a
+  collision in skip mode, or not yet written in either -- is taken for that
+  book moved, reported exported from its archive, and written over it by
+  `--refresh` and `--force` (`SharedIdMoved`). From the shelf the two cannot
+  be told apart, and finding a moved book's archive is what that costs. It is
   read where the plan reads the identifiers anyway -- from the same open, so a
   rerun over identified books reads nothing more -- where it knows a book
   declares none, for a name two books want, and before a write.
@@ -457,9 +472,19 @@ What the model does not describe, and why:
   library lives on by default; where a case-sensitive one holds both, the
   planner finds two books of one source and takes the marker as saying
   nothing for either. A book moved to another folder is another source: its
-  archive names a source no book has, so it is listed as an orphan, and the
-  book is written again under suffix mode or is a collision in skip mode --
-  the failure that costs a write, never the one that loses a book. A book
+  archive names a source no book has. Where the book and the archive declare
+  a usable identifier that no other book of the library is known to declare,
+  the archive is the book's own (`holders.moved`, `AcceptMoved`): found,
+  kept, reported exported, not listed as an orphan, and written over by
+  `--refresh`, `--force` and `-ae -ar`, whose write names the new folder;
+  a quiet rerun writes nothing. Under a policy that names from the folder
+  only the identifiers read are known, so another book declaring the same
+  one unread does not stop it. A moved book declaring no usable identifier,
+  or one another book declares, is listed as an orphan and written again in
+  suffix mode or is a collision in skip mode -- the failure that costs a
+  write, never the one that loses a book (`tests/test_moved_books.py`). A
+  book named from its folder that no other book competes with is trusted by
+  its name, marker unread, and so found where it moved either way. A book
   deleted and another added at its path is the same source; where both
   declare usable identifiers and they differ, or the file declares one and
   the newcomer none, the file is still the other book's
