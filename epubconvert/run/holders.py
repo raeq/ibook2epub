@@ -187,6 +187,44 @@ def written_for(
     return None if marked is None else marked == source
 
 
+def moved(
+    found: Path,
+    identifier: str | None,
+    live: Container[str],
+    declared: Counter[str],
+) -> bool:
+    """
+    Say whether an archive naming another source is this book's own, moved.
+
+    A marker names the book's path in the library, so a book moved to another
+    folder finds its archive naming a path no book has, which is taken for a
+    deleted book's: it was written again and its archive listed as an orphan,
+    or in skip mode it was a collision until the old file was moved away.
+    Where the book declares a usable identifier that no other book of the
+    library is known to declare, and the archive declares it too, the archive
+    is the book's, from before the move. A marker naming a book still in the
+    library is never overruled, and a book without an identifier of its own
+    has nothing to say it moved.
+
+    :param found: An archive whose marker names another source than this
+        book's.
+    :param identifier: This book's usable identifier, or None.
+    :param live: The sources of the books of the library.
+    :param declared: How many books of the library are known to declare each
+        identifier, this one's included when it was read.
+
+    :return: True when the archive is this book's, moved.
+    """
+    if identifier is None or declared[identifier] > 1:
+        return False
+    marked = marker_on_shelf(found)
+    return (
+        marked is not None
+        and marked not in live
+        and identifier_on_shelf(found) == identifier
+    )
+
+
 def holds_another_book(found: Path, identifier: str | None) -> str | None:
     """
     Explain why the archive under a book's name holds another book, if it does.

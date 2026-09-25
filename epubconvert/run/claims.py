@@ -25,7 +25,7 @@ from ..export.naming import (
     split_extension,
     truncate_bytes,
 )
-from .holders import identifier_on_shelf, marker_on_shelf, source_identifier
+from .holders import identifier_on_shelf, marker_on_shelf, moved, source_identifier
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..utils.opf import Package
@@ -442,7 +442,11 @@ def kept_numbers(
     sharing = Counter(filesystem_key(policy.identity(book.base)) for book in books)
     directory = getattr(shelf, "directory", None)
     kept: dict[int, Keeping] = {}
-    sources = Counter(book.source for book in books if book.source)
+    library = _Library(
+        Counter(book.source for book in books if book.source),
+        Counter(book.identifier for book in books if book.identifier),
+        unopened,
+    )
 
     def forms(name: str) -> list[tuple[int, str]]:
         key = filesystem_key(policy.identity(name))
@@ -474,18 +478,26 @@ def kept_numbers(
             )
         ):
             continue
-        kept[position] = _kept(
-            book, (numbers, marked_forms), directory, unopened, sources
-        )
+        kept[position] = _kept(book, (numbers, marked_forms), directory, library)
     return kept
+
+
+class _Library(NamedTuple):
+    """What the library says of whose a file on the shelf may be."""
+
+    #: How many books have each source: a source two have names neither.
+    sources: Counter[str]
+    #: How many books are known to declare each identifier.
+    declared: Counter[str]
+    #: The books not to open for their identifier.
+    unopened: Container[Path]
 
 
 def _kept(
     book: Wanting,
     forms: tuple[list[tuple[int, str]], list[tuple[int, str]]],
     directory: Path,
-    unopened: Container[Path],
-    sources: Counter[str],
+    library: _Library,
 ) -> Keeping:
     """
     Name the file on the shelf that *book* keeps: by its marker, or else as
@@ -495,15 +507,14 @@ def _kept(
     :param forms: The numbered files of its name and those of its marked
         name, each lowest first.
     :param directory: The shelf.
-    :param unopened: The books not to open for their identifier.
-    :param sources: How many books have each source.
+    :param library: The sources and identifiers of the library.
 
     :return: What it keeps, as :func:`_keeps` says.
     """
-    unmarked, mine, refused = _unmarked(book, forms, directory, sources)
+    unmarked, mine, refused = _unmarked(book, forms, directory, library)
     if mine:
         return Keeping(mine, refused, book.identifier)
-    keeping = _keeps(book, unmarked, directory, unopened)
+    keeping = _keeps(book, unmarked, directory, library.unopened)
     return keeping._replace(refused=True) if refused else keeping
 
 
@@ -511,29 +522,43 @@ def _unmarked(
     book: Wanting,
     forms: tuple[list[tuple[int, str]], list[tuple[int, str]]],
     directory: Path,
-    sources: Counter[str],
+    library: _Library,
 ) -> tuple[tuple[list[tuple[int, str]], list[tuple[int, str]]], str | None, bool]:
     """
     Settle what the markers of a book's files say, before any identifier.
+
+    A file whose marker names a source no book has is left to the identifiers
+    where it declares the book's own: the book moved there from another folder
+    (holders.moved).
 
     :param book: The package in question.
     :param forms: The numbered files of its name and those of its marked
         name, each lowest first.
     :param directory: The shelf.
-    :param sources: How many books have each source: a source two have names
-        neither.
+    :param library: The sources and identifiers of the library.
 
     :return: Its files less those whose marker names another source; the
         first whose marker names its own, if any; and whether its plain
         name's file names another.
     """
     numbers, marked_forms = forms
-    if book.source is None or sources[book.source] > 1:
+    if book.source is None or library.sources[book.source] > 1:
         return forms, None, False
     marks = {
         name: marker_on_shelf(directory / name) for _, name in [*numbers, *marked_forms]
     }
     others = {name for name, mark in marks.items() if mark not in (None, book.source)}
+    if any(marks[name] not in library.sources for name in others):
+        identifier = book.identifier
+        if identifier is None and book.unread and book.unread not in library.unopened:
+            identifier = source_identifier(book.unread)
+        others = {
+            name
+            for name in others
+            if not moved(
+                directory / name, identifier, library.sources, library.declared
+            )
+        }
     plain = next((name for number, name in numbers if number <= 1), None)
     mine = [name for _, name in [*numbers, *marked_forms] if marks[name] == book.source]
     return (

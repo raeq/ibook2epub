@@ -325,12 +325,21 @@ class TestAMarkerDoesNotExcuseTheIdentifiers:
 
 
 class TestTwoBooksThatShareAnIdentifier:
+    """
+    In suffix mode each has a marked file of its own, which it keeps when the
+    other leaves. In skip mode the survivor was a collision and has none: the
+    other's file, naming a source no book has and declaring the identifier
+    the survivor now alone declares, is what a book moved from that folder
+    finds (holders.moved), and it is taken for one. Pinned as the cost of
+    finding a moved book's archive.
+    """
+
     SHARED = "urn:uuid:template"
 
-    @MODES
     def test_the_survivor_is_not_exported_from_the_others_file(
-        self, tmp_path, output_dir, capsys, mode
+        self, tmp_path, output_dir, capsys
     ):
+        mode = SUFFIX
         library = tmp_path / "lib"
         book(library, "a", self.SHARED)
         book(library, "b", self.SHARED)
@@ -344,10 +353,22 @@ class TestTwoBooksThatShareAnIdentifier:
         assert listed["b"][1] != a_file
         assert listed[f"orphan:{a_file}"] == ("orphan", a_file)
 
-    @MODES
-    def test_force_does_not_write_the_survivor_over_it(
-        self, tmp_path, output_dir, mode
+    def test_in_skip_mode_a_survivor_with_no_file_is_taken_for_a_moved_book(
+        self, tmp_path, output_dir, capsys
     ):
+        library = tmp_path / "lib"
+        book(library, "a", self.SHARED)
+        book(library, "b", self.SHARED)
+        convert(library, output_dir, "-q", *AUTHOR_TITLE)
+        assert sorted(shelf(output_dir)) == [NAME]
+        remove_tree(library / "a")
+
+        listed = listing(library, output_dir, capsys, *AUTHOR_TITLE)
+
+        assert listed == {"b": ("exported", NAME)}
+
+    def test_force_does_not_write_the_survivor_over_it(self, tmp_path, output_dir):
+        mode = SUFFIX
         library = tmp_path / "lib"
         book(library, "a", self.SHARED)
         book(library, "b", self.SHARED)

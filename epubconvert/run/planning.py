@@ -37,8 +37,8 @@ from .claims import (
     shelf_names,
     suffixed,
 )
-from .holders import Unopened, declares_one, holds_another_book, written_for
-from .placing import Shelf, place, read_shelf
+from .holders import Unopened, declares_one, holds_another_book
+from .placing import Shelf, place, read_shelf, written_before_writing
 from .telling import tell_apart
 
 #: What the planner can decide about a package. These strings are a public
@@ -799,14 +799,7 @@ def _decide(
         found,
         settings,
         unread=unread,
-        # About to write over an archive: its marker is read, whatever the
-        # policy read before, one short read paid only by a book about to
-        # replace something.
-        own=(
-            written_for(found, assignment.source, shelf.sources)
-            if found is not None
-            else None
-        ),
+        own=written_before_writing(found, assignment, shelf, unread=unread),
     )
     if unusable is not None:
         if unusable.status != COLLISION:

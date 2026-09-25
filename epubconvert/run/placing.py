@@ -27,7 +27,9 @@ from .holders import (
     declares_one,
     foreign,
     holds_another_book,
+    moved,
     same_identity,
+    source_identifier,
     written_for,
 )
 
@@ -58,6 +60,10 @@ class Shelf:
     #: How many books of the plan have each source, which an archive's
     #: marker names (:func:`~epubconvert.run.holders.written_for`).
     sources: Counter[str] = field(default_factory=Counter)
+    #: How many books of the plan are known to declare each identifier: a
+    #: book moved to another folder finds its archive by one that is its own
+    #: (:func:`~epubconvert.run.holders.moved`).
+    declared: Counter[str] = field(default_factory=Counter)
 
 
 class Place(NamedTuple):
@@ -101,7 +107,8 @@ def read_shelf(
     spoken = {filesystem_key(item.identity) for item in assigned if item.filename}
     live = frozenset(unicodedata.normalize("NFC", item.identity) for item in assigned)
     sources = Counter(item.source for item in assigned if item.source)
-    return Shelf(policy, existing, spoken, live, unopened, sources)
+    declared = Counter(item.identifier for item in assigned if item.identifier)
+    return Shelf(policy, existing, spoken, live, unopened, sources, declared)
 
 
 def place(assignment: Assignment, shelf: Shelf) -> Place:
@@ -151,7 +158,7 @@ def _foreign_to(
     if clash is None:
         return None
     marked = _marked(clash, identity, assignment, shelf)
-    if marked is False:
+    if marked is False and not moved_here(clash.path, assignment, shelf):
         # The marker names another source: stronger than a name, and than an
         # identifier two books may share.
         return f"{clash.path.name} was written for another book"
@@ -180,6 +187,63 @@ def _foreign_to(
         # The one read this costs is the one that gave the marker above.
         return declares_one(clash.path)
     return reason
+
+
+def moved_here(
+    found: Path, assignment: Assignment, shelf: Shelf, identifier: str | None = None
+) -> bool:
+    """
+    Say whether an archive naming another source is the book's own, moved.
+
+    :param found: The archive, whose marker names another source.
+    :param assignment: The book.
+    :param shelf: The shelf, with the sources and identifiers of the plan.
+    :param identifier: The book's identifier, where the caller read it;
+        otherwise the one naming read (:func:`~epubconvert.run.holders.moved`).
+
+    :return: True when the archive is the book's, from before a move.
+    """
+    return moved(
+        found,
+        identifier or assignment.identifier,
+        shelf.sources,
+        shelf.declared,
+    )
+
+
+def written_before_writing(
+    found: Path | None, assignment: Assignment, shelf: Shelf, *, unread: bool
+) -> bool | None:
+    """
+    Read what an archive about to be written over says of the book.
+
+    Its marker is read whatever the policy read before, one short read paid
+    only by a book about to replace something. One naming a source no book of
+    the library has, from a book that moved there, is its own where their
+    identifiers say so (holders.moved): the book's is read for it, under a
+    policy that names from the folder, as it is for the comparison after.
+
+    :param found: The archive, if any.
+    :param assignment: The book.
+    :param shelf: The shelf.
+    :param unread: Naming read no package document.
+
+    :return: True when the marker names this book, False when another, None
+        when there is none, or the book moved from the source it names.
+    """
+    if found is None:
+        return None
+    own = written_for(found, assignment.source, shelf.sources)
+    if own is False:
+        package = assignment.package
+        identifier = (
+            source_identifier(package)
+            if unread and package not in shelf.unopened
+            else None
+        )
+        if moved_here(found, assignment, shelf, identifier):
+            return None
+    return own
 
 
 def _declares_none(assignment: Assignment, shelf: Shelf) -> bool:
@@ -358,11 +422,11 @@ def _holds_another(found: Path, item: Assignment, shelf: Shelf) -> bool:
     :return: True when the archive is another book's.
     """
     marked = written_for(found, item.source, shelf.sources)
+    identifier = _identifier_of(item.package)
     if marked is False:
-        return True
+        return not moved_here(found, item, shelf, identifier)
     # A marker naming this book does not excuse the comparison: a book
     # deleted and another added at its path, whose identifiers differ.
-    identifier = _identifier_of(item.package)
     if identifier is None and item.source is not None:
         return declares_one(found) is not None
     return holds_another_book(found, identifier) is not None

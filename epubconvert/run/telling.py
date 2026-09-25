@@ -38,7 +38,7 @@ from typing import NamedTuple
 from ..export.naming import filesystem_key
 from ..utils.policy import NamingPolicy
 from .claims import Wanting, numbered_names
-from .holders import identifier_on_shelf, marker_on_shelf, source_identifier
+from .holders import identifier_on_shelf, marker_on_shelf, moved, source_identifier
 
 #: A book whose identifier was not read, because reading it downloads it.
 _UNREAD = object()
@@ -161,11 +161,43 @@ class _Judge:
         if source is None or self.sources[source] > 1:
             return False
         owners = [i for i in found.crowd if self.books[i].source == source]
+        if not owners and source not in self.sources:
+            owners = self._moved(found)
         if not owners:
             self.told.refused[name] = f"{name} was written for another book"
         elif found.kept:
             self.told.keeps.setdefault(owners[0], name)
         return True
+
+    def _moved(self, found: _File) -> list[int]:
+        """
+        Find the book of a crowd that moved from the source a file names.
+
+        No book of the library has that source any more. The file is the
+        book's, from before it moved to another folder, where it declares the
+        book's usable identifier and no other book is known to declare that
+        (:func:`~epubconvert.run.holders.moved`): each book of the crowd has
+        its identifier read, as for a file that names no source.
+
+        :param found: The file.
+
+        :return: That book, by index, or nothing.
+        """
+        identifiers = {i: self._identifier(self.books[i]) for i in found.crowd}
+        declared = Counter(
+            book.identifier for book in self.books if book.identifier is not None
+        )
+        for i, identifier in identifiers.items():
+            if isinstance(identifier, str):
+                self.told.identifiers[i] = identifier
+                if self.books[i].identifier is None:
+                    declared[identifier] += 1
+        return [
+            i
+            for i, identifier in identifiers.items()
+            if isinstance(identifier, str)
+            and moved(found.path, identifier, self.sources, declared)
+        ]
 
     def unmarked(self, found: _File) -> None:
         """
