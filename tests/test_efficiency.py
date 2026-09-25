@@ -400,6 +400,56 @@ class TestEachShelfArchiveIsReadOnce:
         assert self._opens(monkeypatch, library, output_dir) == Counter()
 
 
+class TestAFileTwoBooksWantIsOpenedOnce:
+    """
+    In skip mode the file of a name two books want is told apart by its
+    marker (run/telling.py). Read from the file's last bytes where the
+    identifiers were to be read from the archive anyway, a no-op rerun under
+    ``--name-by author-title`` opened each such file twice, where it had
+    opened it once. Named from the folder, nothing else reads the file: the
+    one short read of its last bytes is the price of telling the two apart.
+    """
+
+    @pytest.mark.parametrize(
+        "policy", [[], ["--name-by", "author-title"]], ids=["folder", "author-title"]
+    )
+    @pytest.mark.parametrize("listing", [[], ["--list"]], ids=["run", "list"])
+    def test_a_rerun_opens_each_file_once(
+        self, tmp_path, output_dir, monkeypatch, policy, listing
+    ):
+        library = tmp_path / "lib"
+        for index in range(3):
+            for folder in ("a", "b"):
+                make_metadata_package(
+                    library / folder,
+                    f"Book {index}.epub",
+                    title=f"Book {index}",
+                    creator="Frank Herbert",
+                    identifier=f"urn:uuid:{folder}{index}",
+                )
+        argv = ["-s", str(library), "-o", str(output_dir), "-q", *policy]
+        run.main([*argv, "-m", "0"])
+        # What the conversion read is remembered; the rerun reads afresh.
+        holders._identifier_of.cache_clear()  # pylint: disable=protected-access
+        holders._marker_of.cache_clear()  # pylint: disable=protected-access
+        holders._OPENED.clear()  # pylint: disable=protected-access
+        opened: Counter[str] = Counter()
+        original = os.open
+
+        def counting(path, flags, *args, **kwargs):
+            found = Path(path)
+            if found.parent == output_dir and found.suffix == ".epub":
+                opened[found.name] += 1
+            return original(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(os, "open", counting)
+
+        run.main([*argv, *(listing or ["-m", "0"])])
+
+        assert len(opened) == 3
+        assert set(opened.values()) == {1}
+
+
 class TestABookRenamedByCaseIsReadOnce:
     """
     A file of another spelling of a book's name may be its own archive, and

@@ -26,6 +26,10 @@ again, and that is the limit formal/README.md describes.
 Read only for a name two books want that has files on the shelf: the last
 bytes of each such file, for its marker, and for a file with none, its
 identifier and, under a policy that names from the folder, each book's.
+Under a policy that names from the package document the marker is read
+with the file's identifier instead, which placing reads anyway, so a rerun
+opens each such file once; named from the folder, the last bytes are one
+short read per such file per run that nothing else would have made.
 """
 
 from __future__ import annotations
@@ -38,7 +42,13 @@ from typing import NamedTuple
 from ..export.naming import filesystem_key
 from ..utils.policy import NamingPolicy
 from .claims import Wanting, numbered_names
-from .holders import identifier_on_shelf, marker_on_shelf, moved, source_identifier
+from .holders import (
+    identifier_on_shelf,
+    marker_on_shelf,
+    marker_with_identifier,
+    moved,
+    source_identifier,
+)
 
 #: A book whose identifier was not read, because reading it downloads it.
 _UNREAD = object()
@@ -83,7 +93,13 @@ def tell_apart(
 
     :return: The files kept and refused, and the identifiers read.
     """
-    judge = _Judge(books, shown, unopened)
+    # Named from its package document, a book placed at the file compares
+    # its identifier with the file's, which opens the archive: the marker is
+    # read from that one open. Named from the folder, nothing else reads the
+    # file, and its last bytes are the one short read it costs.
+    judge = _Judge(
+        books, shown, unopened, opened=bool(getattr(policy, "needs_metadata", False))
+    )
     directory = getattr(shelf, "directory", None)
     if directory is None or not judge.sources:
         # Without a library to name sources from, no marker says anything,
@@ -139,7 +155,12 @@ class _Judge:
     """Says whose each file of a crowd's name is, into a :class:`Told`."""
 
     def __init__(
-        self, books: Sequence[Wanting], shown: Sequence[str], unopened: Container[Path]
+        self,
+        books: Sequence[Wanting],
+        shown: Sequence[str],
+        unopened: Container[Path],
+        *,
+        opened: bool,
     ) -> None:
         self.books = books
         self.shown = shown
@@ -147,6 +168,9 @@ class _Judge:
         self.told = Told({}, {}, {}, {})
         #: How many books have each source: a source two have names neither.
         self.sources = Counter(book.source for book in books if book.source)
+        #: The file is opened for its identifier anyway: the marker is read
+        #: from that open (holders.marker_with_identifier).
+        self.opened = opened
 
     def marked(self, found: _File) -> bool:
         """
@@ -158,7 +182,8 @@ class _Judge:
             share, which leaves it to the claims as before markers.
         """
         name = found.path.name
-        source = marker_on_shelf(found.path)
+        read = marker_with_identifier if self.opened else marker_on_shelf
+        source = read(found.path)
         if source is None:
             return False
         if self.sources[source] > 1:

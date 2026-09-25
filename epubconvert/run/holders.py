@@ -124,6 +124,12 @@ def _shelved(archive_path: Path) -> tuple[str | None, str | None]:
     )
 
 
+#: The marker of each archive opened for its identifier, by path and stamp:
+#: :func:`marker_on_shelf` answers from it rather than read the file's last
+#: bytes again. The oldest is forgotten first.
+_OPENED: dict[tuple[Path, tuple[int, int, int]], str | None] = {}
+
+
 @lru_cache(maxsize=REMEMBERED)
 def _identifier_of(
     archive_path: Path, _stamp: tuple[int, int, int]
@@ -134,8 +140,16 @@ def _identifier_of(
     except ValidationError:
         # No identifier, but its last bytes may still hold a marker, read as
         # marker_on_shelf reads it: the two never disagree about a file.
-        return None, provenance.read_source(archive_path)
-    return usable_identifier(package), provenance.from_tail(tail)
+        found: tuple[str | None, str | None] = (
+            None,
+            provenance.read_source(archive_path),
+        )
+    else:
+        found = usable_identifier(package), provenance.from_tail(tail)
+    if len(_OPENED) >= REMEMBERED:
+        del _OPENED[next(iter(_OPENED))]
+    _OPENED[archive_path, _stamp] = found[1]
+    return found
 
 
 def marker_on_shelf(archive_path: Path) -> str | None:
@@ -145,7 +159,8 @@ def marker_on_shelf(archive_path: Path) -> str | None:
     For a caller that reads no identifier: the last bytes of the file, one
     short read, where the identifier would open the archive and parse its
     package document. Remembered while the file is unchanged, as
-    :func:`identifier_on_shelf` is.
+    :func:`identifier_on_shelf` is, and not read at all where that opened
+    the file for its identifier: it read the marker too.
 
     :param archive_path: The exported archive.
 
@@ -156,7 +171,10 @@ def marker_on_shelf(archive_path: Path) -> str | None:
         status = archive_path.stat()
     except OSError:
         return None
-    return _marker_of(archive_path, (status.st_ino, status.st_mtime_ns, status.st_size))
+    stamp = (status.st_ino, status.st_mtime_ns, status.st_size)
+    if (archive_path, stamp) in _OPENED:
+        return _OPENED[archive_path, stamp]
+    return _marker_of(archive_path, stamp)
 
 
 @lru_cache(maxsize=REMEMBERED)
