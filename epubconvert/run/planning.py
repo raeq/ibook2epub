@@ -859,7 +859,7 @@ def _decide_before_writing(
         return Decision(
             package, COLLISION, reason=f"{found.name} was written for another book"
         )
-    if found is not None and unread and not own:
+    if found is not None and unread:
         # About to write over the archive holding this name, and naming read
         # nothing that could say whose it is. Folder names are not unique: the
         # library is walked recursively, so two subfolders can each hold a
@@ -867,11 +867,13 @@ def _decide_before_writing(
         # book holding the name left the library, --refresh and --force wrote
         # the other over its archive, likely the last copy. One source read,
         # paid only by a book about to replace something.
+        # A marker naming this book does not excuse the comparison: a book
+        # deleted and another added at its path, whose identifiers differ.
         identifier = usable_identifier(_metadata_of(package, True))
         other = _decide_against_holder(package, found, identifier)
         if other is not None:
             return other
-        if identifier is None and settings.library is not None:
+        if identifier is None and settings.library is not None and not own:
             declared = declares_one(found)
             if declared is not None:
                 return Decision(package, COLLISION, reason=declared)

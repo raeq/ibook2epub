@@ -353,10 +353,12 @@ def _holds_another(found: Path, item: Assignment, shelf: Shelf) -> bool:
     :return: True when the archive is another book's.
     """
     marked = written_for(found, item.source, shelf.sources)
-    if marked is not None:
-        return not marked
+    if marked is False:
+        return True
+    # A marker naming this book does not excuse the comparison: a book
+    # deleted and another added at its path, whose identifiers differ.
     identifier = _identifier_of(item.package)
-    if identifier is None and item.source is not None:
+    if identifier is None and marked is None and item.source is not None:
         return declares_one(found) is not None
     return holds_another_book(found, identifier) is not None
 

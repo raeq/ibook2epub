@@ -264,6 +264,59 @@ class TestNamedFromTheFolderAWriteReadsTheMarker:
         assert (output_dir / "Dune.epub").read_bytes() == held
 
 
+class TestAMarkerDoesNotExcuseTheIdentifiers:
+    """
+    A marker names a path, case folded: a book deleted and another added at
+    its path, by another case, is the same source. Where both declare a usable
+    identifier and they differ, the file is still the other book's.
+    """
+
+    @staticmethod
+    def _replaced(tmp_path: Path, output_dir: Path) -> tuple[Path, Path]:
+        library = tmp_path / "lib"
+        book(library, "c", "urn:uuid:GONE")
+        convert(library, output_dir, "-q")
+        remove_tree(library / "c")
+        newcomer = make_metadata_package(
+            library / "c", "dune.epub", title="Dune", identifier="urn:uuid:NEW"
+        )
+        assert provenance.source_of(newcomer, library) == mine("c")
+        later = (output_dir / "Dune.epub").stat().st_mtime + 100
+        os.utime(newcomer, (later, later))
+        return library, newcomer
+
+    @pytest.mark.parametrize("flag", ["--force", "--refresh"])
+    def test_a_newcomer_at_its_path_is_not_written_over_it(
+        self, tmp_path, output_dir, flag
+    ):
+        library, _ = self._replaced(tmp_path, output_dir)
+        held = (output_dir / "Dune.epub").read_bytes()
+
+        convert(library, output_dir, "-q", flag)
+
+        assert (output_dir / "Dune.epub").read_bytes() == held
+
+    def test_nor_are_its_highlights_written_into_it(
+        self, tmp_path, output_dir, monkeypatch
+    ):
+        library, newcomer = self._replaced(tmp_path, output_dir)
+        make_databases(
+            tmp_path / "container",
+            rows=[highlight(uuid="U0", asset="N")],
+            books=[library_row(asset="N", path=str(newcomer))],
+        )
+        monkeypatch.setattr(
+            annotating,
+            "collect_annotations",
+            lambda policy=None: annotations.collect(tmp_path / "container", policy),
+        )
+        held = (output_dir / "Dune.epub").read_bytes()
+
+        run.main(["-s", str(library), "-o", str(output_dir), "-q", "-ae", "-ar"])
+
+        assert (output_dir / "Dune.epub").read_bytes() == held
+
+
 class TestTwoBooksThatShareAnIdentifier:
     SHARED = "urn:uuid:template"
 

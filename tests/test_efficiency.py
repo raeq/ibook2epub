@@ -660,9 +660,7 @@ class TestARefreshReadsOnlyTheBooksItRewrites:
         code = run.main(["-s", str(library), "-o", str(output_dir), "-ae", "-ar", "-q"])
 
         assert code == 0
-        # Its archive's marker names it, which settles it: no package
-        # document is read at all, where each book's was.
-        assert sources == []
+        assert sources == ["Book 0.epub"]
         assert set(opened) == {"Book 0.epub"}
 
     @pytest.mark.parametrize("detached", ["notes.json", "notes.csv", "-"])
