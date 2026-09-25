@@ -716,16 +716,32 @@ the identifiers cannot say otherwise -- the file declares none, or the one the
 book declares, shared with the book that left -- and `--force` or `--refresh`
 can write over it.
 
-Two things cost a rewrite, never a book. A book moved to another folder in the
-library, or a library pointed at with `-s` from another level, has another
-source: its old archive is listed as an orphan and the book is written again,
-or in skip mode reported as a collision until the old file is moved away. And
-under the naming policies that name a book from its folder, a book reported as
-exported is still trusted by its name when no other book wants it: checking
-would read every archive on every run. The marker is read where two books want
-a name, where the identifiers are read anyway, and before anything is written
-over; a rerun over a shelf of books with identifiers of their own reads nothing
-more than it did.
+A book moved to another folder in the library, or a library pointed at with
+`-s` from another level, has another source, and its archive names one no book
+has. Where the book declares a usable identifier that no other book in the
+library is known to declare, and the archive declares it too, the archive is
+still the book's: it is reported exported, is not listed as an orphan, and a
+quiet rerun writes nothing. The archive keeps naming the old folder until it
+is written for another reason -- `--refresh`, `--force` or `-ae -ar` -- when
+it is written with the new one; nothing is rewritten just to update it.
+(Under the policies that name a book from its folder only the identifiers the
+run read are known, so another book declaring the same one is not always seen.)
+
+The cost of that is one case the marker gave up: a book that shared its
+identifier with a book since deleted, and has no file of its own -- a
+collision in skip mode, or one not yet written -- looks exactly like that book
+moved, and is taken for it.
+
+Two things cost a rewrite, never a book. A moved book that declares no usable
+identifier, or one another book declares, cannot be told from a deleted
+book's namesake: its old archive is listed as an orphan and the book is written
+again, or in skip mode reported as a collision until the old file is moved
+away. And under the naming policies that name a book from its folder, a book
+reported as exported is still trusted by its name when no other book wants it:
+checking would read every archive on every run. The marker is read where two
+books want a name, where the identifiers are read anyway, and before anything
+is written over; a rerun over a shelf of books with identifiers of their own
+reads nothing more than it did.
 
 ### Taking your highlights with you
 

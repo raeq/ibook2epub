@@ -29,9 +29,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   is read where the identifiers are read anyway, from the same open, where
   two books want one name, and before a write: a rerun over a shelf of books
   with identifiers of their own reads nothing more.
-- A book moved to another folder in the library has another source: its old
-  archive is listed as an orphan and the book is written again, or in skip
-  mode is a collision.
+- A book moved to another folder in the library keeps its archive where it
+  and the archive declare a usable identifier no other book declares: found,
+  reported exported, not listed as an orphan, and written with its new folder
+  only when written anyway. A moved book declaring no usable identifier, or
+  one another book declares, has another source: its old archive is listed as
+  an orphan and the book is written again, or in skip mode is a collision.
+  A book that shared its identifier with one since deleted, and has no file
+  of its own, is taken for that book moved.
 - `export/archive.py` hands `copy_through`, `write_atomically` and the
   partial-file names to `export/writing.py`, and re-exports them.
 
