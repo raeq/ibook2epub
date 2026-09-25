@@ -339,6 +339,12 @@ class _Claiming:
         policy = self.setup.policy
         wanted = filesystem_key(policy.identity(name))
         numbers = self.numbered.get(wanted, [])
+        itself = self.existing.get(wanted)
+        if itself is not None and NUMBERED.fullmatch(wanted):
+            # A name that looks numbered (a title "Dune (2)") is indexed as
+            # a number of its plain name, and the copy never found its own
+            # file: a package of the plain name took it as its number.
+            numbers = [(1, itself), *numbers]
         if self.setup.on_collision != SUFFIX:
             numbers = [entry for entry in numbers if entry[0] == 1]
         for _position, found in sorted(numbers):

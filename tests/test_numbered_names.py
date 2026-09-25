@@ -590,6 +590,60 @@ class TestANamesakeOfATitleThatLooksNumbered:
         assert written == {"Dune (2).epub": "urn:b", "Dune (2) (2).epub": "urn:a"}
 
 
+class TestACopyTitledLikeANumber:
+    """
+    A zipped ``z/Dune (2).epub`` is copied, and two packages ``Dune`` are
+    added. The copy's file was indexed only as a number of ``Dune``, so the
+    copy never found it: the second package took the name, and the copy was
+    copied again as ``Dune (2) (2).epub``, while the package was reported
+    exported from the copy's file or, where the identifiers told, written
+    under another number and the copy's first file listed as an orphan.
+    """
+
+    @pytest.mark.parametrize("identifier", ["urn:z", "none"])
+    def test_the_copy_keeps_its_file(self, tmp_path, output_dir, capsys, identifier):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir)
+        zipped_book(tmp_path, library / "z" / "Dune (2).epub", identifier, "Dune (2)")
+        run.main([*argv, "-q"])
+        for folder in ("a", "c"):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier=f"urn:{folder}"
+            )
+        capsys.readouterr()
+
+        run.main(
+            ["-s", str(library), "-o", str(output_dir), *SUFFIX, "--list", "--json"]
+        )
+        rows = json.loads(capsys.readouterr().out)
+        run.main([*argv, "-d"])
+        dry = capsys.readouterr()
+        run.main(argv)
+        ran = capsys.readouterr()
+        run.main(argv)
+        again = capsys.readouterr()
+
+        assert sorted(
+            (row["status"], Path(row["source"]).parent.name, Path(row["target"]).name)
+            for row in rows
+        ) == [
+            ("copied", "z", "Dune (2).epub"),
+            ("pending", "a", "Dune.epub"),
+            ("pending", "c", "Dune (3).epub"),
+        ]
+        assert "Dry run: would export 2 epub file(s)" in dry.out
+        assert "Exported 2 epub file(s)" in ran.out
+        assert "Exported 0 epub file(s)" in again.out
+        assert "orphan" not in dry.out + ran.out + again.out
+        assert " copied" not in ran.out + again.out
+        written = {path.name: identifier_of(path) for path in output_dir.glob("*.epub")}
+        assert written == {
+            "Dune.epub": "urn:a",
+            "Dune (2).epub": identifier,
+            "Dune (3).epub": "urn:c",
+        }
+
+
 def len_then_name(path: Path) -> tuple[int, str]:
     """Order ``X.epub``, ``X (2).epub``, ``X (3).epub`` by their number."""
     return len(path.name), path.name
