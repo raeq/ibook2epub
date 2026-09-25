@@ -977,6 +977,27 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `-s` naming a file says the path is not a directory, rather than that it
   does not exist.
 
+- A note written before notes named their book, holding only passages two
+  editions both highlighted, goes to neither edition on every run. One that
+  had a note of its own elsewhere -- which may be the fresh note the tie
+  itself gave it -- stepped aside, so once the reader deleted the other's
+  empty duplicate, or edited a line of its note, the other edition took the
+  note: its highlights written over it, the note tagged for it, and the
+  reader's writing on the first edition left under them, without a word.
+  Such a note is now left as it is and each edition numbered past it, or
+  refused it, as when neither had a note of its own; an upgraded vault's
+  PDF note that both editions hold stays where it is and the PDF starts a
+  fresh one.
+
+- A note written before notes named their book is not moved to another
+  book's new name while it lies at the name a book in the library is given,
+  highlighted or not: the book with no highlights today cannot say the note
+  is not its own. The note of a `Dune.pdf` whose highlights were all deleted
+  was moved to another edition's note name and tagged for it, the reader's
+  writing on the PDF with it, when that edition highlighted the note's
+  passage. It is named and left alone, and the run exits `1`, as a note
+  that cannot be moved is.
+
 ## [2.3.1] - 2026-09-11
 
 ### Changed
