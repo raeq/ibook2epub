@@ -590,6 +590,55 @@ class TestANamesakeOfATitleThatLooksNumbered:
         assert written == {"Dune (2).epub": "urn:b", "Dune (2) (2).epub": "urn:a"}
 
 
+class TestAFolderNamedLikeTheFirstNumber:
+    """
+    Numbering starts at 2: ``Dune (1).epub`` and ``Dune (0).epub`` are never
+    a number of ``Dune``, but a book whose folder is ``Dune (1)`` is given the
+    name. Read as the first number, it was taken for the plain file of
+    ``Dune`` -- another book's by its identifier -- so each ``Dune`` without
+    one was refused its own and numbered from 2: one was reported exported
+    from the other's file, the other written again as ``Dune (3).epub``, and
+    ``Dune.epub``, the first one's only archive, listed as an orphan.
+    """
+
+    @pytest.mark.parametrize("number", ["1", "0", "01"])
+    def test_it_is_no_number_of_its_namesakes(
+        self, tmp_path, output_dir, capsys, number
+    ):
+        library = tmp_path / "lib"
+        argv = _argv(library, output_dir)
+        for folder in ("a", "c"):
+            make_metadata_package(
+                library / folder, "Dune.epub", title="Dune", identifier="none"
+            )
+        run.main([*argv, "-q"])
+        before = {path.name: path.read_bytes() for path in output_dir.glob("*.epub")}
+        assert sorted(before) == ["Dune (2).epub", "Dune.epub"]
+        make_metadata_package(
+            library / "b", f"Dune ({number}).epub", title="One", identifier="urn:T"
+        )
+
+        listed = listing(library, output_dir, capsys, *SUFFIX)
+        run.main(argv)
+        ran = capsys.readouterr()
+        again = listing(library, output_dir, capsys, *SUFFIX)
+
+        assert sorted(listed) == [
+            (f"Dune ({number}).epub", "pending"),
+            ("Dune.epub", "exported"),
+            ("Dune.epub", "exported"),
+        ]
+        assert "Exported 1 epub file(s)" in ran.out
+        assert "orphan" not in ran.out
+        assert sorted(again) == [
+            (f"Dune ({number}).epub", "exported"),
+            ("Dune.epub", "exported"),
+            ("Dune.epub", "exported"),
+        ]
+        after = {path.name: path.read_bytes() for path in output_dir.glob("*.epub")}
+        assert {name: after[name] for name in before} == before
+
+
 class TestACopyTitledLikeANumber:
     """
     A zipped ``z/Dune (2).epub`` is copied, and two packages ``Dune`` are
