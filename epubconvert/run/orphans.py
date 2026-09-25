@@ -146,7 +146,9 @@ def _unclaimed(
     """
     live, nameless = books
     marked = marker_on_shelf(found) if shelf.sources else None
-    if marked is not None:
+    # A marker naming a source two books share names neither: the file is
+    # judged as one written before markers (holders.written_for).
+    if marked is not None and shelf.sources[marked] < 2:
         return marked not in nameless
     return not (live and spoken and identifier_on_shelf(found) in live)
 

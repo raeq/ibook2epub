@@ -196,7 +196,10 @@ class _Judge:
             # silence of a file written before markers. Refused to both, as
             # that is, each was written under a new number with the same
             # source on every run, or in skip mode both collided for ever.
-            # What the names and identifiers say stands, as before markers.
+            # What the names and identifiers say stands, as before markers:
+            # the identifier the file declares still names its owner, and a
+            # file it cannot place is left to the claims, refused to no one.
+            self.unmarked(found, refuse=False)
             return True
         owners = [i for i in found.crowd if self.books[i].source == source]
         if source not in self.sources:
@@ -253,11 +256,14 @@ class _Judge:
         book = self.by_source.get(source)
         return UNREAD if book is None else self._identifier(book)
 
-    def unmarked(self, found: _File) -> None:
+    def unmarked(self, found: _File, *, refuse: bool = True) -> None:
         """
         Say whose a file that names no source is, by the identifiers.
 
         :param found: The file.
+        :param refuse: Refuse the file to books nothing tells apart. Not for
+            a file whose marker names a source two books share, which is
+            theirs and must not cost both their files on every run.
         """
         declared = identifier_on_shelf(found.path)
         identifiers = {i: self._identifier(self.books[i]) for i in found.crowd}
@@ -268,6 +274,8 @@ class _Judge:
         if declared is not None and len(owners) == 1:
             if found.kept:
                 self.told.keeps.setdefault(owners[0], found.path.name)
+            return
+        if not refuse:
             return
         counts = Counter(value for value in identifiers.values() if value is not None)
         # Told apart from each other by nothing -- no usable identifier, or

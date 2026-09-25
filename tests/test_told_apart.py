@@ -26,10 +26,10 @@ from typing import Any
 import pytest
 
 from epubconvert.collect import annotations
-from epubconvert.export import provenance
+from epubconvert.export import naming, provenance
 from epubconvert.export.archive import zip_package
 from epubconvert.export.naming import disambiguator
-from epubconvert.run import annotating, holders, run
+from epubconvert.run import annotating, holders, orphans, placing, run
 from tests.conftest import make_metadata_package, make_package, remove_tree, unmark
 from tests.test_annotations import highlight, library_row, make_databases
 
@@ -257,6 +257,69 @@ class TestTwoBooksOfOneSource:
         assert len(before) == (2 if mode else 1)
         assert not [row for row in listed if row["status"] in ("orphan", "pending")]
         assert "cannot tell" not in said
+
+    @pytest.mark.parametrize("policy", [[], AUTHOR_TITLE], ids=["folder", "author"])
+    def test_the_identifier_says_which_twin_the_file_is(
+        self, tmp_path, output_dir, capsys, policy
+    ):
+        # A marker two books share says nothing, and names and identifiers
+        # decide, as before markers -- but the identifiers were never asked:
+        # the file went to the twin that claims first, whatever it declared.
+        library = tmp_path / "lib"
+        make_metadata_package(
+            library / "a",
+            "Dune.epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier="urn:uuid:MINE",
+        )
+        convert(library, output_dir, "-q", *policy)
+        [written] = shelf(output_dir)
+        held = (output_dir / written).read_bytes()
+        (library / "a" / "Dune.epub").rename(library / "a" / "dune.epub")
+        make_metadata_package(
+            library / "a",
+            "Dune.epub",
+            title="Dune",
+            creator="Frank Herbert",
+            identifier="urn:uuid:NEWCOMER",
+        )
+
+        listed = rows(library, output_dir, capsys, *policy)
+        convert(library, output_dir, "-q", *policy)
+
+        exported = [
+            Path(row["source"]).name for row in listed if row["status"] == "exported"
+        ]
+        assert exported == ["dune.epub"]
+        assert (output_dir / written).read_bytes() == held
+
+
+class TestAMarkerTwoBooksShareProvesNoOrphan:
+    """
+    A marker naming a source two books of the library share says nothing,
+    as everywhere else: the file was listed as an orphan outright, although
+    one of them declares the identifier it holds.
+    """
+
+    def test_the_identifier_it_declares_keeps_it(self, tmp_path):
+        library = tmp_path / "lib"
+        package = make_metadata_package(
+            library / "a", "Dune.epub", title="Dune", identifier="urn:uuid:X"
+        )
+        target = tmp_path / "Dune.epub"
+        zip_package(package, target, provenance=provenance.source_of(package, library))
+        marked = provenance.read_source(target)
+        assert marked is not None
+        twins = placing.Shelf(
+            naming.build_policy(None), {}, set(), sources=Counter({marked: 2})
+        )
+
+        found = orphans._unclaimed(  # pylint: disable=protected-access
+            target, True, ({"urn:uuid:X"}, set()), twins
+        )
+
+        assert found is False
 
 
 class TestNamedFromTheFolderAWriteReadsTheMarker:
