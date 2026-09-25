@@ -224,13 +224,13 @@ class TestARefreshWaitsOnNoFifo:
     ):
         fifo = tmp_path / "swapped.epub"
         os.mkfifo(fifo)
-        real = shelf._what_to_replace  # pylint: disable=protected-access
+        real = shelf.what_to_replace
 
         def swapped(target: Path) -> tuple[Path, int]:
             found, mode = real(target)
             return (fifo, mode) if target.name == "Old.epub" else (found, mode)
 
-        monkeypatch.setattr(shelf, "_what_to_replace", swapped)
+        monkeypatch.setattr(shelf, "what_to_replace", swapped)
 
         code = _unblocked(fifo, lambda: run.main([*shelved, "-ae", "-ar"]))
 
