@@ -114,6 +114,31 @@ class TestMimetypeIsPhysicallyFirst:
             ]
         assert validate.validate_archive(path) == []
 
+    def test_a_refresh_moves_mimetype_first_from_where_it_was_stored(
+        self, tmp_path: Path
+    ):
+        # Copied in stored order, a book listing mimetype first but storing
+        # it last was rewritten as damaged as it came; a refresh repairs it,
+        # and the other members keep the order they were stored in.
+        path = tmp_path / "StoredLater.epub"
+        with ZipFile(path, "w") as archive:
+            for name, body in MEMBERS.items():
+                archive.writestr(name, body)
+            archive.writestr(
+                ZipInfo("mimetype"), "application/epub+zip", compress_type=ZIP_STORED
+            )
+            archive.filelist.sort(key=lambda info: info.filename != "mimetype")
+        assert validate.validate_archive(path) != []
+
+        assert replace_annotations(path, [{"id": "A", "text": "hi"}])
+
+        with ZipFile(path) as archive:
+            assert [info.filename for info in archive.infolist()][:-1] == [
+                "mimetype",
+                *MEMBERS,
+            ]
+        assert validate.validate_archive(path) == []
+
     def test_an_archive_written_properly_still_passes(self, tmp_path: Path):
         assert validate.validate_archive(write_epub(tmp_path / "Good.epub")) == []
 
