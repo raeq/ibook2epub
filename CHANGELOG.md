@@ -20,10 +20,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- `-ae -ar` writes a book's members in the order the file stores them, not
-  the order its central directory lists them. A book storing `mimetype`
-  first but listing it later passed `--verify`, was rewritten with
-  `mimetype` not first, and then failed it.
+- `-ae -ar` writes `mimetype` first and the other members in the order the
+  file stores them, not the order its central directory lists them. A book
+  storing `mimetype` first but listing it later passed `--verify`, was
+  rewritten with `mimetype` not first, and then failed it; a book listing
+  `mimetype` first but storing it later is still repaired by a refresh.
+
+- `--verify` reads nothing of an archive whose directory entries share a
+  local header, so Python 3.13 and later no longer print zipfile's own
+  `UserWarning: Overlapped entries: 'mimetype' (possible zip bomb)` above
+  the report. Naming a book by its metadata refuses such an archive too.
 
 - A container's rootfile media type is compared without regard to case or
   parameters, so `application/oebps-package+xml; charset=utf-8` names the
@@ -31,11 +37,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   type is taken ahead of one declaring another: a PDF listed ahead of an
   untyped package document was parsed as the package document.
 
-- A zip member is named by its own header on every Python. Python 3.14 took
-  the name from a Unicode Path extra field (0x7075) instead, where 3.10 and
-  3.11 ignore it, so a member stored as `a.xhtml` with such a field saying
-  `b.xhtml` had a different name on each, and `--verify` and `-ae -ar` read
-  the book differently.
+- A zip member is named the same way on every Python, as Info-ZIP's unzip
+  names it: an unflagged name takes the UTF-8 name of a Unicode Path extra
+  field (0x7075) whose CRC matches the name's bytes, and a flagged name is
+  its own. Python 3.14 took the field's name even for a flagged name, where
+  3.10 and 3.11 ignore the field, so `--verify` and `-ae -ar` read one book
+  differently on each; and a book zipped by WinZip, or by Info-ZIP on
+  Windows, which stores a non-ASCII name in the OEM code page with its
+  UTF-8 name in that field, had its chapter reported missing, and a refresh
+  rewrote the chapter under a misreading of its name.
 
 - `-ad` naming the shelf or a directory the run makes above it (`-ad Books
   -o Books` on a first run) is refused before anything is converted, with
