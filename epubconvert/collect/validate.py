@@ -32,7 +32,7 @@ from zipfile import ZIP_STORED, BadZipFile, ZipFile, ZipInfo
 from ..utils.app_logger import logger
 from ..utils.display import printable
 from ..utils.opf import Package
-from ..utils.spec import MIMETYPE_CONTENT, MIMETYPE_NAME, fold_name
+from ..utils.spec import MIMETYPE_BYTES, MIMETYPE_CONTENT, MIMETYPE_NAME, fold_name
 from .package import (
     SHARED_HEADER,
     UNREADABLE_MEMBER,
@@ -202,7 +202,9 @@ def check_archive(path: Path) -> Verdict:
             # another shares, above the report, so none of it is read then.
             repeated = repeated_entries(archive)
             readable = repeated != SHARED_HEADER
-            problems.extend(_check_mimetype(archive, by_name, readable=readable))
+            problems.extend(
+                _check_mimetype(archive, by_name, handle, readable=readable)
+            )
             warnings.extend(_mimetype_warnings(by_name, handle))
             problems.extend(_check_unique(names))
             if not readable:
@@ -396,7 +398,11 @@ def _check_methods(archive: ZipFile) -> list[str]:
 
 
 def _check_mimetype(
-    archive: ZipFile, members: dict[str, ZipInfo], *, readable: bool
+    archive: ZipFile,
+    members: dict[str, ZipInfo],
+    handle: IO[bytes],
+    *,
+    readable: bool,
 ) -> list[str]:
     """
     Check the ``mimetype`` entry the epub specification mandates.
@@ -404,6 +410,8 @@ def _check_mimetype(
     :param archive: The open archive.
     :param members: Its members by name, built once by the caller; the last
         listing of a name, as zipfile's own lookup keeps.
+    :param handle: The file the archive was opened from, whose first local
+        header must itself say ``mimetype``: the bytes a reader sniffs.
     :param readable: Whether its content may be read: not when two entries
         share a local header, which the caller reports.
 
@@ -426,6 +434,11 @@ def _check_mimetype(
         problems.append(f"first member is {first_name!r}, not 'mimetype'")
         if MIMETYPE_NAME not in members:
             return problems
+
+    local = _local_header(handle, first) if first_name == MIMETYPE_NAME else None
+    if local is not None and local[0] != MIMETYPE_BYTES:
+        # Not read on: zipfile refuses a member whose two names differ.
+        return [f"first member's local header names it {local[0]!r}, not mimetype"]
 
     info = members[MIMETYPE_NAME]
     if first_name == MIMETYPE_NAME and info.header_offset != 0:
@@ -467,7 +480,8 @@ def _mimetype_warnings(members: dict[str, ZipInfo], handle: IO[bytes]) -> list[s
     :return: One warning, or none.
     """
     info = members.get(MIMETYPE_NAME)
-    extra = 0 if info is None else _local_extra(handle, info)
+    local = None if info is None else _local_header(handle, info)
+    extra = 0 if local is None else local[1]
     if not extra:
         return []
     return [
@@ -476,25 +490,27 @@ def _mimetype_warnings(members: dict[str, ZipInfo], handle: IO[bytes]) -> list[s
     ]
 
 
-def _local_extra(handle: IO[bytes], info: ZipInfo) -> int:
+def _local_header(handle: IO[bytes], info: ZipInfo) -> tuple[bytes, int] | None:
     """
-    Measure the extra field in a member's local header.
+    Read the name and measure the extra field in a member's local header.
 
-    zipfile reports only the central directory's extra field, which need not
-    match, so the local header, the one at the front of the file that a
-    reader sees, is read here.
+    zipfile reports only the central directory's name and extra field, which
+    need not match, so the local header, the one at the front of the file
+    that a reader sees, is read here.
 
     :param handle: The file the archive was opened from.
     :param info: The member.
 
-    :return: The extra field's length in bytes; 0 when there is none, or when
-        there is no local header to read, which reading the member reports.
+    :return: The name's bytes and the extra field's length in bytes, or None
+        when there is no local header to read, which reading the member
+        reports.
     """
     handle.seek(info.header_offset)
     header = handle.read(_LOCAL_HEADER_BYTES)
     if len(header) < _LOCAL_HEADER_BYTES or not header.startswith(b"PK\x03\x04"):
-        return 0
-    return int.from_bytes(header[28:30], "little")
+        return None
+    name = handle.read(int.from_bytes(header[26:28], "little"))
+    return name, int.from_bytes(header[28:30], "little")
 
 
 #: The fixed part of a local file header, ending with the extra field's length.

@@ -290,6 +290,68 @@ class TestAUnicodePathFieldNamesAnUnflaggedMember:
         assert member_name(ZipInfo("a.xhtml\x00.exe")) == "a.xhtml"
 
 
+def first_named(path: Path, stored: bytes, field: bytes) -> Path:
+    """Write BOOK with *stored* for mimetype's name and *field* in its entry."""
+    stand_in = "#" * len(stored)
+    with ZipFile(path, "w") as writing:
+        for name, text in BOOK.items():
+            info = ZipInfo(stand_in if name == "mimetype" else name)
+            info.extra = field if name == "mimetype" else b""
+            writing.writestr(info, text)
+    path.write_bytes(path.read_bytes().replace(stand_in.encode(), stored))
+    return path
+
+
+class TestAFieldNeverNamesMimetype:
+    """
+    A Unicode Path field neither makes a member ``mimetype`` nor unmakes it.
+
+    OCF fixes the first member's name bytes, which a reader sniffing offset 30
+    checks, and no field changes them. A book storing ``XXXXXXXX`` with a
+    field saying ``mimetype`` passed --verify; one storing ``mimetype`` with a
+    field saying ``zzz`` was renamed ``zzz`` by a refresh.
+    """
+
+    def test_a_field_does_not_name_a_member_mimetype(self):
+        info = ZipInfo("XXXXXXXX")
+        info.extra = unicode_path(b"XXXXXXXX", "mimetype")
+
+        assert member_name(info) == "XXXXXXXX"
+
+    def test_a_field_does_not_rename_mimetype(self):
+        info = ZipInfo("mimetype")
+        info.extra = unicode_path(b"mimetype", "zzz")
+
+        assert member_name(info) == "mimetype"
+
+    def test_verify_reports_a_first_member_only_a_field_calls_mimetype(self, tmp_path):
+        field = unicode_path(b"XXXXXXXX", "mimetype")
+        path = first_named(tmp_path / "Book.epub", b"XXXXXXXX", field)
+
+        assert "first member is 'XXXXXXXX', not 'mimetype'" in validate_archive(path)
+
+    def test_a_refresh_keeps_mimetype_whatever_a_field_claims(self, tmp_path):
+        field = unicode_path(b"mimetype", "zzz")
+        path = first_named(tmp_path / "Book.epub", b"mimetype", field)
+
+        assert shelf.replace_annotations(path, [NOTE])
+
+        assert path.read_bytes()[30:38] == b"mimetype"
+        assert validate_archive(path) == []
+
+    def test_verify_reads_the_first_local_headers_own_name(self, tmp_path):
+        # The directory says mimetype; the header at offset 0 does not.
+        path = first_named(tmp_path / "Book.epub", b"mimetype", b"")
+        raw = bytearray(path.read_bytes())
+        raw[30:38] = b"XXXXXXXX"
+        path.write_bytes(bytes(raw))
+
+        problems = validate_archive(path)
+
+        expected = "first member's local header names it b'XXXXXXXX', not mimetype"
+        assert expected in problems
+
+
 class TestARefreshKeepsTheRealName:
     def test_the_rebuild_writes_the_member_under_its_utf8_name(self, tmp_path):
         path = unflagged(tmp_path / "Book.epub", BOOK)

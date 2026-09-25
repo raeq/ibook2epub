@@ -34,7 +34,7 @@ from ..utils.contained import escapes as escapes_archive
 from ..utils.contained import is_remote, open_contained, resolve
 from ..utils.display import printable
 from ..utils.opf import Package
-from ..utils.spec import CONTAINER_PATH
+from ..utils.spec import CONTAINER_PATH, MIMETYPE_BYTES
 
 # CPython builds lzma only where liblzma is present, and zipfile imports it
 # only when a member needs it. Without it no member can raise LZMAError, so
@@ -143,7 +143,11 @@ def member_name(info: ZipInfo) -> str:
     WinZip, and Info-ZIP on Windows, store such a name unflagged in the OEM
     code page and its UTF-8 name in a Unicode Path extra field (0x7075). That
     field names an unflagged member when its CRC-32 matches the name's bytes,
-    as Info-ZIP's unzip reads it: see :func:`_unicode_path`.
+    as Info-ZIP's unzip reads it: see :func:`_unicode_path`. Never to or from
+    ``mimetype``, though: OCF fixes those bytes at offset 30, which a reader
+    sniffing the file checks, so a field saying ``mimetype`` passed --verify
+    on a first member stored as ``XXXXXXXX``, and one saying ``zzz`` of the
+    real ``mimetype`` had a refresh rename it ``zzz``.
 
     Read from ``orig_filename``, the directory's own name decoded, and never
     ``filename``: Python 3.14 replaces that with the field's name even for a
@@ -166,7 +170,10 @@ def member_name(info: ZipInfo) -> str:
         return name
     # The name a Unicode Path field vouches for, if one does, else its own
     # bytes; either is the name only if it is UTF-8.
-    for stated in (_unicode_path(info.extra, raw), raw):
+    field = _unicode_path(info.extra, raw)
+    if MIMETYPE_BYTES in {named.partition(b"\0")[0] for named in (raw, field or b"")}:
+        field = None  # Never to or from mimetype, as above.
+    for stated in (field, raw):
         try:
             if stated is not None:
                 return stated.partition(b"\0")[0].decode("utf-8")
