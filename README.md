@@ -691,7 +691,9 @@ never written over by `--force`, `--refresh` or `-ae -ar`, and is listed as an
 orphan. Identifiers that both books declare and that differ still say two
 books, whatever the marker says, as does a file that declares an identifier
 where the book declares none: a book moved or deleted and another added at the
-same path is not written over the first one's archive.
+same path is not written over the first one's archive. Where neither can say
+-- the first declared no identifier -- the newcomer at its path is taken for
+the book written from it, as the marker names a path, not a book.
 
 Archives from an earlier release name nothing. Where two books that nothing
 tells apart want such a file, neither is given it, and the run says so:

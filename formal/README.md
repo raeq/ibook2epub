@@ -463,7 +463,8 @@ What the model does not describe, and why:
   deleted and another added at its path is the same source; where both
   declare usable identifiers and they differ, or the file declares one and
   the newcomer none, the file is still the other book's
-  (`tests/test_told_apart.py`).
+  (`tests/test_told_apart.py`); where the file declares none, the newcomer
+  is taken for its book, and `--force` or `--refresh` writes over it.
 - **Two different files of one size and one modification time.** A copy's
   own bytes are told exactly here; the code tells them by size and
   modification time, which a copy keeps from its source
