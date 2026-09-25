@@ -212,6 +212,53 @@ class TestTwoBooksThatDeclareNothing:
         assert source(output_dir, "Dune (2).epub") == disambiguator("b/dune.epub")
 
 
+class TestTwoBooksOfOneSource:
+    """
+    ``a/Dune.epub`` and ``a/dune.epub`` are two books on a case-sensitive
+    volume and one source, folded: a marker naming it says nothing of which.
+    Taken as saying nothing either way, their files were refused to both,
+    so in suffix mode each was written under a new number on every run, the
+    last one's files listed as orphans, and in skip mode both collided for
+    ever.
+    """
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            (policy, identifier)
+            for policy in ([], AUTHOR_TITLE)
+            for identifier in ("none", "urn:uuid:SHARED")
+        ],
+        ids=["folder-none", "folder-shared", "author-none", "author-shared"],
+    )
+    @MODES
+    def test_a_rerun_writes_nothing_and_lists_no_orphan(
+        self, tmp_path, output_dir, capsys, shape, mode
+    ):
+        policy, identifier = shape
+        library = tmp_path / "lib"
+        for name in ("Dune.epub", "dune.epub"):
+            make_metadata_package(
+                library / "a",
+                name,
+                title="Dune",
+                creator="Frank Herbert",
+                identifier=identifier,
+            )
+        convert(library, output_dir, "-q", *policy, *mode)
+        before = shelf(output_dir)
+
+        listed = rows(library, output_dir, capsys, *policy, *mode)
+        convert(library, output_dir, *policy, *mode)
+        convert(library, output_dir, *policy, *mode)
+        said = capsys.readouterr().err
+
+        assert shelf(output_dir) == before
+        assert len(before) == (2 if mode else 1)
+        assert not [row for row in listed if row["status"] in ("orphan", "pending")]
+        assert "cannot tell" not in said
+
+
 class TestNamedFromTheFolderAWriteReadsTheMarker:
     """
     A policy that names from the folder trusts a book's name for a report,

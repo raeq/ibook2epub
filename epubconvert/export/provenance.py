@@ -26,9 +26,12 @@ case-insensitive by default: a folder renamed by case is the same folder
 there, and a book that lost its own file to the rename would be written
 again under a number and its archive listed as an orphan, on every run until
 someone noticed. The fold errs towards "its own" only for two books whose
-paths differ by case alone, which a case-insensitive volume cannot hold, and
-where a case-sensitive one does, the planner finds two live books of one
-source and takes the marker as saying nothing for either.
+paths differ by case alone, which a case-insensitive volume cannot hold.
+Where a case-sensitive one does, a marker naming their one source is no
+evidence for either: it neither gives the file to one of them nor refuses it
+to both, and their names and identifiers decide, as before markers. Once one
+of them leaves the library, its archives name the other's source, and are
+judged as a deleted book's are where another book was added at its path.
 
 Apple's asset id is not in it: a conversion reads the library directory,
 never Apple's database, and a run that has no asset id would write

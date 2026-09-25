@@ -154,12 +154,22 @@ class _Judge:
 
         :param found: The file.
 
-        :return: True when its marker settled it.
+        :return: True when its marker settled it, or names a source two books
+            share, which leaves it to the claims as before markers.
         """
         name = found.path.name
         source = marker_on_shelf(found.path)
-        if source is None or self.sources[source] > 1:
+        if source is None:
             return False
+        if self.sources[source] > 1:
+            # Two books of the library have that source -- two paths that
+            # differ by case alone, on a volume that tells them apart -- and
+            # the file is one of theirs: no evidence either way, not the
+            # silence of a file written before markers. Refused to both, as
+            # that is, each was written under a new number with the same
+            # source on every run, or in skip mode both collided for ever.
+            # What the names and identifiers say stands, as before markers.
+            return True
         owners = [i for i in found.crowd if self.books[i].source == source]
         if not owners and source not in self.sources:
             owners = self._moved(found)
