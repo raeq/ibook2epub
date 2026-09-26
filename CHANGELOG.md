@@ -71,9 +71,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `--portable-names romanize` names no book with disarm 0.17.0, released on
   2026-09-26: it refuses a space as the character that replaces an illegal
   one, and a space is what this tool passes, so every portable name raised
-  `InvalidArgumentError`. The `portable` extra now asks for `disarm<0.17`, so
-  names stay as 2.3.1 gave them. 2.3.1 asks for `disarm>=0.13` alone: a fresh
-  `pip install "ibook2epub[portable]==2.3.1"` gets 0.17.0 and fails this way.
+  `InvalidArgumentError`. disarm 0.17.1 accepts a space again (disarm #1079),
+  and the `portable` extra now asks for `disarm>=0.13,!=0.17.0`.
+  0.17 also romanizes 40 characters differently, so a book whose title holds
+  one is named differently under 0.17.1 than under 0.16: the schwa `ə` (and
+  `ᵊ`, `ₔ`) becomes `a` where it was `e` (`Heydər Əliyev` was `Heyder Aliyev`,
+  now `Heydar Aliyev`); `Ǝ` and `ᴲ` become `E` where they were `D`; 20 rare
+  Latin letters, such as `Ɫ`, `Ɐ`, `Ȿ` and `Ɽ`, and 12 Georgian Mtavruli
+  capitals become letters where they were dropped; and NEL, U+2028 and U+2029
+  become a space where they joined the words. In a title that also holds a typed `%`, a `٪`, `؉`, `؊` or `％`
+  no longer becomes `%`. Upgrading disarm exports such a book again under its
+  new name and reports the old file as an orphan; nothing is deleted. Every
+  other title keeps its name: a sweep of every code point, alone and between
+  two letters, and 40,000 random titles on each platform found no other
+  difference.
 - A book with no usable identifier, or one it shares, is no longer reported
   exported from another book's archive of its name, nor written over it by
   `--force`, `--refresh` or `-ae -ar`, wherever that archive names its source

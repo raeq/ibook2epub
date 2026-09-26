@@ -28,10 +28,11 @@ dependencies = []
 
 [project.optional-dependencies]
 # Cross-filesystem filename sanitisation and case/accent-insensitive dedup.
-# Optional so the default install stays pure standard library. Below 0.17:
-# 0.17.0 refuses a space as sanitize_filename's separator (disarm #1026), and
-# PortableNaming replaces an illegal character with a space.
-portable = ["disarm>=0.13,<0.17"]
+# Optional so the default install stays pure standard library. Not 0.17.0:
+# it refuses a space as sanitize_filename's separator (disarm #1026), and
+# PortableNaming replaces an illegal character with a space. 0.17.1 accepts it
+# again (disarm #1079).
+portable = ["disarm>=0.13,!=0.17.0"]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=5.0",
