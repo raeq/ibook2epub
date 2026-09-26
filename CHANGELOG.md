@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.4.0] - 2026-09-26
 
 ### Added
 
@@ -68,6 +68,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--portable-names romanize` names no book with disarm 0.17.0, released on
+  2026-09-26: it refuses a space as the character that replaces an illegal
+  one, and a space is what this tool passes, so every portable name raised
+  `InvalidArgumentError`. disarm 0.17.1 accepts a space again (disarm #1079),
+  and the `portable` extra now asks for `disarm>=0.13,!=0.17.0`.
+  0.17 also romanizes 40 characters differently, so a book whose title holds
+  one is named differently under 0.17.1 than under 0.16: the schwa `ə` (and
+  `ᵊ`, `ₔ`) becomes `a` where it was `e` (`Heydər Əliyev` was `Heyder Aliyev`,
+  now `Heydar Aliyev`); `Ǝ` and `ᴲ` become `E` where they were `D`; 20 rare
+  Latin letters, such as `Ɫ`, `Ɐ`, `Ȿ` and `Ɽ`, and 12 Georgian Mtavruli
+  capitals become letters where they were dropped; and NEL, U+2028 and U+2029
+  become a space where they joined the words. In a title that also holds a typed `%`, a `٪`, `؉`, `؊` or `％`
+  no longer becomes `%`. Upgrading disarm exports such a book again under its
+  new name and reports the old file as an orphan; nothing is deleted. Every
+  other title keeps its name: a sweep of every code point, alone and between
+  two letters, and 40,000 random titles on each platform found no other
+  difference.
 - A book with no usable identifier, or one it shares, is no longer reported
   exported from another book's archive of its name, nor written over it by
   `--force`, `--refresh` or `-ae -ar`, wherever that archive names its source
@@ -328,7 +345,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   internal subset is refused: an `<!ATTLIST>` default was copied onto every
   element it named, so a 1.6 KB book reached 2.9 GB and `--verify` and
   `--list` crashed with MemoryError. A book's XML may also no longer hold more
-  than 200,000 elements or nest deeper than 1,000 levels.
+  than 200,000 elements or nest deeper than 1,000 levels. Of 2,804 books in a
+  real library, all downloaded, none declares an internal subset or passes
+  either limit, so nothing real is refused.
 
 - Names differing only by case are treated as one name even when they carry
   combining marks (Unicode canonical caseless matching), so `--verify` reports
@@ -1781,6 +1800,7 @@ release is additions.
 - Filename-length and output-overlap bugs.
 - Nested content that looked like Apple bookkeeping was being dropped.
 
+[2.4.0]: https://github.com/raeq/ibook2epub/compare/v2.3.1...v2.4.0
 [2.3.1]: https://github.com/raeq/ibook2epub/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/raeq/ibook2epub/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/raeq/ibook2epub/compare/v2.1.1...v2.2.0
