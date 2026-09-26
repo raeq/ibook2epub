@@ -68,6 +68,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `--portable-names romanize` names no book with disarm 0.17.0, released on
+  2026-09-26: it refuses a space as the character that replaces an illegal
+  one, and a space is what this tool passes, so every portable name raised
+  `InvalidArgumentError`. The `portable` extra now asks for `disarm<0.17`, so
+  names stay as 2.3.1 gave them. 2.3.1 asks for `disarm>=0.13` alone: a fresh
+  `pip install "ibook2epub[portable]==2.3.1"` gets 0.17.0 and fails this way.
 - A book with no usable identifier, or one it shares, is no longer reported
   exported from another book's archive of its name, nor written over it by
   `--force`, `--refresh` or `-ae -ar`, wherever that archive names its source
