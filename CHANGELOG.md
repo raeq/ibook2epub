@@ -345,7 +345,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   internal subset is refused: an `<!ATTLIST>` default was copied onto every
   element it named, so a 1.6 KB book reached 2.9 GB and `--verify` and
   `--list` crashed with MemoryError. A book's XML may also no longer hold more
-  than 200,000 elements or nest deeper than 1,000 levels.
+  than 200,000 elements or nest deeper than 1,000 levels. Of 2,804 books in a
+  real library, all downloaded, none declares an internal subset or passes
+  either limit, so nothing real is refused.
 
 - Names differing only by case are treated as one name even when they carry
   combining marks (Unicode canonical caseless matching), so `--verify` reports
